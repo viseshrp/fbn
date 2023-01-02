@@ -30,14 +30,16 @@ setup(
     name="fbn",
     version=version,
     description="Tool to monitor fb groups or pages and notify",
-    long_description=get_file_text("README.md") + "\n\n" + get_file_text("CHANGELOG.md"),
+    long_description=get_file_text("README.md")
+    + "\n\n"
+    + get_file_text("CHANGELOG.md"),
     long_description_content_type="text/markdown",
     author="Visesh Prasad",
     author_email="visesh@live.com",
     maintainer="Visesh Prasad",
     maintainer_email="visesh@live.com",
     license="MIT license",
-    packages=find_packages(include=['fbn']),
+    packages=find_packages(include=["fbn"]),
     include_package_data=True,
     zip_safe=False,
     classifiers=[
@@ -63,8 +65,8 @@ setup(
     test_suite="tests",
     install_requires=REQUIREMENTS,
     entry_points={
-        'console_scripts': [
-            'fbn=fbn.__main__:main',
+        "console_scripts": [
+            "fbn=fbn.__main__:main",
         ],
     },
 )
