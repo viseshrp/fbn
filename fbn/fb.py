@@ -19,7 +19,6 @@ from tenacity import (
 from .constants import SCHEDULE_UNIT_MAP
 from .exceptions import NoAuthInfoException, InvalidFrequencyException
 
-logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -199,8 +198,9 @@ def check_and_notify(
         logger.debug("Creating schedule...")
     job = getattr(schedule.every(int(count)), schedule_unit).do(monitor_fb, **kwargs)
     if verbose:
-        logger.debug(f"Starting schedule {job}...")
         logger.debug(f"Running once...")
     schedule.run_all()
+    if verbose:
+        logger.debug(f"Starting schedule {job}...")
     while True:
         schedule.run_pending()
