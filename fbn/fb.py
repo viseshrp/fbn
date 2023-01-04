@@ -168,6 +168,9 @@ def check_and_notify(
 ):
     if verbose:
         enable_logging()
+        schedule_logger = logging.getLogger('schedule')
+        schedule_logger.setLevel(level=logging.DEBUG)
+
     set_user_agent(user_agent)
     kwargs = {
         "group": target_id,
@@ -191,9 +194,11 @@ def check_and_notify(
 
     count, unit = parse_frequency(frequency)
     schedule_unit = SCHEDULE_UNIT_MAP[unit]
-    monitor_fb(**kwargs)
+    if verbose:
+        logger.debug("Creating schedule...")
     job = getattr(schedule.every(int(count)), schedule_unit).do(monitor_fb, **kwargs)
     try:
+        logger.debug(f"Starting schedule {job}...")
         while True:
             schedule.run_pending()
     except Exception as e:
