@@ -1,6 +1,5 @@
 import logging
 import re
-import sys
 from urllib.parse import urlparse, parse_qs
 
 import apprise
@@ -157,10 +156,6 @@ def check_and_notify(
         logger.setLevel(level)
         # fb scraper logging
         enable_logging(level=level)
-        # schedule logging
-        schedule_logger = logging.getLogger('schedule')
-        schedule_logger.addHandler(handler)
-        schedule_logger.setLevel(level=logging.DEBUG)
     else:
         # suppress warnings
         import warnings

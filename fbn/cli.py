@@ -1,4 +1,4 @@
-"""Console script for nest_reset."""
+"""Console script"""
 import click
 
 from .fb import check_and_notify
