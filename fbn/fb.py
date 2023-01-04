@@ -107,9 +107,10 @@ def monitor_fb(**kwargs):
             if not new_posts:
                 logger.debug(f"No new posts found. Ending...")
                 return
+            current_post_set = latest_post_set
             logger.debug(f"Obtained {len(new_posts)} new posts.")
             group_name = None
-            body = "\n\n"
+            body = ""
             for new_post_id in new_posts:
                 post = latest_posts[new_post_id]
                 if not group_name:
