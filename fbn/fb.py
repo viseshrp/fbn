@@ -19,16 +19,10 @@ from tenacity import (
 from .constants import SCHEDULE_UNIT_MAP
 from .exceptions import NoAuthInfoException, InvalidFrequencyException
 
+# Disable logging by default
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-formatter = logging.Formatter("<%(asctime)s><%(name)s><%(levelname)s> %(message)s")
-
-stream_handler = logging.StreamHandler(stream=sys.stdout)
-stream_handler.setLevel(logging.DEBUG)
-stream_handler.setFormatter(formatter)
-logger.addHandler(stream_handler)
-
+logger.addHandler(logging.NullHandler())
+# current post set
 current_post_set = None
 
 
@@ -63,7 +57,6 @@ def is_sticky_post(post):
 )
 def get_latest_posts(**kwargs):
     sample_count = kwargs.pop("sample_count")
-    verbose = kwargs.pop("verbose")
     ban_count = 0
     posts = {}
     try:
@@ -79,15 +72,13 @@ def get_latest_posts(**kwargs):
                 "comments": post["comments"],
                 "username": post["username"],
             }
-            if verbose:
-                logger.debug(f"Obtained post {post_id}")
+            logger.debug(f"Obtained post {post_id}")
             if len(posts) == sample_count:
                 break
     except (TemporarilyBanned, AccountDisabled) as e:
         ban_count += 1
         raise e
-    if verbose:
-        logger.debug(f"You were banned {ban_count} times temporarily.")
+    logger.debug(f"You were banned {ban_count} times temporarily.")
     return posts
 
 
@@ -103,51 +94,45 @@ def notify(apprise_url, title, body):
 def monitor_fb(**kwargs):
     global current_post_set
     apprise_url = kwargs.pop("apprise_url")
-    verbose = kwargs["verbose"]
-    if verbose:
-        logger.debug(f"Fetching latest posts...")
+    logger.debug(f"Fetching latest posts...")
     latest_posts = get_latest_posts(**kwargs)
     if latest_posts:
-        if verbose:
-            logger.debug(f"Finished fetching latest posts")
+        logger.debug(f"Finished fetching latest posts")
         latest_post_set = set(latest_posts.keys())
         if current_post_set is None:
-            if verbose:
-                logger.debug(f"Updating current_post_set for the first time...")
+            logger.debug(f"Updating current_post_set for the first time...")
             current_post_set = latest_post_set
         else:
-            if verbose:
-                logger.debug(f"Getting new posts...")
+            logger.debug(f"Getting new posts...")
             new_posts = latest_post_set - current_post_set
-            if new_posts:
-                if verbose:
-                    logger.debug(f"Obtained {len(new_posts)} new posts.")
-                group_name = None
-                body = "\n\n"
-                for new_post_id in new_posts:
-                    post = latest_posts[new_post_id]
-                    if not group_name:
-                        group_name = post["group"]
-                    if verbose:
-                        logger.debug(f"Getting post '{new_post_id}' from {group_name}")
-                    body += f"""
-                    <h2>{'-' * (len(post["username"]))}</h2>
-                    <h2>{post["username"]}</h2>
-                    <h2>{'-' * (len(post["username"]))}</h2>
-                    <h4>{post.get("text") or post.get("post_text")}</h4>
-                    <h4>Comments: {post["comments"]}</h4>
-                    <h4>URL: {post["post_url"]}</h4>
-                    <h2>{'-' * (len(post["username"]))}</h2>
-                    <h2>{'-' * (len(post["username"]))}</h2>
-                    <br><br><br>
-                    """
-                # notify
-                title = f"{len(new_posts)} new posts from {group_name}"
-                if verbose:
-                    logger.debug(f"Notifying user of new posts : {title}")
-                notify(
-                    apprise_url, title, body
-                )
+            if not new_posts:
+                logger.debug(f"No new posts found. Ending...")
+                return
+            logger.debug(f"Obtained {len(new_posts)} new posts.")
+            group_name = None
+            body = "\n\n"
+            for new_post_id in new_posts:
+                post = latest_posts[new_post_id]
+                if not group_name:
+                    group_name = post["group"]
+                logger.debug(f"Getting post '{new_post_id}' from {group_name}")
+                body += f"""
+                <h2>{'-' * (len(post["username"]))}</h2>
+                <h2>{post["username"]}</h2>
+                <h2>{'-' * (len(post["username"]))}</h2>
+                <h4>{post.get("text") or post.get("post_text")}</h4>
+                <h4>Comments: {post["comments"]}</h4>
+                <h4>URL: {post["post_url"]}</h4>
+                <h2>{'-' * (len(post["username"]))}</h2>
+                <h2>{'-' * (len(post["username"]))}</h2>
+                <br><br><br>
+                """
+            # notify
+            title = f"{len(new_posts)} new posts from {group_name}"
+            logger.debug(f"Notifying user of new posts : {title}")
+            notify(
+                apprise_url, title, body
+            )
 
 
 def check_and_notify(
@@ -162,9 +147,25 @@ def check_and_notify(
         verbose,
 ):
     if verbose:
-        enable_logging()
+        # fbn logging
+        level = logging.DEBUG
+        formatter = logging.Formatter("<%(asctime)s><%(name)s><%(levelname)s> %(message)s")
+        handler = logging.StreamHandler()
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(level)
+        # fb scraper logging
+        enable_logging(level=level)
+        # schedule logging
         schedule_logger = logging.getLogger('schedule')
+        schedule_logger.addHandler(handler)
         schedule_logger.setLevel(level=logging.DEBUG)
+    else:
+        # suppress warnings
+        import warnings
+        warnings.filterwarnings("ignore")
+
     if user_agent:
         set_user_agent(user_agent)
     kwargs = {
@@ -174,7 +175,6 @@ def check_and_notify(
         "options": {"allow_extra_requests": False, "posts_per_page": sample_count},
         "apprise_url": apprise_url,
         "sample_count": sample_count,
-        "verbose": verbose,
     }
 
     if cookies_file:
@@ -189,13 +189,10 @@ def check_and_notify(
 
     count, unit = parse_frequency(frequency)
     schedule_unit = SCHEDULE_UNIT_MAP[unit]
-    if verbose:
-        logger.debug("Creating schedule...")
+    logger.debug("Creating schedule...")
     job = getattr(schedule.every(int(count)), schedule_unit).do(monitor_fb, **kwargs)
-    if verbose:
-        logger.debug(f"Running once...")
+    logger.debug(f"Running once...")
     schedule.run_all()
-    if verbose:
-        logger.debug(f"Starting schedule {job}...")
+    logger.debug(f"Starting schedule {job}...")
     while True:
         schedule.run_pending()
