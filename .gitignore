@@ -161,4 +161,4 @@ cython_debug/
 .DS_Store
 .gitattributes
 facebook.com_cookies.txt
-fb_debug.txt
+fbn_debug.txt

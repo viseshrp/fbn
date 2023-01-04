@@ -29,7 +29,7 @@ version = _version["__version__"]
 setup(
     name="fbn",
     version=version,
-    description="Tool to monitor fb groups or pages and notify",
+    description="Tool to monitor fb groups and notify",
     long_description=get_file_text("README.md")
     + "\n\n"
     + get_file_text("CHANGELOG.md"),
@@ -61,7 +61,7 @@ setup(
         "Source Code": "https://github.com/viseshrp/fbn",
     },
     python_requires=">=3.7",
-    keywords="fb fbn facebook group page notify monitor",
+    keywords="fb fbn facebook group notify monitor",
     test_suite="tests",
     install_requires=REQUIREMENTS,
     entry_points={

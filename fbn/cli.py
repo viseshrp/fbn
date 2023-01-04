@@ -12,21 +12,12 @@ from . import __version__
     "--version",
 )
 @click.option(
-    "--group",
-    "target",
-    flag_value="group",
-    default=True,
-    show_default=True,
-    help="Monitor a Facebook group",
-)
-@click.option("--page", "target", flag_value="page", help="Monitor a Facebook page")
-@click.option(
     "-i",
     "--id",
     "target_id",
     type=str,
     required=True,
-    help="The Facebook group/page name or id",
+    help="The Facebook group name or id",
 )
 @click.option(
     "-u",
@@ -55,7 +46,7 @@ from . import __version__
         resolve_path=True,
         allow_dash=False,
     ),
-    required=False,
+    default="facebook.com_cookies.txt",
     help="Path to the Facebook cookies file",
 )
 @click.option(
@@ -65,7 +56,15 @@ from . import __version__
     default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/108.0.0.0 Safari/537.36",
     show_default=True,
-    help="Monitor frequency",
+    help="User agent to use for scraping",
+)
+@click.option(
+    "-s",
+    "--sample-count",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Number of posts to sample",
 )
 @click.option(
     "-e",
@@ -88,35 +87,34 @@ from . import __version__
     "-v", "--verbose", is_flag=True, default=False, help="Enable debug logging."
 )
 def main(
-    target,
     target_id,
     username,
     password,
     cookies_file,
     user_agent,
+    sample_count,
     frequency,
     apprise_url,
     verbose,
 ):
     """
-    Simple CLI tool to look for new posts in a Facebook group or page and
-    then send you a notification. Public pages/groups do not require authentication information.
+    Simple CLI tool to look for new posts in a Facebook group and
+    then send you a notification. Public groups do not require authentication information.
 
     Example usage:
 
-    $ export FBN_FB_PASSWORD=password
+    $ export FBN_APPRISE_URL=mailto://gmailusername:gmailpassword@gmail.com
 
-    $ fbn --group --id 1092319230 --every 3h --username username \
-        --apprise-url mailto://gmailusername:gmailpassword@gmail.com
+    $ fbn --id 1092319230 --every 3h
     """
     try:
         check_and_notify(
-            target,
             target_id,
             username,
             password,
             cookies_file,
             user_agent,
+            sample_count,
             frequency,
             apprise_url,
             verbose,

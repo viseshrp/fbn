@@ -1,2 +1,2 @@
 # fbn
- Tool to monitor fb groups or pages and notify
+ Tool to monitor fb groups and notify
