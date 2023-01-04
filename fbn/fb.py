@@ -24,11 +24,6 @@ logger.setLevel(logging.DEBUG)
 
 formatter = logging.Formatter("<%(asctime)s><%(name)s><%(levelname)s> %(message)s")
 
-file_handler = logging.FileHandler("fbn_debug.txt")
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
-
 stream_handler = logging.StreamHandler(stream=sys.stdout)
 stream_handler.setLevel(logging.DEBUG)
 stream_handler.setFormatter(formatter)
@@ -39,7 +34,7 @@ current_post_set = None
 
 def parse_frequency(frequency):
     count, unit = None, None
-    regex = re.compile(r"(\d+)([hdw])")
+    regex = re.compile(r"(\d+)([mhdw])")
     matches = regex.findall(frequency)
     if len(matches) == 1:
         count, unit = matches[0]
@@ -170,8 +165,8 @@ def check_and_notify(
         enable_logging()
         schedule_logger = logging.getLogger('schedule')
         schedule_logger.setLevel(level=logging.DEBUG)
-
-    set_user_agent(user_agent)
+    if user_agent:
+        set_user_agent(user_agent)
     kwargs = {
         "group": target_id,
         "page_limit": None,

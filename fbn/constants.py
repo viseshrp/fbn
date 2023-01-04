@@ -1,1 +1,1 @@
-SCHEDULE_UNIT_MAP = {"h": "hours", "d": "days", "w": "weeks"}
+SCHEDULE_UNIT_MAP = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
