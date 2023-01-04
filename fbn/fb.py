@@ -118,7 +118,7 @@ def monitor_fb(**kwargs):
         latest_post_set = set(latest_posts.keys())
         if current_post_set is None:
             if verbose:
-                logger.debug(f"Updating current_post_set for the first time and exiting...")
+                logger.debug(f"Updating current_post_set for the first time...")
             current_post_set = latest_post_set
         else:
             if verbose:
