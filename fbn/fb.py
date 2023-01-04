@@ -187,10 +187,10 @@ def check_and_notify(
                 "Please provide your Facebook username/password or a cookies file."
             )
 
-    count, unit = parse_frequency(frequency)
+    interval, unit = parse_frequency(frequency)
     schedule_unit = SCHEDULE_UNIT_MAP[unit]
     logger.debug("Creating schedule...")
-    job = getattr(schedule.every(int(count)), schedule_unit).do(monitor_fb, **kwargs)
+    job = getattr(schedule.every(int(interval)), schedule_unit).do(monitor_fb, **kwargs)
     logger.debug(f"Running once...")
     schedule.run_all()
     logger.debug(f"Starting schedule {job}...")
