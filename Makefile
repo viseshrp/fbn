@@ -4,11 +4,6 @@ build:
 	python -m build --wheel
 	rm -rf build
 
-tag-nightly:
-	sed -i 's/version=version/version=version+"$(DATE)"/g' setup.py
-
-build-nightly: tag-nightly build
-
 install:
 	pip uninstall fbn -y
 	pip install dist/*.whl
