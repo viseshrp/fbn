@@ -84,6 +84,15 @@ def get_latest_posts(**kwargs):
     return posts
 
 
+def get_group_name(posts_info):
+    group = None
+    for _, post_info in posts_info.items():
+        if post_info["group"]:
+            group = post_info["group"]
+            break
+    return group
+
+
 def notify(apprise_url, title, body):
     app_obj = apprise.Apprise()
     app_obj.add(apprise_url)
@@ -97,29 +106,28 @@ def monitor_fb(**kwargs):
     global current_post_set
     apprise_url = kwargs.pop("apprise_url")
     logger.debug(f"Fetching latest posts...")
-    latest_posts = get_latest_posts(**kwargs)
-    if latest_posts:
+    latest_posts_info = get_latest_posts(**kwargs)
+    if latest_posts_info:
         logger.debug(f"Finished fetching latest posts")
-        latest_post_set = set(latest_posts.keys())
+        latest_post_set = set(latest_posts_info.keys())
         if current_post_set is None:
             logger.debug(f"Updating current_post_set for the first time and exiting...")
             current_post_set = latest_post_set
         else:
             logger.debug(f"Getting new posts...")
-            new_posts = latest_post_set - current_post_set
-            if not new_posts:
+            new_post_set = latest_post_set - current_post_set
+            if not new_post_set:
                 logger.debug(f"No new posts found. Ending...")
                 return
             current_post_set = latest_post_set
-            logger.debug(f"Obtained {len(new_posts)} new posts.")
-            group_name = None
+            logger.debug(f"Obtained {len(new_post_set)} new posts.")
+            group_name = get_group_name(latest_posts_info)
             # email digests
             is_email = (
                 apprise_url.startswith("mailto://")
                 or apprise_url.startswith("mailgun://")
                 or apprise_url.startswith("sendgrid://")
             )
-            title = f"{len(new_posts)} new post(s) from {group_name}"
             body = f"Found at {datetime.now()}"
             if is_email:
                 body = """
@@ -129,10 +137,8 @@ def monitor_fb(**kwargs):
                         <div>
                             <div>
                 """
-                for new_post_id in new_posts:
-                    post = latest_posts[new_post_id]
-                    if not group_name:
-                        group_name = post["group"]
+                for new_post_id in new_post_set:
+                    post = latest_posts_info[new_post_id]
                     logger.debug(f"Getting post '{new_post_id}' from {group_name}")
                     body += f"""
                                     <div style="text-align:center;">
@@ -152,6 +158,7 @@ def monitor_fb(**kwargs):
                 </html>    
                 """
             # notify
+            title = f"{len(new_post_set)} new post(s) from {group_name}"
             logger.debug(f"Notifying user of new posts : {title}")
             notify(apprise_url, title, body)
 
