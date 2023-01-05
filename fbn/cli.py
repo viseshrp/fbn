@@ -24,6 +24,7 @@ from . import __version__
     "--username",
     type=str,
     default="",
+    show_default=True,
     envvar="FBN_FB_USERNAME",
     help="Your Facebook username",
 )
@@ -32,6 +33,7 @@ from . import __version__
     "--password",
     type=str,
     default="",
+    show_default=True,
     envvar="FBN_FB_PASSWORD",
     help="Your Facebook password",
 )
@@ -47,6 +49,7 @@ from . import __version__
         allow_dash=False,
     ),
     default="facebook.com_cookies.txt",
+    show_default=True,
     help="Path to the Facebook cookies file",
 )
 @click.option(
@@ -54,14 +57,13 @@ from . import __version__
     "--user-agent",
     type=str,
     required=False,
-    show_default=True,
     help="User agent to use for scraping",
 )
 @click.option(
     "-s",
     "--sample-count",
     type=int,
-    default=20,
+    default=10,
     show_default=True,
     help="Number of posts to sample",
 )
@@ -104,7 +106,7 @@ def main(
 
     $ export FBN_APPRISE_URL=mailto://gmailusername:gmailpassword@gmail.com
 
-    $ fbn --id 1092319230 --every 3h
+    $ fbn --id craigslist --every 45m --cookies-file facebook.com_cookies.txt --verbose
     """
     try:
         check_and_notify(
