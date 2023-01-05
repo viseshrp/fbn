@@ -43,7 +43,7 @@ jobs:
       - name: Create wheel
         run: make build
 
-      - name: Install pynexus
+      - name: Install
         run: make install
 
       - name: Test import
