@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
 import apprise
@@ -12,7 +13,8 @@ from tenacity import (
     retry_if_exception_type,
     before_log,
     after_log,
-    wait_chain, wait_fixed,
+    wait_chain,
+    wait_fixed,
 )
 
 from .constants import SCHEDULE_UNIT_MAP
@@ -68,6 +70,7 @@ def get_latest_posts(**kwargs):
                 "post_text": post["post_text"],
                 "post_url": post["post_url"],
                 "group": post["with"][0]["name"],
+                "likes": post["likes"],
                 "comments": post["comments"],
                 "username": post["username"],
             }
@@ -99,7 +102,7 @@ def monitor_fb(**kwargs):
         logger.debug(f"Finished fetching latest posts")
         latest_post_set = set(latest_posts.keys())
         if current_post_set is None:
-            logger.debug(f"Updating current_post_set for the first time...")
+            logger.debug(f"Updating current_post_set for the first time and exiting...")
             current_post_set = latest_post_set
         else:
             logger.debug(f"Getting new posts...")
@@ -110,46 +113,66 @@ def monitor_fb(**kwargs):
             current_post_set = latest_post_set
             logger.debug(f"Obtained {len(new_posts)} new posts.")
             group_name = None
-            body = ""
-            for new_post_id in new_posts:
-                post = latest_posts[new_post_id]
-                if not group_name:
-                    group_name = post["group"]
-                logger.debug(f"Getting post '{new_post_id}' from {group_name}")
-                body += f"""
-                <h2>{'-' * (len(post["username"]))}</h2>
-                <h2>{post["username"]}</h2>
-                <h2>{'-' * (len(post["username"]))}</h2>
-                <h4>{post.get("text") or post.get("post_text")}</h4>
-                <h4>Comments: {post["comments"]}</h4>
-                <h4>URL: {post["post_url"]}</h4>
-                <h2>{'-' * (len(post["username"]))}</h2>
-                <h2>{'-' * (len(post["username"]))}</h2>
-                <br><br><br>
+            # email digests
+            is_email = (
+                apprise_url.startswith("mailto://")
+                or apprise_url.startswith("mailgun://")
+                or apprise_url.startswith("sendgrid://")
+            )
+            title = f"{len(new_posts)} new post(s) from {group_name}"
+            body = f"Found at {datetime.now()}"
+            if is_email:
+                body = """
+                <!DOCTYPE html>
+                <html>
+                    <body>
+                        <div>
+                            <div>
+                """
+                for new_post_id in new_posts:
+                    post = latest_posts[new_post_id]
+                    if not group_name:
+                        group_name = post["group"]
+                    logger.debug(f"Getting post '{new_post_id}' from {group_name}")
+                    body += f"""
+                                    <div style="text-align:center;">
+                                        <h3>{post["username"]}</h3>
+                                        <p style="font-size: 1.2rem;">
+                                        {post.get("text") or post.get("post_text")}
+                                        </p>
+                                        <p>{post["comments"]} comments</p>
+                                        <p>{post["likes"]} likes</p>
+                                        <a href="{post["post_url"]}">Read more</a>
+                                    </div><br><br>
+                    """
+                body += """
+                            </div>
+                        </div>
+                    </body>
+                </html>    
                 """
             # notify
-            title = f"{len(new_posts)} new posts from {group_name}"
             logger.debug(f"Notifying user of new posts : {title}")
-            notify(
-                apprise_url, title, body
-            )
+            notify(apprise_url, title, body)
 
 
 def check_and_notify(
-        target_id,
-        username,
-        password,
-        cookies_file,
-        user_agent,
-        sample_count,
-        frequency,
-        apprise_url,
-        verbose,
+    target_id,
+    username,
+    password,
+    cookies_file,
+    user_agent,
+    sample_count,
+    frequency,
+    apprise_url,
+    verbose,
 ):
     if verbose:
         # fbn logging
         level = logging.DEBUG
-        formatter = logging.Formatter("<%(asctime)s><%(name)s><%(levelname)s> %(message)s")
+        formatter = logging.Formatter(
+            "<%(asctime)s><%(name)s><%(levelname)s> %(message)s"
+        )
         handler = logging.StreamHandler()
         handler.setLevel(level)
         handler.setFormatter(formatter)
@@ -160,6 +183,7 @@ def check_and_notify(
     else:
         # suppress warnings
         import warnings
+
         warnings.filterwarnings("ignore")
 
     if user_agent:
