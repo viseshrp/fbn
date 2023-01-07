@@ -1,8 +1,8 @@
 """Console script"""
 import click
 
-from .fb import check_and_notify
 from . import __version__
+from .fb import check_and_notify
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
