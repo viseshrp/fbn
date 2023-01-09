@@ -30,9 +30,7 @@ setup(
     name="fbn",
     version=version,
     description="Tool to monitor fb groups and notify",
-    long_description=get_file_text("README.md")
-    + "\n\n"
-    + get_file_text("CHANGELOG.md"),
+    long_description=get_file_text("README.md"),
     long_description_content_type="text/markdown",
     author="Visesh Prasad",
     author_email="visesh@live.com",
