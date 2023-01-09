@@ -5,11 +5,11 @@ from io import open
 from setuptools import setup, find_packages
 
 REQUIREMENTS = [
-    "click==8.1.3",
-    "facebook-scraper==0.2.59",
-    "tenacity==8.1.0",
-    "schedule==1.1.0",
-    "apprise==1.2.1",
+    "click>=8.1.3",
+    "facebook-scraper>=0.2.59",
+    "tenacity>=8.1.0",
+    "schedule>=1.1.0",
+    "apprise>=1.2.1",
 ]
 
 curr_dir = os.path.abspath(os.path.dirname(__file__))
