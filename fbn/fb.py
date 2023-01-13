@@ -1,7 +1,6 @@
 import logging
 import re
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs
 
 import apprise
 import schedule
@@ -59,7 +58,6 @@ def get_latest_posts(**kwargs):
                 "text": post["text"],
                 "post_text": post["post_text"],
                 "post_url": post["post_url"],
-                "group": post["with"][0]["name"],
                 "likes": post["likes"],
                 "comments": post["comments"],
                 "username": post["username"],
@@ -72,15 +70,6 @@ def get_latest_posts(**kwargs):
         raise e
     logger.debug(f"You were banned {ban_count} times temporarily.")
     return posts
-
-
-def get_group_name(posts_info):
-    group = None
-    for _, post_info in posts_info.items():
-        if post_info["group"]:
-            group = post_info["group"]
-            break
-    return group
 
 
 def notify(apprise_url, title, body):
@@ -111,7 +100,7 @@ def monitor_fb(**kwargs):
                 return
             current_post_set = latest_post_set
             logger.debug(f"Obtained {len(new_post_set)} new posts.")
-            group_name = get_group_name(latest_posts_info)
+            group_name = kwargs['group']
             # email digests
             is_email = (
                 apprise_url.startswith("mailto://")
