@@ -49,7 +49,7 @@ Make sure that you include both the c_user cookie and the xs cookie,
 you will get an InvalidCookies exception if you don't.
 
 *Since this is a scraper, the more frequently you scrape, the more the chances are of getting locked out of your account
-or even banned permanently. The tool detects temporary bans and backs off appropriately.*
+or even banned permanently. The tool detects temporary bans and backs off appropriately, but [be warned](https://github.com/kevinzg/facebook-scraper/issues/409#issuecomment-907639417).*
 
 Also, notifications are sent through the amazing [Apprise](https://github.com/caronc/apprise) which supports a ton of 
 [notification services](https://github.com/caronc/apprise/wiki#notification-services). Use the CLI option
