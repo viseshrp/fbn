@@ -40,14 +40,6 @@ def parse_frequency(frequency):
     return count, unit
 
 
-def is_sticky_post(post):
-    # awful hack
-    link = post["with"][0]["link"]
-    parsed_url = urlparse(link)
-    q_params = parse_qs(parsed_url.query)
-    return not q_params["_ft_"][0].startswith("qid")
-
-
 @retry(
     retry=retry_if_exception_type(TemporarilyBanned),
     stop=stop_after_attempt(3),
@@ -62,8 +54,6 @@ def get_latest_posts(**kwargs):
     posts = {}
     try:
         for post in get_posts(**kwargs):
-            if is_sticky_post(post):
-                continue
             post_id = post["post_id"]
             posts[post_id] = {
                 "text": post["text"],
