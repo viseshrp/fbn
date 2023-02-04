@@ -64,6 +64,7 @@ def get_latest_posts(**kwargs):
             }
             logger.debug(f"Obtained post {post_id}")
             if len(posts) == sample_count:
+                logger.debug(f"Stopping with {sample_count} posts...")
                 break
     except (TemporarilyBanned, AccountDisabled) as e:
         ban_count += 1
