@@ -72,8 +72,7 @@ from .fb import check_and_notify
     "--every",
     "frequency",
     type=str,
-    default="1h",
-    show_default=True,
+    required=False,
     help="Monitor frequency",
 )
 @click.option(
