@@ -32,7 +32,7 @@ Options:
                               facebook.com_cookies.txt]
   -g, --user-agent TEXT       User agent to use for scraping
   -s, --sample-count INTEGER  Number of posts to sample  [default: 10]
-  -e, --every TEXT            Monitor frequency  [default: 1h]
+  -e, --every TEXT            Monitor frequency
   -a, --apprise-url TEXT      The apprise URL to notify  [required]
   -v, --verbose               Enable debug logging.
   -h, --help                  Show this message and exit.
