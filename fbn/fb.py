@@ -49,7 +49,6 @@ def parse_frequency(frequency):
 )
 def get_latest_posts(**kwargs):
     sample_count = kwargs.pop("sample_count")
-    ban_count = 0
     posts = {}
     try:
         for post in get_posts(**kwargs):
@@ -67,9 +66,7 @@ def get_latest_posts(**kwargs):
                 logger.debug(f"Stopping with {sample_count} posts...")
                 break
     except (TemporarilyBanned, AccountDisabled) as e:
-        ban_count += 1
         raise e
-    logger.debug(f"You were banned {ban_count} times temporarily.")
     return posts
 
 
