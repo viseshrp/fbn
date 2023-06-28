@@ -43,14 +43,18 @@ If the group is private, authentication is required as you must be a member,
 obviously. Auth can be passed using the CLI options or the env vars `FBN_FB_USERNAME` or `FBN_FB_PASSWORD`.
 Auth can also be passed in the form of cookies in Netscape or JSON format. Use the CLI option.
 You can extract cookies from your browser after logging into Facebook with
-an extension like [Get Cookies.txt (Chrome)](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid?hl=en)
+an extension like [Get cookies.txt LOCALLY (Chrome)](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc/)
 or [Cookie Quick Manager (Firefox)](https://addons.mozilla.org/en-US/firefox/addon/cookie-quick-manager/).
 Make sure that you include both the c_user cookie and the xs cookie, 
 you will get an InvalidCookies exception if you don't.
 
 *Since this is a scraper, the more frequently you scrape, the more the chances are of getting locked out of your account
 or even banned permanently. The tool detects temporary bans and backs off appropriately, but [be warned](https://github.com/kevinzg/facebook-scraper/issues/409#issuecomment-907639417).*
+You may see `ConnectionResetError: [Errno 54] Connection reset by peer` for the URL `https://m.facebook.com/settings` from time to time. This is possibly because you are scraping too often. Reduce your frequency and/or rotate cookies to fix this. More info [here](https://github.com/kevinzg/facebook-scraper/issues/763).
 
-Also, notifications are sent through the amazing [Apprise](https://github.com/caronc/apprise) which supports a ton of 
+If you do not provide a value for `--every`, fbn will automatically randomize the checks to once between 2-4 hours which works out a lot better in terms of scraping frequency.
+
+Notifications are sent through the amazing [Apprise](https://github.com/caronc/apprise) which supports a ton of 
 [notification services](https://github.com/caronc/apprise/wiki#notification-services). Use the CLI option
  or env var `FBN_APPRISE_URL` to set that.
+
