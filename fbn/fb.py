@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from datetime import datetime
 
 import apprise
@@ -202,4 +203,5 @@ def check_and_notify(
     schedule.run_all()
     logger.debug(f"Starting schedule {job}...")
     while True:
+        time.sleep(600)
         schedule.run_pending()
