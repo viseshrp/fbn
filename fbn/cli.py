@@ -23,18 +23,18 @@ from .fb import check_and_notify
     "-u",
     "--username",
     type=str,
-    default="",
-    show_default=True,
     envvar="FBN_FB_USERNAME",
+    show_envvar=True,
+    required=False,
     help="Your Facebook username",
 )
 @click.option(
     "-p",
     "--password",
     type=str,
-    default="",
-    show_default=True,
     envvar="FBN_FB_PASSWORD",
+    show_envvar=True,
+    required=False,
     help="Your Facebook password",
 )
 @click.option(
@@ -48,8 +48,7 @@ from .fb import check_and_notify
         resolve_path=True,
         allow_dash=False,
     ),
-    default="facebook.com_cookies.txt",
-    show_default=True,
+    required=False,
     help="Path to the Facebook cookies file",
 )
 @click.option(
@@ -81,6 +80,7 @@ from .fb import check_and_notify
     type=str,
     required=True,
     envvar="FBN_APPRISE_URL",
+    show_envvar=True,
     help="The apprise URL to notify",
 )
 @click.option(
