@@ -26,14 +26,16 @@ Usage: fbn [OPTIONS]
 Options:
   -v, --version               Show the version and exit.
   -i, --id TEXT               The Facebook group name or id  [required]
-  -u, --username TEXT         Your Facebook username
-  -p, --password TEXT         Your Facebook password
-  -c, --cookies-file FILE     Path to the Facebook cookies file  [default:
-                              facebook.com_cookies.txt]
+  -u, --username TEXT         Your Facebook username  [env var:
+                              FBN_FB_USERNAME]
+  -p, --password TEXT         Your Facebook password  [env var:
+                              FBN_FB_PASSWORD]
+  -c, --cookies-file FILE     Path to the Facebook cookies file
   -g, --user-agent TEXT       User agent to use for scraping
   -s, --sample-count INTEGER  Number of posts to sample  [default: 10]
   -e, --every TEXT            Monitor frequency
-  -a, --apprise-url TEXT      The apprise URL to notify  [required]
+  -a, --apprise-url TEXT      The apprise URL to notify  [env var:
+                              FBN_APPRISE_URL; required]
   -v, --verbose               Enable debug logging.
   -h, --help                  Show this message and exit.
 ```
