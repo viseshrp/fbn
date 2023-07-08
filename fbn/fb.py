@@ -94,51 +94,52 @@ def monitor_fb(**kwargs):
         else:
             logger.debug(f"Getting new posts...")
             new_post_set = latest_post_set - current_post_set
-            if not new_post_set:
-                logger.debug(f"No new posts found. Ending...")
-                return
-            current_post_set = latest_post_set
-            logger.debug(f"Obtained {len(new_post_set)} new posts.")
-            group_name = kwargs['group']
-            # email digests
-            is_email = (
-                apprise_url.startswith("mailto://")
-                or apprise_url.startswith("mailgun://")
-                or apprise_url.startswith("sendgrid://")
-            )
-            body = f"Found at {datetime.now()}"
-            if is_email:
-                body = """
-                <!DOCTYPE html>
-                <html>
-                    <body>
-                        <div>
+            if new_post_set:
+                current_post_set = latest_post_set
+                logger.debug(f"Obtained {len(new_post_set)} new posts.")
+                group_name = kwargs['group']
+                # email digests
+                is_email = (
+                    apprise_url.startswith("mailto://")
+                    or apprise_url.startswith("mailgun://")
+                    or apprise_url.startswith("sendgrid://")
+                )
+                body = f"Found at {datetime.now()}"
+                if is_email:
+                    body = """
+                    <!DOCTYPE html>
+                    <html>
+                        <body>
                             <div>
-                """
-                for new_post_id in new_post_set:
-                    post = latest_posts_info[new_post_id]
-                    logger.debug(f"Getting post '{new_post_id}' from {group_name}")
-                    body += f"""
-                                    <div style="text-align:center;">
-                                        <h3>{post["username"]}</h3>
-                                        <p style="font-size: 1.2rem;">
-                                        {post.get("text") or post.get("post_text")}
-                                        </p>
-                                        <p>{post["comments"]} comments</p>
-                                        <p>{post["likes"]} likes</p>
-                                        <a href="{post["post_url"]}">Read more</a>
-                                    </div><br><br>
+                                <div>
                     """
-                body += """
+                    for new_post_id in new_post_set:
+                        post = latest_posts_info[new_post_id]
+                        logger.debug(f"Getting post '{new_post_id}' from {group_name}")
+                        body += f"""
+                                        <div style="text-align:center;">
+                                            <h3>{post["username"]}</h3>
+                                            <p style="font-size: 1.2rem;">
+                                            {post.get("text") or post.get("post_text")}
+                                            </p>
+                                            <p>{post["comments"]} comments</p>
+                                            <p>{post["likes"]} likes</p>
+                                            <a href="{post["post_url"]}">Read more</a>
+                                        </div><br><br>
+                        """
+                    body += """
+                                </div>
                             </div>
-                        </div>
-                    </body>
-                </html>    
-                """
-            # notify
-            title = f"{len(new_post_set)} new post(s) from {group_name}"
-            logger.debug(f"Notifying user of new posts : {title}")
-            notify(apprise_url, title, body)
+                        </body>
+                    </html>    
+                    """
+                # notify
+                title = f"{len(new_post_set)} new post(s) from {group_name}"
+                logger.debug(f"Notifying user of new posts : {title}")
+                notify(apprise_url, title, body)
+            else:
+                logger.debug(f"No new posts found. Ending...")
+            logger.debug(f"Next check at {schedule.next_run()}...")
 
 
 def check_and_notify(
