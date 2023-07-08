@@ -36,6 +36,7 @@ Options:
   -e, --every TEXT            Monitor frequency
   -a, --apprise-url TEXT      The apprise URL to notify  [env var:
                               FBN_APPRISE_URL; required]
+  --include-errors            Notify of errors as well.
   -v, --verbose               Enable debug logging.
   -h, --help                  Show this message and exit.
 ```

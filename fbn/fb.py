@@ -6,11 +6,11 @@ from datetime import datetime
 import apprise
 import schedule
 from facebook_scraper import get_posts, enable_logging, set_user_agent
-from facebook_scraper.exceptions import TemporarilyBanned, AccountDisabled
+from facebook_scraper.exceptions import AccountDisabled
 from tenacity import (
     retry,
     stop_after_attempt,
-    retry_if_exception_type,
+    retry_if_not_exception_type,
     before_log,
     after_log,
     wait_chain,
@@ -41,9 +41,9 @@ def parse_frequency(frequency):
 
 
 @retry(
-    retry=retry_if_exception_type(TemporarilyBanned),
+    retry=retry_if_not_exception_type(AccountDisabled),
     stop=stop_after_attempt(3),
-    wait=wait_chain(wait_fixed(600), wait_fixed(700), wait_fixed(800)),
+    wait=wait_chain(wait_fixed(600), wait_fixed(1200), wait_fixed(1800)),
     reraise=True,
     before=before_log(logger, logging.DEBUG),
     after=after_log(logger, logging.DEBUG),
@@ -66,8 +66,12 @@ def get_latest_posts(**kwargs):
             if len(posts) == sample_count:
                 logger.debug(f"Stopping with {sample_count} posts...")
                 break
-    except (TemporarilyBanned, AccountDisabled) as e:
+    except Exception as e:
+        logger.debug(f"Error fetching posts : {e}")
+        if kwargs["on_error"]:
+            notify(kwargs["apprise_url"], "Error fetching posts", str(e))
         raise e
+
     return posts
 
 
@@ -80,9 +84,8 @@ def notify(apprise_url, title, body):
     )
 
 
-def monitor_fb(**kwargs):
+def check_fb(**kwargs):
     global current_post_set
-    apprise_url = kwargs.pop("apprise_url")
     logger.debug(f"Fetching latest posts...")
     latest_posts_info = get_latest_posts(**kwargs)
     if latest_posts_info:
@@ -97,14 +100,14 @@ def monitor_fb(**kwargs):
             if new_post_set:
                 current_post_set = latest_post_set
                 logger.debug(f"Obtained {len(new_post_set)} new posts.")
-                group_name = kwargs['group']
-                # email digests
+                group_name = kwargs["group"]
+                # email digest
+                apprise_url = kwargs["apprise_url"]
                 is_email = (
                     apprise_url.startswith("mailto://")
                     or apprise_url.startswith("mailgun://")
                     or apprise_url.startswith("sendgrid://")
                 )
-                body = f"Found at {datetime.now()}"
                 if is_email:
                     body = """
                     <!DOCTYPE html>
@@ -133,6 +136,8 @@ def monitor_fb(**kwargs):
                         </body>
                     </html>    
                     """
+                else:
+                    body = f"Found at {datetime.now()}"
                 # notify
                 title = f"{len(new_post_set)} new post(s) from {group_name}"
                 logger.debug(f"Notifying user of new posts : {title}")
@@ -151,6 +156,7 @@ def check_and_notify(
     sample_count,
     frequency,
     apprise_url,
+    on_error,
     verbose,
 ):
     if verbose:
@@ -181,6 +187,7 @@ def check_and_notify(
         "options": {"allow_extra_requests": False, "posts_per_page": sample_count},
         "apprise_url": apprise_url,
         "sample_count": sample_count,
+        "on_error": on_error
     }
 
     if cookies_file:
@@ -197,12 +204,12 @@ def check_and_notify(
     if frequency:
         interval, unit = parse_frequency(frequency)
         schedule_unit = SCHEDULE_UNIT_MAP[unit]
-        job = getattr(schedule.every(int(interval)), schedule_unit).do(monitor_fb, **kwargs)
+        getattr(schedule.every(int(interval)), schedule_unit).do(check_fb, **kwargs)
     else:  # randomize as the default
-        job = schedule.every(2).to(4).hours.do(monitor_fb, **kwargs)
+        schedule.every(2).to(4).hours.do(check_fb, **kwargs)
     logger.debug(f"Running once...")
     schedule.run_all()
-    logger.debug(f"Starting schedule {job}...")
+    logger.debug(f"Next check at {schedule.next_run()}...")
     while True:
         time.sleep(600)
         schedule.run_pending()

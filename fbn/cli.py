@@ -84,6 +84,9 @@ from .fb import check_and_notify
     help="The apprise URL to notify",
 )
 @click.option(
+    "--include-errors", "on_error", is_flag=True, default=False, help="Notify of errors as well."
+)
+@click.option(
     "-v", "--verbose", is_flag=True, default=False, help="Enable debug logging."
 )
 def main(
@@ -95,6 +98,7 @@ def main(
     sample_count,
     frequency,
     apprise_url,
+    on_error,
     verbose,
 ):
     """
@@ -117,6 +121,7 @@ def main(
             sample_count,
             frequency,
             apprise_url,
+            on_error,
             verbose,
         )
     except Exception as e:
