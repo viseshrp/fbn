@@ -143,8 +143,9 @@ def check_fb(**kwargs):
                 logger.debug(f"Notifying user of new posts : {title}")
                 notify(apprise_url, title, body)
             else:
-                logger.debug(f"No new posts found. Ending...")
-            logger.debug(f"Next check at {schedule.next_run()}...")
+                logger.debug("No new posts found. Ending...")
+    else:
+        logger.debug("No posts available. Ending...")
 
 
 def check_and_notify(
@@ -200,16 +201,20 @@ def check_and_notify(
                 "Please provide your Facebook username/password or a cookies file."
             )
 
+    logger.debug(f"Running for the first time...")
+    check_fb(**kwargs)
     logger.debug("Creating schedule...")
     if frequency:
         interval, unit = parse_frequency(frequency)
         schedule_unit = SCHEDULE_UNIT_MAP[unit]
         getattr(schedule.every(int(interval)), schedule_unit).do(check_fb, **kwargs)
     else:  # randomize as the default
-        schedule.every(2).to(4).hours.do(check_fb, **kwargs)
-    logger.debug(f"Running once...")
-    schedule.run_all()
-    logger.debug(f"Next check at {schedule.next_run()}...")
+        schedule.every(2).to(4).minutes.do(check_fb, **kwargs)
+    # run
     while True:
-        time.sleep(600)
+        logger.debug(f"Next check at {schedule.next_run()}...")
+        n = schedule.idle_seconds()
+        if n > 0:
+            # sleep exactly the right amount of time
+            time.sleep(n)
         schedule.run_pending()
