@@ -155,7 +155,8 @@ def check_and_notify(
     cookies_file,
     user_agent,
     sample_count,
-    frequency,
+    every,
+    to,
     apprise_url,
     on_error,
     verbose,
@@ -204,10 +205,14 @@ def check_and_notify(
     logger.debug(f"Running for the first time...")
     check_fb(**kwargs)
     logger.debug("Creating schedule...")
-    if frequency:
-        interval, unit = parse_frequency(frequency)
+    if every:
+        interval, unit = parse_frequency(every)
         schedule_unit = SCHEDULE_UNIT_MAP[unit]
-        getattr(schedule.every(int(interval)), schedule_unit).do(check_fb, **kwargs)
+        every_schedule = schedule.every(int(interval))
+        if to:
+            interval, _ = parse_frequency(to)
+            every_schedule = every_schedule.to(int(interval))
+        getattr(every_schedule, schedule_unit).do(check_fb, **kwargs)
     else:  # randomize as the default
         schedule.every(1).to(3).hours.do(check_fb, **kwargs)
     # run

@@ -69,10 +69,21 @@ from .fb import check_and_notify
 @click.option(
     "-e",
     "--every",
-    "frequency",
+    "every",
     type=str,
     required=False,
-    help="Monitor frequency",
+    help="Monitor frequency. Of the form <int><m/h/d/w>. "
+         "Eg: --every 2m. Will check every 2 minutes.",
+)
+@click.option(
+    "-t",
+    "--to",
+    "to",
+    type=str,
+    required=False,
+    help="Monitor randomization frequency. Requires --every. Same form as --every. "
+         "Both units must match. "
+         "Eg: --every 1h --to 2h. Will randomize checks every 1 to 2 hours. "
 )
 @click.option(
     "-a",
@@ -96,7 +107,8 @@ def main(
     cookies_file,
     user_agent,
     sample_count,
-    frequency,
+    every,
+    to,
     apprise_url,
     on_error,
     verbose,
@@ -119,7 +131,8 @@ def main(
             cookies_file,
             user_agent,
             sample_count,
-            frequency,
+            every,
+            to,
             apprise_url,
             on_error,
             verbose,

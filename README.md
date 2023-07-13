@@ -33,7 +33,12 @@ Options:
   -c, --cookies-file FILE     Path to the Facebook cookies file
   -g, --user-agent TEXT       User agent to use for scraping
   -s, --sample-count INTEGER  Number of posts to sample  [default: 10]
-  -e, --every TEXT            Monitor frequency
+  -e, --every TEXT            Monitor frequency. Of the form <int><m/h/d/w>.
+                              Eg: --every 2m. Will check every 2 minutes.
+  -t, --to TEXT               Monitor randomization frequency. Requires
+                              --every. Same form as --every. Both units must
+                              match. Eg: --every 1h --to 2h. Will randomize
+                              checks every 1 to 2 hours.
   -a, --apprise-url TEXT      The apprise URL to notify  [env var:
                               FBN_APPRISE_URL; required]
   --include-errors            Notify of errors as well.
