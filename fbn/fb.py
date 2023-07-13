@@ -209,7 +209,7 @@ def check_and_notify(
         schedule_unit = SCHEDULE_UNIT_MAP[unit]
         getattr(schedule.every(int(interval)), schedule_unit).do(check_fb, **kwargs)
     else:  # randomize as the default
-        schedule.every(2).to(4).hours.do(check_fb, **kwargs)
+        schedule.every(1).to(3).hours.do(check_fb, **kwargs)
     # run
     while True:
         logger.debug(f"Next check at {schedule.next_run()}...")
