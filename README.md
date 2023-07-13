@@ -5,7 +5,8 @@ The UI, the clunky android app.. Ughh. I uninstalled it a long time ago and just
 mobile site.
 I hate that I am forced to be on it, sometimes, because there is
 valuable information from folks on there in some communities I am a part of. This tool
-is to remove the need for me to keep watching these groups constantly.
+is to remove the need for me to keep watching these groups constantly. I run this using 
+systemd on a Raspberry Pi 4B.
 
 ```sh
 $ pip install fbn
@@ -58,9 +59,12 @@ you will get an InvalidCookies exception if you don't.
 
 *Since this is a scraper, the more frequently you scrape, the more the chances are of getting locked out of your account
 or even banned permanently. The tool detects temporary bans and backs off appropriately, but [be warned](https://github.com/kevinzg/facebook-scraper/issues/409#issuecomment-907639417).*
-You may see `ConnectionResetError: [Errno 54] Connection reset by peer` for the URL `https://m.facebook.com/settings` from time to time. This is possibly because you are scraping too often. Reduce your frequency and/or rotate cookies to fix this. More info [here](https://github.com/kevinzg/facebook-scraper/issues/763).
+You may see `ConnectionResetError: [Errno 54] Connection reset by peer` for the URL `https://m.facebook.com/settings` 
+from time to time. This is possibly because you are scraping too often. Reduce your frequency and/or rotate cookies 
+to fix this. More info [here](https://github.com/kevinzg/facebook-scraper/issues/763).
 
-If you do not provide a value for `--every`, fbn will automatically randomize the checks to once between 2-4 hours which works out a lot better in terms of scraping frequency.
+If you do not provide a value for `--every` or `--to`, fbn will automatically randomize the checks to once 
+between 1-3 hours which works out a lot better in terms of scraping frequency.
 
 Notifications are sent through the amazing [Apprise](https://github.com/caronc/apprise) which supports a ton of 
 [notification services](https://github.com/caronc/apprise/wiki#notification-services). Use the CLI option
