@@ -1,5 +1,5 @@
 # fbn
-#### Tool to monitor fb groups and notify.
+### Tool to monitor fb groups and notify.
 This was a small holiday project. I just absolutely hate being on Facebook.
 The UI, the clunky android app.. Ughh. I uninstalled it a long time ago and just use the
 mobile site.
@@ -70,7 +70,7 @@ Notifications are sent through the amazing [Apprise](https://github.com/caronc/a
 [notification services](https://github.com/caronc/apprise/wiki#notification-services). Use the CLI option
  or env var `FBN_APPRISE_URL` to set that.
 
-### systemd configuration example
+#### systemd configuration example
 
 ```sh
 [Unit]
