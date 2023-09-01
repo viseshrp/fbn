@@ -70,3 +70,18 @@ Notifications are sent through the amazing [Apprise](https://github.com/caronc/a
 [notification services](https://github.com/caronc/apprise/wiki#notification-services). Use the CLI option
  or env var `FBN_APPRISE_URL` to set that.
 
+### systemd configuration example
+
+```sh
+[Unit]
+Description=fbn
+After=network.target
+
+[Service]
+ExecStart=/opt/fbn/venv/bin/fbn --id andrewschapel --username myid@gmail.com --password password --verbose --sample-count 20 -a mailto://myid:token@gmail.com --include-errors
+Restart=on-abort
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+```
