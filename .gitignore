@@ -160,5 +160,14 @@ cython_debug/
 .idea/
 .DS_Store
 .gitattributes
-facebook.com_cookies.txt
 fbn_debug.txt
+
+# Local Facebook authentication exports
+facebook-auth*
+facebook.com_cookies.*
+cookies.txt
+/cookies*.json
+/cookies*.txt
+playwright/.auth/
+storage-state*.json
+storage_state*.json
