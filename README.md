@@ -320,7 +320,9 @@ The Compose command is explicitly
 `fbn monitor --browser chromium --headless ...`. Chromium uses a 1 GiB shared
 memory allocation, and `init: true` forwards termination cleanly. The
 profile-gated `bootstrap` service does not start with this command, and the
-monitor has no authentication-file secret mount.
+monitor has no authentication-file secret mount. Both services allow two
+minutes for graceful termination so bootstrap has time to verify cookie
+rollback and the monitor can close Chromium.
 
 The monitor restart policy is deliberately `no`. Its internal scheduler already
 backs off transient navigation failures; authentication, checkpoint, access,

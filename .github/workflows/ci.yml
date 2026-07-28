@@ -1,0 +1,228 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Check installed dependency consistency
+        run: python -m pip check
+
+      - name: Run unit tests
+        run: >-
+          python -m pytest
+          --ignore=tests/test_browser_integration.py
+          --cov=fbn
+          --cov-report=term-missing
+
+  quality:
+    name: Lint, format, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run Ruff
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+          git diff --check
+
+      - name: Build and validate distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+
+      - name: Smoke test the built wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/fbn-wheel-smoke"
+          "$RUNNER_TEMP/fbn-wheel-smoke/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/fbn-wheel-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/fbn-wheel-smoke/bin/fbn" --help
+          "$RUNNER_TEMP/fbn-wheel-smoke/bin/fbn" --version
+          "$RUNNER_TEMP/fbn-wheel-smoke/bin/python" -m fbn --help
+
+  browser-integration:
+    name: Sanitized local browser integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Install Playwright Chromium and Linux dependencies
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run local-page browser integration test
+        run: python -m pytest tests/test_browser_integration.py -q
+
+  docker:
+    name: Docker (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate Compose configuration
+        env:
+          FBN_ACKNOWLEDGE_AUTOMATION_RISK: "true"
+          FBN_APPRISE_URL: json://127.0.0.1:9
+          FBN_GROUP: test-group
+        run: |
+          docker compose config --quiet
+          FBN_AUTH_FILE=/dev/null docker compose --profile bootstrap config --quiet
+          FBN_AUTH_FILE=/dev/null docker compose --profile bootstrap config --format json |
+            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["environment"]["FBN_ACKNOWLEDGE_AUTOMATION_RISK"] == "true"; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"'
+
+      - name: Build the native-architecture image
+        run: >-
+          docker build
+          --platform ${{ matrix.platform }}
+          --tag fbn:ci
+          .
+
+      - name: Verify the installed package
+        run: |
+          docker run --rm --network none fbn:ci --version
+          docker run --rm --network none fbn:ci bootstrap --help
+          docker run --rm --network none fbn:ci --help
+
+      - name: Verify non-root and image secret boundaries
+        run: |
+          docker image inspect fbn:ci |
+            python -c 'import json, sys; image = json.load(sys.stdin)[0]; config = image["Config"]; assert config["User"] == "fbn:fbn"; assert config["Healthcheck"]["Test"] == ["CMD", "python", "-c", "import fbn"]; values = "\n".join(config.get("Env", []) + [str(config.get("Labels", {}))]); assert "FBN_APPRISE_URL" not in values; assert "FBN_AUTH_FILE" not in values'
+          python -c 'import subprocess; history = subprocess.check_output(["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", "fbn:ci"], text=True); assert "FBN_APPRISE_URL" not in history; assert "facebook-auth.json" not in history'
+          docker run --rm --network none --entrypoint sh fbn:ci -c 'test "$(id -u)" -ne 0; test -w /home/fbn/.local/share/fbn; test ! -e /run/secrets/facebook_auth'
+
+      - name: Verify Playwright Chromium
+        run: >-
+          docker run
+          --rm
+          --network none
+          fbn:ci
+          doctor
+          --browser chromium
+
+      - name: Exercise a sanitized local DOM fixture
+        run: |
+          docker run --rm \
+            --entrypoint python \
+            --network none \
+            --shm-size 1gb \
+            --volume "${{ github.workspace }}/tests/fixtures:/fixtures:ro" \
+            fbn:ci \
+            -c "from pathlib import Path; \
+          from playwright.sync_api import sync_playwright; \
+          from fbn.browser import PageState, classify_page, collect_dom_payloads, read_page_signals; \
+          runtime = sync_playwright().start(); \
+          browser = runtime.chromium.launch(channel='chromium', headless=True); \
+          page = browser.new_page(); \
+          page.set_content(Path('/fixtures/feed.html').read_text(encoding='utf-8')); \
+          assert classify_page(read_page_signals(page)) is PageState.FEED; \
+          assert len(collect_dom_payloads(page)) == 2; \
+          browser.close(); \
+          runtime.stop()"
+
+      - name: Verify profile and state survive container replacement
+        run: |
+          docker volume create fbn-ci-persistence
+          docker run --rm \
+            --network none \
+            --shm-size 1gb \
+            --volume fbn-ci-persistence:/home/fbn/.local/share/fbn \
+            --volume "${{ github.workspace }}/tests/container_persistence_smoke.py:/smoke.py:ro" \
+            --entrypoint python \
+            fbn:ci \
+            /smoke.py write
+          docker run --rm \
+            --network none \
+            --shm-size 1gb \
+            --volume fbn-ci-persistence:/home/fbn/.local/share/fbn \
+            --volume "${{ github.workspace }}/tests/container_persistence_smoke.py:/smoke.py:ro" \
+            --entrypoint python \
+            fbn:ci \
+            /smoke.py read
+          docker volume rm fbn-ci-persistence

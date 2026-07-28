@@ -39,6 +39,7 @@ services:
     build: *fbn-build
     init: true
     restart: "no"
+    stop_grace_period: 2m
     shm_size: "1gb"
     environment:
       FBN_ACKNOWLEDGE_AUTOMATION_RISK: "${FBN_ACKNOWLEDGE_AUTOMATION_RISK:?Set FBN_ACKNOWLEDGE_AUTOMATION_RISK=true}"
