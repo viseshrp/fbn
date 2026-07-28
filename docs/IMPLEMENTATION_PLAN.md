@@ -107,7 +107,7 @@ Verification:
 - [x] Keep PyPI publication isolated to a deliberate published release.
 - [x] Add Ruff, pytest, coverage, build, Twine, `pip check`, and clean-wheel smoke
   verification.
-- [ ] Run the entire matrix locally where possible.
+- [x] Run the entire matrix locally where possible.
 
 ## Phase 6: Ubuntu ARM64 and Docker deployment
 
@@ -132,11 +132,12 @@ Verification:
   no Facebook request.
 - [x] Make initial bootstrap fully headless and noninteractive against the same
   profile/volume used by the monitor; keep headed login optional for recovery.
-- [ ] Run the sanitized real-browser integration test on native Ubuntu ARM64 and
-  the Raspberry Pi 4 release target.
-- [ ] Validate Docker configuration with required runtime values and build/smoke
+- [x] Run the sanitized real-browser integration test on native Ubuntu ARM64.
+- [ ] Repeat the sanitized real-browser integration test on the Raspberry Pi 4
+  release target.
+- [x] Validate Docker configuration with required runtime values and build/smoke
   test both `linux/amd64` and `linux/arm64` variants.
-- [ ] Verify container replacement preserves the profile and SQLite state and
+- [x] Verify container replacement preserves the profile and SQLite state and
   that image/history/config inspection contains no runtime secret or profile.
 
 Verification:
@@ -161,20 +162,27 @@ Verification:
 Release gates:
 
 - [ ] All acceptance criteria in `docs/SPEC.md` pass.
-- [ ] The sanitized browser integration test passes with real
-  Playwright-managed Chromium on native Ubuntu ARM64/Raspberry Pi 4 without any
-  Facebook request.
-- [ ] `docker compose config` succeeds with representative runtime-only values.
-- [ ] Both the default and bootstrap Compose profiles validate, and expanded
+- [x] The sanitized browser integration test passes with real
+  Playwright-managed Chromium on native Ubuntu ARM64 without any Facebook
+  request.
+- [ ] The same sanitized browser integration test passes on the physical
+  Raspberry Pi 4 release target.
+- [x] `docker compose config` succeeds with representative runtime-only values.
+- [x] Both the default and bootstrap Compose profiles validate, and expanded
   configuration proves that only bootstrap receives `facebook_auth`.
-- [ ] The Ubuntu 24.04 image builds and passes non-root/local smoke checks for
+- [x] The Ubuntu 24.04 image builds and passes non-root/local smoke checks for
   both `linux/amd64` and `linux/arm64`.
-- [ ] Container replacement preserves the test profile/state volume, and health
+- [x] Container replacement preserves the test profile/state volume, and health
   behavior is confirmed not to poll Facebook.
-- [ ] `git status --short` contains only intentional files.
-- [ ] `git diff --check` passes.
-- [ ] The branch is pushed and the remote commit is confirmed.
-- [ ] No release or PyPI upload is performed unless separately requested.
+- [x] `git status --short` contains only intentional files.
+- [x] `git diff --check` passes.
+- [x] The branch is pushed and the remote commit is confirmed.
+- [x] No release or PyPI upload is performed unless separately requested.
+
+Verification record: [CI run #1](https://github.com/viseshrp/fbn/actions/runs/30400352562)
+passed on commit `4a932dacc9baa7ed03786b6ac9754ed85935166d`,
+including native `linux/amd64` and `linux/arm64` image execution. The physical
+Raspberry Pi 4 release-target run remains deliberately open.
 
 ## Focused commit sequence
 
