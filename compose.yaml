@@ -1,0 +1,67 @@
+x-fbn-build: &fbn-build
+  context: .
+  args:
+    FBN_GID: "${FBN_GID:-1000}"
+    FBN_UID: "${FBN_UID:-1000}"
+    PLAYWRIGHT_VERSION: "1.61.0"
+
+services:
+  fbn:
+    image: fbn:local
+    build: *fbn-build
+    init: true
+    restart: "no"
+    stop_grace_period: 2m
+    shm_size: "1gb"
+    environment:
+      FBN_ACKNOWLEDGE_AUTOMATION_RISK: "${FBN_ACKNOWLEDGE_AUTOMATION_RISK:?Set FBN_ACKNOWLEDGE_AUTOMATION_RISK=true}"
+      FBN_APPRISE_URL: "${FBN_APPRISE_URL:?Set FBN_APPRISE_URL to an Apprise URL}"
+      FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
+      FBN_STATE_FILE: /home/fbn/.local/share/fbn/state.sqlite3
+    volumes:
+      - fbn-data:/home/fbn/.local/share/fbn
+    command:
+      - monitor
+      - --id
+      - "${FBN_GROUP:?Set FBN_GROUP to a group ID, slug, or canonical URL}"
+      - --browser
+      - chromium
+      - --headless
+      - --every
+      - "${FBN_EVERY:-1h}"
+      - --to
+      - "${FBN_TO:-3h}"
+
+  bootstrap:
+    profiles:
+      - bootstrap
+    image: fbn:local
+    build: *fbn-build
+    init: true
+    restart: "no"
+    shm_size: "1gb"
+    environment:
+      FBN_ACKNOWLEDGE_AUTOMATION_RISK: "${FBN_ACKNOWLEDGE_AUTOMATION_RISK:?Set FBN_ACKNOWLEDGE_AUTOMATION_RISK=true}"
+      FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
+    volumes:
+      - fbn-data:/home/fbn/.local/share/fbn
+    secrets:
+      - source: facebook_auth
+        target: facebook_auth
+    command:
+      - bootstrap
+      - --auth-file
+      - /run/secrets/facebook_auth
+      - -i
+      - "${FBN_GROUP:?Set FBN_GROUP to a group ID, slug, or canonical URL}"
+      - --browser
+      - chromium
+
+secrets:
+  facebook_auth:
+    # /dev/null keeps the default monitor independent of the bootstrap source.
+    # Set FBN_AUTH_FILE to a private host file when invoking the bootstrap profile.
+    file: "${FBN_AUTH_FILE:-/dev/null}"
+
+volumes:
+  fbn-data:

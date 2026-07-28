@@ -11,14 +11,31 @@ Playwright browser -> post extractor -> SQLite state/outbox -> Apprise notifier
                          scan policy          monitor service
 ```
 
-The CLI composes these boundaries for interactive login, one-shot checks,
-long-running monitoring, and diagnostics.
+The CLI composes these boundaries for headless authentication bootstrap,
+optional interactive recovery, one-shot checks, long-running monitoring, and
+diagnostics.
+
+The same application pipeline is deployed in two supported Linux forms:
+
+```text
+native Ubuntu ARM64 / Raspberry Pi 4
+  secret-file bootstrap --\
+                          +--> dedicated profile + SQLite state --> headless monitor
+
+Ubuntu 24.04 container (linux/amd64 or linux/arm64)
+  /run/secrets bootstrap --\
+                           +--> persistent volume ----------> headless monitor
+```
+
+Authentication bootstrap and monitoring are headless in both forms. A headed
+browser is an optional recovery path only.
 
 ## Modules
 
 | Module | Responsibility |
 | --- | --- |
 | `fbn.cli` | Click commands, option/environment mapping, logging, exit codes. |
+| `fbn.auth` | Bounded secret-file parsing, Facebook-domain filtering, and cookie normalization. |
 | `fbn.config` | Platform paths, browser/scan/schedule validation, duration parsing. |
 | `fbn.models` | Immutable group, post, scan, observation, delivery, and run-summary values. |
 | `fbn.browser` | Persistent Playwright context lifecycle, navigation, page-state classification, bounded scrolling. |
@@ -33,8 +50,7 @@ long-running monitoring, and diagnostics.
 
 ```python
 class PostSource(Protocol):
-    def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
-        ...
+    def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult: ...
 
 
 class StateRepository(Protocol):
@@ -44,19 +60,15 @@ class StateRepository(Protocol):
         posts: Sequence[Post],
         *,
         notify_initial: bool,
-    ) -> ObservationBatch:
-        ...
+    ) -> ObservationBatch: ...
 
-    def pending(self, group: GroupRef) -> Sequence[PendingNotification]:
-        ...
+    def pending(self, group: GroupRef) -> Sequence[PendingNotification]: ...
 
-    def mark_delivered(self, event_ids: Sequence[str]) -> None:
-        ...
+    def mark_delivered(self, event_ids: Sequence[str]) -> None: ...
 
 
 class NotificationSink(Protocol):
-    def send(self, notification: Notification) -> None:
-        ...
+    def send(self, notification: Notification) -> None: ...
 ```
 
 `MonitorService.run_once()` is the application boundary. Browser, state, clock,
@@ -99,21 +111,50 @@ No raw HTML, cookies, screenshot, or browser trace is included.
 
 ## Browser lifecycle
 
-### Login
+### Authentication bootstrap
 
-1. Resolve and create the dedicated profile directory with owner-only
-   permissions.
-2. Acquire an exclusive profile lock.
-3. Launch a headed persistent Chromium context.
-4. Open `https://www.facebook.com/`.
-5. Let the user complete login and security steps.
-6. Verify that the browser is no longer on a login/checkpoint page.
-7. Close the context and release the lock.
+1. Require `--auth-file`, a validated group reference, and the explicit
+   automation-risk acknowledgment.
+2. Read at most 10 MiB of UTF-8 input and auto-detect a Playwright storage-state
+   object, exported-cookie JSON array, or Netscape `cookies.txt`.
+3. Normalize cookies, retain only `facebook.com` and subdomain entries, ignore
+   storage-state origins, and reject input with no Facebook cookies. No error or
+   log contains a cookie name or value.
+4. Resolve and create the dedicated profile directory with owner-only
+   permissions, acquire its exclusive lock, and enforce the private
+   browser-configuration marker.
+5. Launch the selected persistent Chromium context headlessly. Ubuntu ARM64 and
+   Docker use Playwright-managed regular Chromium with
+   `channel="chromium"`.
+6. Snapshot the profile's current cookies, replace them with the imported set,
+   and navigate to the requested group's chronological feed.
+7. Classify the real page. Only an authenticated and accessible group feed is a
+   successful bootstrap; no undocumented cookie name is treated as proof.
+8. Parser failures occur before the profile is opened. Restore the previous
+   cookies on any later browser, authentication, access, or layout failure. On
+   success, retain the imported session in the profile.
+9. Close the context and release the lock.
+
+The source authentication file is read without modification and is not copied
+wholesale into the profile. On Docker, only the profile-gated bootstrap service
+receives it as `/run/secrets/facebook_auth`; the monitor service never mounts
+it. The import establishes authentication only. It neither extends the
+account's authorization nor bypasses a site control.
+
+### Optional headed recovery
+
+`fbn login` opens the same dedicated profile in a headed browser when a user on
+a trusted workstation must personally complete login, 2FA, consent, or an
+account action. This flow is not required for initial Ubuntu ARM64, Raspberry
+Pi, or container bootstrap. Password automation, remote profile upload, and
+exposed browser-debugging endpoints remain out of scope.
 
 ### Check
 
 1. Acquire the profile lock.
-2. Launch the configured persistent context.
+2. Launch the configured persistent context. The default is Playwright Chromium
+   headlessly with `channel="chromium"`. `--headed` is an explicit
+   troubleshooting override on a trusted display.
 3. Navigate to the canonical group URL with chronological sorting requested.
 4. Classify the response URL/status and visible page state.
 5. Extract visible canonical post anchors and semantic container text.
@@ -159,6 +200,10 @@ The page returns a minimal list of DOM payloads:
 `fbn.extractor` then validates the host/scheme, parses group and post IDs,
 removes query/fragment tracking data, normalizes Unicode/whitespace, enforces
 text limits, and deduplicates IDs while retaining the first visible position.
+Facebook can redirect a numeric group URL while rendering its post permalinks
+under a custom group alias. The browser adapter accepts one such alias only
+when it is the sole candidate in the visible group-navigation tablist; related
+group links and feed content are never trusted as identity evidence.
 
 Selectors are kept in one module. Local sanitized fixture tests cover both
 `/posts/` and `/permalink/` forms, duplicate/shared links, missing author/text,
@@ -232,14 +277,32 @@ This provides at-least-once delivery without losing a post when Apprise fails.
 6. stop cleanly on SIGINT/SIGTERM.
 
 Transient navigation failures increase a bounded backoff. A success resets it.
+User-configured monitor intervals are bounded from 15 minutes through 365 days,
+and long waits are split into interruptible 24-hour chunks.
 Configuration, authentication, account-action, profile-lock, browser-startup,
 access, and layout errors exit immediately with a typed nonzero code.
+
+An expired session is not repaired by the scheduler. The monitor stops and the
+user bootstraps a fresh authentication export against the same profile/volume
+or uses the optional headed recovery command.
 
 ## Security and privacy
 
 - The browser profile and state database live outside the repository.
-- Unix paths use `0700` parent directories and `0600` state/lock files.
-- Facebook credentials/cookies are never accepted by the CLI or logged.
+- On Unix, newly created state parents use `0700`; an existing parent keeps its
+  administrator-selected mode. The SQLite database, WAL/SHM sidecars, and lock
+  files use `0600`.
+- Facebook passwords and cookie values are never accepted in arguments or
+  environment variables. `bootstrap` accepts only an explicit file path, and
+  cookie names and values are never logged.
+- The authentication parser is size-bounded, imports only Facebook domains, and
+  ignores Playwright origin storage.
+- The source authentication file remains outside the repository and Docker
+  build context. The Compose bootstrap service mounts it read-only under
+  `/run/secrets`; the monitor service does not receive it.
+- An authenticated container volume is treated as credential material: it is
+  never baked into an image, uploaded to a registry, or mounted into an
+  untrusted container.
 - Apprise URLs are read from an option or environment variable but are always
   redacted from errors/logs.
 - Extracted post bodies persist only while their notification is pending.
@@ -257,10 +320,107 @@ SQLite and scheduling primitives come from the standard library.
 Pip installs the Python package. Browser acquisition remains explicit:
 
 ```console
-python -m playwright install chromium
+python -m playwright install --with-deps chromium
 ```
 
-An installed Chrome/Edge channel needs no Playwright browser download. Linux may
-require `python -m playwright install --with-deps chromium`. Raspberry Pi users
-can pass an installed Chromium executable.
+An installed Chrome/Edge channel needs no Playwright browser download and
+remains a desktop option. The required Ubuntu ARM64, Raspberry Pi 4, and Docker
+path uses the Playwright-managed browser. `--browser chromium` maps to
+`channel="chromium"` for both headless bootstrap and monitoring; an explicit
+executable remains an administrator-managed fallback. The same mapping is used
+by optional headed recovery.
 
+### Native Ubuntu ARM64 and Raspberry Pi 4
+
+- The host runs 64-bit Ubuntu; Ubuntu 24.04 ARM64 is the deployment baseline.
+- Package installation is standard pip installation.
+- `python -m playwright install --with-deps chromium` installs the matching
+  Chromium build and Ubuntu libraries.
+- The user runs fully headless `fbn bootstrap` once with an owner-protected
+  authentication export, group ID, Chromium selection, and the explicit risk
+  acknowledgment.
+- The service then runs
+  `fbn monitor --browser chromium --headless ...` without a permanent display.
+- The profile remains owner-only. Newly created state parents are owner-only,
+  while existing state-parent modes are preserved; the database and sidecars
+  remain private across service restarts.
+- Optional headed recovery needs a trusted display, but initial bootstrap does
+  not.
+- A release is not considered ARM64-ready until the sanitized fixture suite
+  launches the real Playwright-managed regular Chromium binary headlessly on a
+  native Ubuntu ARM64 target, including the Raspberry Pi 4 release target.
+
+### Ubuntu container
+
+The image is built from Ubuntu 24.04 for `linux/amd64` and `linux/arm64`. The
+Playwright Python package version and installed browser revision remain aligned.
+The image build runs:
+
+```console
+python -m playwright install --with-deps chromium
+```
+
+The runtime topology is:
+
+```text
+private host authentication export
+             |
+             v
+Compose secret /run/secrets/facebook_auth
+             |
+             v
+one-shot non-root fbn bootstrap --browser chromium
+             |
+             +--> persistent volume/profile/
+
+runtime-only monitor config + Apprise URL
+             |
+             v
+non-root fbn monitor --browser chromium --headless
+             |
+             +--> Playwright-managed regular Chromium
+             |
+             +--> persistent volume/
+                    +-- profile/       authenticated browser state
+                    +-- state.sqlite3  observations and pending delivery
+```
+
+The concrete mount path may differ, but profile and state must share an
+owner-controlled persistent volume so replacing the container does not force a
+new baseline or bootstrap.
+
+The one-shot `bootstrap` Compose service is behind the explicit `bootstrap`
+profile. It mounts the source file read-only at
+`/run/secrets/facebook_auth`, runs without a display, validates the group, and
+writes the resulting browser session to the same volume. The default `fbn`
+monitor service has no authentication-secret mount. The monitor must not run
+concurrently with bootstrap or optional recovery because the profile lock
+permits only one browser context.
+
+The container contract is:
+
+- run as a dedicated non-root UID/GID;
+- add no stealth, fingerprint-spoofing, webdriver-hiding, or other
+  anti-detection flags;
+- mount the authentication export only into the one-shot bootstrap service as a
+  read-only `/run/secrets` file, never into the monitor or an environment
+  variable;
+- inject the Apprise URL and other sensitive configuration only at runtime,
+  never through build arguments, image `ENV`, copied `.env` files, or layers;
+- keep the bare image default network-inert and use an explicit headless monitor
+  command in the deployed Compose service;
+- set the monitor restart policy to `no`; the internal scheduler handles
+  transient retry/backoff, while hard-stop exits remain stopped;
+- persist the profile and SQLite state volume across replacement;
+- use an init/termination path that forwards SIGTERM to the monitor; and
+- use only `python -c 'import fbn'` for container liveness. The health command
+  must not run `fbn check`/`fbn monitor`, launch a browser, navigate to Facebook,
+  open the authenticated profile, or claim that the Facebook account/group is
+  healthy.
+
+Docker release validation includes configuration expansion for the default and
+bootstrap profiles, an assertion that only bootstrap receives
+`facebook_auth`, native or Buildx builds for both target architectures,
+non-root/runtime smoke checks, persistent-volume replacement, and inspection of
+the health-check command to prove that it is exactly the package-import probe
+and performs no Facebook navigation.
