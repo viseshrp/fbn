@@ -51,6 +51,21 @@ DOM_SCAN_SCRIPT = """
   const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
     (root) => root.getClientRects().length > 0
   );
+  const cleanContainerText = (container, authorElement) => {
+    let text = (container.innerText || '').trim();
+    text = text.replace(/^(?:Facebook\\s+){2,}/i, '').trim();
+
+    const author = authorElement
+      ? (authorElement.innerText || '').trim()
+      : '';
+    if (author && text.startsWith(author)) {
+      const separator = text.indexOf('·', author.length);
+      if (separator >= 0 && separator <= author.length + 512) {
+        text = text.slice(separator + 1).trim();
+      }
+    }
+    return text;
+  };
   const semanticItems = feedRoots.flatMap(
     (root) => Array.from(root.querySelectorAll(itemSelector))
   ).filter((item) => item.getClientRects().length > 0);
@@ -125,7 +140,7 @@ DOM_SCAN_SCRIPT = """
       includeContent
         ? {
             href: selected.href || selected.getAttribute('href') || '',
-            text: (container.innerText || '').trim(),
+            text: cleanContainerText(container, authorElement),
             author: authorElement
               ? (authorElement.innerText || '').trim()
               : null,
