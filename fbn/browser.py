@@ -36,8 +36,10 @@ from .exceptions import (
 )
 from .extractor import chronological_group_url, extract_posts
 from .models import GroupRef, Post, ScanPolicy, ScanResult
+from .structured_logging import get_logger
 
 FACEBOOK_HOME_URL = "https://www.facebook.com/"
+LOGGER = get_logger("browser")
 DOM_SCAN_SCRIPT = """
 (includeContent) => {
   const linkSelector =
@@ -417,6 +419,13 @@ def wait_for_terminal_page(
             raise AccessDeniedError(
                 "Facebook redirected away from the requested group."
             )
+        LOGGER.debug(
+            "page_state_recognized",
+            page_state=state.value,
+            response_status=signals.status,
+            feed_item_count=signals.feed_item_count,
+            post_link_count=signals.post_count,
+        )
         return state
 
 
@@ -503,6 +512,7 @@ class PlaywrightPostSource:
     def interactive_login(self, wait_for_user: Callable[[], None]) -> None:
         """Open a headed profile for optional authentication recovery."""
 
+        LOGGER.info("interactive_login_browser_opened")
         with self._context(headless=False) as context:
             page: Page | None = None
             try:
@@ -522,6 +532,7 @@ class PlaywrightPostSource:
                     raise AuthenticationRequiredError(
                         "Login was not completed in the dedicated browser profile."
                     )
+                LOGGER.info("interactive_login_verified")
             except PlaywrightTimeoutError as exc:
                 raise TransientNavigationError(
                     "Facebook did not finish loading during interactive login."
@@ -554,6 +565,10 @@ class PlaywrightPostSource:
             mutation_started = False
             imported_cookies = [dict(cookie) for cookie in cookies]
             try:
+                LOGGER.debug(
+                    "authentication_cookies_import_started",
+                    cookie_count=len(imported_cookies),
+                )
                 with self._context(headless=True, acquire_lock=False) as context:
                     try:
                         previous_cookies = context.cookies()
@@ -582,6 +597,10 @@ class PlaywrightPostSource:
             except BaseException as original:
                 if mutation_started and previous_cookies is not None:
                     try:
+                        LOGGER.warning(
+                            "authentication_bootstrap_rollback_started",
+                            group_key=group.key,
+                        )
                         self._replace_profile_cookies(
                             previous_cookies,
                             acquire_lock=False,
@@ -605,6 +624,11 @@ class PlaywrightPostSource:
         navigation_timeout_seconds: float,
         acquire_lock: bool = True,
     ) -> PageState:
+        LOGGER.debug(
+            "authentication_profile_validation_started",
+            group_key=group.key,
+            timeout_seconds=navigation_timeout_seconds,
+        )
         with self._context(
             headless=True,
             acquire_lock=acquire_lock,
@@ -619,6 +643,11 @@ class PlaywrightPostSource:
                     wait_until="domcontentloaded",
                 )
                 status = response.status if response is not None else None
+                LOGGER.debug(
+                    "authentication_profile_navigation_completed",
+                    group_key=group.key,
+                    response_status=status,
+                )
                 return wait_for_terminal_page(
                     page,
                     status=status,
@@ -702,6 +731,13 @@ class PlaywrightPostSource:
     def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
         """Fetch a bounded, deterministic sample from the visible group feed."""
 
+        LOGGER.debug(
+            "feed_fetch_started",
+            group_key=group.key,
+            browser=self.settings.browser,
+            headless=self.settings.headless,
+            sample_count=policy.sample_count,
+        )
         with self._context(
             headless=self.settings.headless,
             timezone_id=policy.timezone_name,
@@ -718,6 +754,11 @@ class PlaywrightPostSource:
                     wait_until="domcontentloaded",
                 )
                 status = response.status if response is not None else None
+                LOGGER.debug(
+                    "feed_navigation_completed",
+                    group_key=group.key,
+                    response_status=status,
+                )
                 state = wait_for_terminal_page(
                     page,
                     status=status,
@@ -725,6 +766,7 @@ class PlaywrightPostSource:
                     expected_group=group,
                 )
                 if state is PageState.EMPTY:
+                    LOGGER.info("group_feed_empty", group_key=group.key)
                     return ScanResult(
                         posts=(),
                         page_state=state.value,
@@ -788,6 +830,13 @@ class PlaywrightPostSource:
                 allowed_group_keys=allowed_group_keys,
                 timezone_name=policy.timezone_name,
             )
+            LOGGER.debug(
+                "feed_extraction_pass_completed",
+                group_key=group.key,
+                pass_number=scan_index + 1,
+                candidate_count=len(extracted),
+                accumulated_count=len(accumulated),
+            )
             for post in extracted:
                 if post.post_id in seen_ids:
                     continue
@@ -844,11 +893,13 @@ class PlaywrightPostSource:
             ) from exc
 
         try:
+            LOGGER.debug("browser_profile_lock_acquired")
             if os.name != "nt" and lock_path.exists():
                 lock_path.chmod(0o600)
             yield
         finally:
             lock.release()
+            LOGGER.debug("browser_profile_lock_released")
 
     @contextmanager
     def _context(
@@ -892,6 +943,12 @@ class PlaywrightPostSource:
         operation_failed = False
         cleanup_error: PlaywrightError | None = None
         try:
+            LOGGER.debug(
+                "browser_context_launching",
+                browser=self.settings.browser,
+                headless=headless,
+                timezone_id=timezone_id or "default",
+            )
             try:
                 playwright = stack.enter_context(self._playwright_factory())
             except PlaywrightError as exc:
@@ -907,6 +964,7 @@ class PlaywrightPostSource:
             )
             if marker_missing:
                 self._write_profile_browser_marker(profile_dir)
+                LOGGER.debug("browser_profile_marker_written")
             yield context
         except BaseException:
             operation_failed = True
@@ -926,6 +984,7 @@ class PlaywrightPostSource:
                 raise BrowserUnavailableError(
                     "Playwright could not close its browser session cleanly."
                 ) from cleanup_error
+            LOGGER.debug("browser_context_closed")
 
     def _browser_identity(self) -> str:
         """Return a stable local identity for profile compatibility."""

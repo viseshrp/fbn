@@ -34,7 +34,8 @@ browser is an optional recovery path only.
 
 | Module | Responsibility |
 | --- | --- |
-| `fbn.cli` | Click commands, option/environment mapping, logging, exit codes. |
+| `fbn.cli` | Click commands, option/environment mapping, structured JSON logging, exit codes. |
+| `fbn.structured_logging` | Secret-free `structlog` JSON configuration and stable service/component fields. |
 | `fbn.auth` | Bounded secret-file parsing, Facebook-domain filtering, and cookie normalization. |
 | `fbn.config` | Platform paths, browser/scan/schedule validation, duration parsing. |
 | `fbn.models` | Immutable group, post, scan, observation, delivery, and run-summary values. |

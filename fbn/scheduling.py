@@ -12,9 +12,11 @@ from typing import Protocol
 from .config import ScheduleSettings
 from .exceptions import ConfigurationError, TransientNavigationError
 from .models import GroupRef, RunSummary, ScanPolicy
+from .structured_logging import get_logger
 
 MAX_BACKOFF = timedelta(hours=24)
 MAX_WAIT_SECONDS = MAX_BACKOFF.total_seconds()
+LOGGER = get_logger("scheduling")
 
 
 class EventLike(Protocol):
@@ -132,11 +134,19 @@ class MonitorLoop:
         """Run until the event is set; propagate every non-transient failure."""
 
         stopper = Event() if stop_event is None else stop_event
+        LOGGER.info(
+            "scheduler_started",
+            group_key=group.key,
+            interval_min_seconds=int(self._schedule.every.total_seconds()),
+            interval_max_seconds=int(self._schedule.to.total_seconds()),
+        )
         while not stopper.is_set():
             if not self._wait_until_eligible(group, stopper):
+                LOGGER.info("scheduler_stopped_before_next_check", group_key=group.key)
                 return
 
             attempt_started = self._now()
+            LOGGER.info("scheduled_check_started", group_key=group.key)
             self._state.set_next_eligible(
                 group,
                 self._add_interval(attempt_started, self._schedule.every),
@@ -164,14 +174,35 @@ class MonitorLoop:
                     next_eligible_at=retry_at,
                     at=failed_at,
                 )
+                LOGGER.warning(
+                    "transient_navigation_failure",
+                    group_key=group.key,
+                    failure_number=failure_number,
+                    retry_delay_seconds=int((retry_at - failed_at).total_seconds()),
+                )
                 continue
 
+            LOGGER.info(
+                "scheduled_check_completed",
+                group_key=summary.group_key,
+                observed=summary.observed,
+                new_posts=summary.new_posts,
+                delivered=summary.delivered,
+                pending=summary.pending,
+                baseline=summary.baseline,
+            )
             if self._on_success is not None:
                 self._on_success(summary)
             completed_at = self._now()
+            next_interval = self._success_interval()
             self._state.set_next_eligible(
                 group,
-                self._add_interval(completed_at, self._success_interval()),
+                self._add_interval(completed_at, next_interval),
+            )
+            LOGGER.info(
+                "next_scheduled_check",
+                group_key=group.key,
+                delay_seconds=int(next_interval.total_seconds()),
             )
 
     def _wait_until_eligible(
@@ -187,6 +218,11 @@ class MonitorLoop:
             delay = (_as_utc(eligible_at) - now).total_seconds()
             if delay <= 0:
                 return True
+            LOGGER.info(
+                "scheduled_check_waiting",
+                group_key=group.key,
+                delay_seconds=math.ceil(delay),
+            )
             if stopper.wait(min(delay, MAX_WAIT_SECONDS)):
                 return False
         return False

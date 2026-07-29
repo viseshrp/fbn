@@ -184,7 +184,8 @@ Useful options include:
   decide whether a post was published today; the default is `UTC`;
 - `--notify-initial`: notify for the first visible sample instead of baselining;
 - `--include-errors`: notify a concise, redacted operational error; and
-- `-v` / `--verbose`: enable diagnostic logging without page or cookie dumps.
+- `-v` / `--verbose`: emit secret-free lifecycle and browser diagnostics as
+  newline-delimited JSON to standard output, without page or cookie dumps.
 
 Use `fbn COMMAND --help` for the complete command-specific options.
 
@@ -285,12 +286,18 @@ docker compose logs --follow fbn
 ```
 
 The Compose command is explicitly
-`fbn monitor --browser chromium --headless ...`. Chromium uses a 1 GiB shared
-memory allocation, and `init: true` forwards termination cleanly. The
-profile-gated `bootstrap` service does not start with this command, and the
-monitor has no authentication-file secret mount. Both services allow two
-minutes for graceful termination so bootstrap has time to verify cookie
-rollback and the monitor can close Chromium.
+`fbn monitor --browser chromium --headless --verbose ...`. Chromium uses a 1
+GiB shared memory allocation, and `init: true` forwards termination cleanly.
+The monitor writes newline-delimited JSON records to standard output, so the
+`docker compose logs --follow fbn` command above shows startup, waits, scan
+counts, delivery counts, and retry categories as they happen. Each record has
+an `event`, `service`, `component`, `level`, and UTC `timestamp`, with safe
+event-specific fields. Records never include page text, cookie values,
+authentication-file paths, or Apprise URLs. The profile-gated `bootstrap`
+service does not start with this command, and the monitor has no
+authentication-file secret mount. Both services allow two minutes for graceful
+termination so bootstrap has time to verify cookie rollback and the monitor can
+close Chromium.
 
 The monitor restart policy is deliberately `no`. Its internal scheduler already
 backs off transient navigation failures; authentication, checkpoint, access,

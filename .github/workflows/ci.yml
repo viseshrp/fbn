@@ -154,7 +154,7 @@ jobs:
           docker compose config --quiet
           FBN_AUTH_FILE=/dev/null docker compose --profile bootstrap config --quiet
           FBN_AUTH_FILE=/dev/null docker compose --profile bootstrap config --format json |
-            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"'
+            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert "--verbose" in monitor["command"]; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"'
 
       - name: Build the native-architecture image
         run: >-
@@ -168,6 +168,14 @@ jobs:
           docker run --rm --network none fbn:ci --version
           docker run --rm --network none fbn:ci bootstrap --help
           docker run --rm --network none fbn:ci --help
+
+      - name: Verify secret-free logs reach the container log driver
+        run: |
+          container_id="$(docker create --entrypoint python fbn:ci -c 'from fbn.cli import _configure_logging; from fbn.structured_logging import get_logger; _configure_logging(True); get_logger("monitor").info("container_logging_probe")')"
+          docker start "$container_id"
+          docker wait "$container_id"
+          docker logs "$container_id" | grep -F '"event": "container_logging_probe"'
+          docker rm "$container_id"
 
       - name: Verify non-root and image secret boundaries
         run: |

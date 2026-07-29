@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 import pytest
+from structlog.testing import capture_logs
 
 from fbn.exceptions import DeliveryError
 from fbn.models import (
@@ -16,6 +17,7 @@ from fbn.models import (
 )
 from fbn.monitor import MonitorService
 from fbn.notifications import render_digest_chunks
+from fbn.structured_logging import configure_logging
 
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
 GROUP = GroupRef("group", "https://www.facebook.com/groups/group/")
@@ -117,6 +119,31 @@ def test_pending_is_delivered_then_marked() -> None:
     assert state.delivered == ["event-123"]
     assert summary.delivered == 1
     assert summary.pending == 0
+
+
+def test_operational_logs_include_counts_but_not_post_content() -> None:
+    state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
+    sink = FakeSink()
+    configure_logging(verbose=True)
+    with capture_logs() as records:
+        MonitorService(FakeSource(), state, sink).run_once(GROUP, ScanPolicy())
+
+    assert any(
+        record["event"] == "scan_completed"
+        and record["group_key"] == "group"
+        and record["page_state"] == "feed"
+        and record["post_count"] == 1
+        for record in records
+    )
+    assert any(
+        record["event"] == "notification_chunk_delivery_committed"
+        and record["group_key"] == "group"
+        and record["post_count"] == 1
+        for record in records
+    )
+    output = str(records)
+    assert POST.text not in output
+    assert POST.url not in output
 
 
 def test_inserted_but_other_day_posts_are_not_reported_as_new() -> None:

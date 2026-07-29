@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import structlog
 from click.testing import CliRunner
 
 import fbn.cli as cli
@@ -152,7 +153,9 @@ def test_bootstrap_imports_auth_file_and_validates_headlessly(
     assert "foreign-secret" not in result.output
 
 
-def test_verbose_logging_does_not_enable_dependency_or_root_debug() -> None:
+def test_verbose_logging_emits_structured_records_without_root_debug(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     root_logger = logging.getLogger()
     apprise_logger = logging.getLogger("apprise")
     original_root_level = root_logger.level
@@ -160,14 +163,27 @@ def test_verbose_logging_does_not_enable_dependency_or_root_debug() -> None:
     original_disabled = apprise_logger.disabled
     try:
         cli._configure_logging(verbose=True)
+        cli.LOGGER.debug("structured_logging_probe", probe_count=1)
 
         assert root_logger.level == original_root_level
         assert root_logger.handlers == original_root_handlers
         assert apprise_logger.disabled is True
-        assert cli.LOGGER.level == logging.DEBUG
-        assert cli.LOGGER.propagate is False
+        records = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("{")
+        ]
+        assert records[-1] == {
+            "component": "cli",
+            "event": "structured_logging_probe",
+            "level": "debug",
+            "probe_count": 1,
+            "service": "fbn",
+            "timestamp": records[-1]["timestamp"],
+        }
     finally:
         apprise_logger.disabled = original_disabled
+        structlog.reset_defaults()
 
 
 def test_check_runs_without_release_acknowledgement(
@@ -197,6 +213,49 @@ def test_check_runs_without_release_acknowledgement(
     assert result.exit_code == 0, result.output
     assert called is True
     assert "baseline: observed=0 new=0 delivered=0 pending=0" in result.output
+
+
+def test_check_verbose_logs_a_secret_free_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_once(**kwargs: object) -> RunSummary:
+        assert kwargs["dry_run"] is True
+        return RunSummary(
+            group_key="compose-group",
+            observed=2,
+            new_posts=1,
+            pending=0,
+            delivered=1,
+            baseline=False,
+        )
+
+    monkeypatch.setattr(cli, "_run_once", fake_run_once)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["check", "--id", "compose-group", "--dry-run", "--verbose"],
+        env={"FBN_APPRISE_URL": ""},
+    )
+
+    assert result.exit_code == 0, result.output
+    records = [
+        json.loads(line) for line in result.output.splitlines() if line.startswith("{")
+    ]
+    assert any(
+        record["event"] == "check_started"
+        and record["group_key"] == "compose-group"
+        and record["component"] == "cli"
+        for record in records
+    )
+    assert any(
+        record["event"] == "check_completed"
+        and record["mode"] == "observation"
+        and record["observed"] == 2
+        and record["new_posts"] == 1
+        and record["delivered"] == 1
+        and record["pending"] == 0
+        for record in records
+    )
 
 
 def test_check_propagates_headless_chromium_settings_without_apprise(
