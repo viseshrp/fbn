@@ -147,6 +147,8 @@ def test_headless_browser_accepts_one_article_inside_positioned_feed_item(
     assert all(post.post_id != "999" for post in posts)
     assert posts[0].author == "Alice Example"
     assert not posts[0].text.startswith("Facebook")
+    assert not posts[0].text.endswith("Facebook")
+    assert "Follow" not in posts[0].text
     assert "metadata" not in posts[0].text
     assert "Visible post inside a positioned feed wrapper" in posts[0].text
 

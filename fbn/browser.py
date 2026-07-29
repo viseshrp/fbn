@@ -64,6 +64,8 @@ DOM_SCAN_SCRIPT = """
         text = text.slice(separator + 1).trim();
       }
     }
+    text = text.replace(/^Follow(?:\\s+\\S){8,}?\\s+·\\s*/i, '').trim();
+    text = text.replace(/(?:\\s+Facebook){2,}\\s*$/i, '').trim();
     return text;
   };
   const semanticItems = feedRoots.flatMap(
