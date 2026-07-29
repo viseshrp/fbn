@@ -38,9 +38,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Migrated secret-free operational logging to `structlog` JSON records with
-  monitor lifecycle, browser, scheduling, delivery, and failure-category
-  fields. The Compose monitor enables verbose logging so those records are
+- Migrated secret-free operational logging to human-readable Loguru records
+  with monitor lifecycle, browser, scheduling, delivery, and failure-category
+  context. The Compose monitor enables verbose logging so those records are
   available through container logs.
 - Replaced direct mobile-page requests with a complete browser session rendered
   by Chrome, Edge, Playwright Chromium, or an explicit Chromium executable.

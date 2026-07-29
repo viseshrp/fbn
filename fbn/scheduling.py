@@ -11,8 +11,8 @@ from typing import Protocol
 
 from .config import ScheduleSettings
 from .exceptions import ConfigurationError, TransientNavigationError
+from .logging import get_logger
 from .models import GroupRef, RunSummary, ScanPolicy
-from .structured_logging import get_logger
 
 MAX_BACKOFF = timedelta(hours=24)
 MAX_WAIT_SECONDS = MAX_BACKOFF.total_seconds()
@@ -135,18 +135,18 @@ class MonitorLoop:
 
         stopper = Event() if stop_event is None else stop_event
         LOGGER.info(
-            "scheduler_started",
+            "Scheduler started",
             group_key=group.key,
             interval_min_seconds=int(self._schedule.every.total_seconds()),
             interval_max_seconds=int(self._schedule.to.total_seconds()),
         )
         while not stopper.is_set():
             if not self._wait_until_eligible(group, stopper):
-                LOGGER.info("scheduler_stopped_before_next_check", group_key=group.key)
+                LOGGER.info("Scheduler stopped before next check", group_key=group.key)
                 return
 
             attempt_started = self._now()
-            LOGGER.info("scheduled_check_started", group_key=group.key)
+            LOGGER.info("Scheduled check started", group_key=group.key)
             self._state.set_next_eligible(
                 group,
                 self._add_interval(attempt_started, self._schedule.every),
@@ -175,7 +175,7 @@ class MonitorLoop:
                     at=failed_at,
                 )
                 LOGGER.warning(
-                    "transient_navigation_failure",
+                    "Transient navigation failure",
                     group_key=group.key,
                     failure_number=failure_number,
                     retry_delay_seconds=int((retry_at - failed_at).total_seconds()),
@@ -183,7 +183,7 @@ class MonitorLoop:
                 continue
 
             LOGGER.info(
-                "scheduled_check_completed",
+                "Scheduled check completed",
                 group_key=summary.group_key,
                 observed=summary.observed,
                 new_posts=summary.new_posts,
@@ -200,7 +200,7 @@ class MonitorLoop:
                 self._add_interval(completed_at, next_interval),
             )
             LOGGER.info(
-                "next_scheduled_check",
+                "Next scheduled check",
                 group_key=group.key,
                 delay_seconds=int(next_interval.total_seconds()),
             )
@@ -219,7 +219,7 @@ class MonitorLoop:
             if delay <= 0:
                 return True
             LOGGER.info(
-                "scheduled_check_waiting",
+                "Scheduled check waiting",
                 group_key=group.key,
                 delay_seconds=math.ceil(delay),
             )

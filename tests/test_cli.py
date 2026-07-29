@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import structlog
 from click.testing import CliRunner
+from loguru import logger
 
 import fbn.cli as cli
 import fbn.scheduling as scheduling
@@ -153,7 +153,7 @@ def test_bootstrap_imports_auth_file_and_validates_headlessly(
     assert "foreign-secret" not in result.output
 
 
-def test_verbose_logging_emits_structured_records_without_root_debug(
+def test_verbose_logging_emits_human_readable_records_without_root_debug(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     root_logger = logging.getLogger()
@@ -163,27 +163,23 @@ def test_verbose_logging_emits_structured_records_without_root_debug(
     original_disabled = apprise_logger.disabled
     try:
         cli._configure_logging(verbose=True)
-        cli.LOGGER.debug("structured_logging_probe", probe_count=1)
+        cli.LOGGER.debug("Human-readable logging probe", probe_count=1)
 
         assert root_logger.level == original_root_level
         assert root_logger.handlers == original_root_handlers
         assert apprise_logger.disabled is True
-        records = [
-            json.loads(line)
-            for line in capsys.readouterr().out.splitlines()
-            if line.startswith("{")
-        ]
-        assert records[-1] == {
-            "component": "cli",
-            "event": "structured_logging_probe",
-            "level": "debug",
-            "probe_count": 1,
-            "service": "fbn",
-            "timestamp": records[-1]["timestamp"],
-        }
+        lines = capsys.readouterr().out.splitlines()
+        parts = lines[-1].split(" | ")
+        assert parts[0].endswith(" UTC")
+        assert parts[1].strip() == "DEBUG"
+        assert parts[2].strip() == "cli"
+        assert parts[3] == "Human-readable logging probe"
+        assert parts[4] == "probe count=1"
+        assert "\x1b" not in lines[-1]
     finally:
         apprise_logger.disabled = original_disabled
-        structlog.reset_defaults()
+        logger.remove()
+        logger.disable("fbn")
 
 
 def test_check_runs_without_release_acknowledgement(
@@ -238,23 +234,13 @@ def test_check_verbose_logs_a_secret_free_lifecycle(
     )
 
     assert result.exit_code == 0, result.output
-    records = [
-        json.loads(line) for line in result.output.splitlines() if line.startswith("{")
-    ]
-    assert any(
-        record["event"] == "check_started"
-        and record["group_key"] == "compose-group"
-        and record["component"] == "cli"
-        for record in records
+    assert (
+        " | cli        | Check started | group=compose-group, browser=chromium, "
+        "headless=yes, sample limit=10, scroll limit=4, dry run=yes" in result.output
     )
-    assert any(
-        record["event"] == "check_completed"
-        and record["mode"] == "observation"
-        and record["observed"] == 2
-        and record["new_posts"] == 1
-        and record["delivered"] == 1
-        and record["pending"] == 0
-        for record in records
+    assert (
+        " | cli        | Check completed | group=compose-group, mode=observation, "
+        "observed=2, new posts=1, delivered=1, pending=0" in result.output
     )
 
 

@@ -35,9 +35,9 @@ dependencies = [
   "click>=8.1,<9",
   "dateparser>=1.4.1,<2",
   "filelock>=3.16,<4",
+  "loguru>=0.7.3,<0.8",
   "platformdirs>=4.3,<5",
   "playwright>=1.61,<2",
-  "structlog>=26.1,<27",
   "tzdata>=2025.2,<2027",
 ]
 

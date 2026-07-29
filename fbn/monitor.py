@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from .exceptions import DeliveryError
+from .logging import get_logger
 from .models import (
     GroupRef,
     ObservationBatch,
@@ -17,7 +18,6 @@ from .models import (
     ScanResult,
 )
 from .notifications import NotificationSink, render_digest_chunks
-from .structured_logging import get_logger
 
 LOGGER = get_logger("monitor")
 
@@ -84,18 +84,18 @@ class MonitorService:
     ) -> RunSummary:
         """Run one bounded check with at-least-once outbox delivery."""
 
-        LOGGER.info("observation_started", group_key=group.key)
+        LOGGER.info("Observation started", group_key=group.key)
         try:
             scan = self.source.fetch_recent(group, policy)
         except Exception as exc:
             LOGGER.warning(
-                "observation_scan_failed",
+                "Observation scan failed",
                 group_key=group.key,
                 category=type(exc).__name__,
             )
             raise
         LOGGER.info(
-            "scan_completed",
+            "Scan completed",
             group_key=group.key,
             page_state=scan.page_state,
             post_count=len(scan.posts),
@@ -113,7 +113,7 @@ class MonitorService:
         pending = batch.pending
         delivered = 0
         LOGGER.info(
-            "observation_recorded",
+            "Observation recorded",
             group_key=group.key,
             baseline=batch.baseline,
             inserted_count=batch.inserted,
@@ -124,7 +124,7 @@ class MonitorService:
         if pending:
             chunks = render_digest_chunks(group.key, pending)
             LOGGER.info(
-                "pending_notifications_delivery_started",
+                "Pending notification delivery started",
                 group_key=group.key,
                 post_count=len(pending),
                 chunk_count=len(chunks),
@@ -132,7 +132,7 @@ class MonitorService:
             )
             for index, chunk in enumerate(chunks, start=1):
                 LOGGER.debug(
-                    "notification_chunk_delivery_started",
+                    "Notification chunk delivery started",
                     group_key=group.key,
                     chunk_index=index,
                     chunk_count=len(chunks),
@@ -142,7 +142,7 @@ class MonitorService:
                     self.sink.send(chunk.notification)
                 except DeliveryError as exc:
                     LOGGER.warning(
-                        "notification_delivery_failed",
+                        "Notification delivery failed",
                         group_key=group.key,
                         chunk_index=index,
                         chunk_count=len(chunks),
@@ -156,7 +156,7 @@ class MonitorService:
                     raise
                 except Exception as exc:
                     LOGGER.warning(
-                        "notification_delivery_failed",
+                        "Notification delivery failed",
                         group_key=group.key,
                         chunk_index=index,
                         chunk_count=len(chunks),
@@ -179,7 +179,7 @@ class MonitorService:
                     )
                     delivered += len(chunk.event_ids)
                     LOGGER.info(
-                        "notification_chunk_delivery_committed",
+                        "Notification chunk delivery committed",
                         group_key=group.key,
                         chunk_index=index,
                         chunk_count=len(chunks),
@@ -187,14 +187,14 @@ class MonitorService:
                     )
                 else:
                     LOGGER.info(
-                        "notification_chunk_dry_run_completed",
+                        "Notification chunk dry run completed",
                         group_key=group.key,
                         chunk_index=index,
                         chunk_count=len(chunks),
                         post_count=len(chunk.event_ids),
                     )
         else:
-            LOGGER.info("no_pending_notifications", group_key=group.key)
+            LOGGER.info("No pending notifications", group_key=group.key)
 
         remaining = len(self.state.pending(group))
         summary = RunSummary(
@@ -206,7 +206,7 @@ class MonitorService:
             baseline=batch.baseline,
         )
         LOGGER.info(
-            "observation_completed",
+            "Observation completed",
             group_key=summary.group_key,
             observed=summary.observed,
             new_posts=summary.new_posts,

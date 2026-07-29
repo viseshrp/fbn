@@ -270,8 +270,8 @@ the same run.
 - Commands are `bootstrap`, `login`, `check`, `monitor`, and `doctor`.
 - The console entry point remains `fbn`; `python -m fbn` remains supported.
 - `-V/--version` prints the version. `-v/--verbose` writes secret-free
-  lifecycle and browser diagnostics as newline-delimited JSON to standard
-  output.
+  lifecycle and browser diagnostics as human-readable, timestamped lines to
+  standard output.
 - Exceptions are mapped to concise Click errors and stable nonzero exit codes.
 - Authentication values are accepted only through the file named by
   `--auth-file`, never as positional arguments or environment values. Secrets
@@ -299,7 +299,8 @@ the same run.
   profiles, and remote-debugging endpoints are not supported.
 - The supported Compose workload is a headless `fbn monitor` using
   `--browser chromium --verbose`; its operational logs are available through
-  the container log driver as structured JSON records.
+  the container log driver as plain, human-readable records with safe
+  `key=value` context.
 - The monitor service restart policy is `no`. Transient retry/backoff belongs to
   the internal scheduler; authentication, account-action, access, profile, and
   layout hard-stop exits remain stopped for operator action.

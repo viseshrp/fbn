@@ -169,12 +169,12 @@ jobs:
           docker run --rm --network none fbn:ci bootstrap --help
           docker run --rm --network none fbn:ci --help
 
-      - name: Verify secret-free logs reach the container log driver
+      - name: Verify readable secret-free logs reach the container log driver
         run: |
-          container_id="$(docker create --entrypoint python fbn:ci -c 'from fbn.cli import _configure_logging; from fbn.structured_logging import get_logger; _configure_logging(True); get_logger("monitor").info("container_logging_probe")')"
+          container_id="$(docker create --entrypoint python fbn:ci -c 'from fbn.cli import _configure_logging; from fbn.logging import get_logger; _configure_logging(True); get_logger("monitor").info("Container logging probe", probe=True)')"
           docker start "$container_id"
           docker wait "$container_id"
-          docker logs "$container_id" | grep -F '"event": "container_logging_probe"'
+          docker logs "$container_id" | grep -F 'Container logging probe | probe=yes'
           docker rm "$container_id"
 
       - name: Verify non-root and image secret boundaries

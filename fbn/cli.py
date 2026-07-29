@@ -24,11 +24,11 @@ from .exceptions import (
     FbnError,
 )
 from .extractor import parse_group_ref
+from .logging import configure_logging, get_logger
 from .models import GroupRef, RunSummary, ScanPolicy
 from .monitor import MonitorService
 from .notifications import AppriseSink, ConsoleSink, Notification
 from .state import SQLiteStateRepository
-from .structured_logging import configure_logging, get_logger
 
 CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
 LOGGER = get_logger("cli")
@@ -48,17 +48,17 @@ def _domain_errors(function: CommandFunction) -> CommandFunction:
         try:
             return function(*args, **kwargs)
         except FbnError as exc:
-            LOGGER.error("command_failed", category=type(exc).__name__)
+            LOGGER.error("Command failed", category=type(exc).__name__)
             raise CliError(str(exc), exc.exit_code) from exc
         except ValueError as exc:
             error = ConfigurationError(str(exc))
-            LOGGER.error("command_failed", category=type(error).__name__)
+            LOGGER.error("Command failed", category=type(error).__name__)
             raise CliError(str(error), error.exit_code) from exc
         except (OSError, sqlite3.Error) as exc:
             error = ConfigurationError(
                 f"Local state could not be accessed ({type(exc).__name__})."
             )
-            LOGGER.error("command_failed", category=type(error).__name__)
+            LOGGER.error("Command failed", category=type(error).__name__)
             raise CliError(str(error), error.exit_code) from exc
 
     return cast(CommandFunction, wrapped)
@@ -280,7 +280,7 @@ def _configure_logging(verbose: bool) -> None:
     configure_logging(verbose)
 
     if verbose:
-        LOGGER.debug("structured_logging_enabled", verbose=True)
+        LOGGER.debug("Human-readable logging enabled", verbose=True)
 
 
 def _safe_error_notification(
@@ -293,7 +293,7 @@ def _safe_error_notification(
         return
     category = type(error).__name__
     LOGGER.info(
-        "error_notification_started",
+        "Error notification started",
         group_key=group.key,
         category=category,
     )
@@ -308,13 +308,13 @@ def _safe_error_notification(
     try:
         AppriseSink(apprise_url).send(notification)
     except FbnError:
-        LOGGER.warning("error_notification_failed", group_key=group.key)
+        LOGGER.warning("Error notification failed", group_key=group.key)
 
 
 def _run_summary(summary: RunSummary) -> None:
     mode = "baseline" if summary.baseline else "observation"
     LOGGER.info(
-        "check_completed",
+        "Check completed",
         group_key=summary.group_key,
         mode=mode,
         observed=summary.observed,
@@ -418,7 +418,7 @@ def bootstrap_command(
     )
     group = parse_group_ref(target_id)
     LOGGER.info(
-        "authentication_bootstrap_started",
+        "Authentication bootstrap started",
         group_key=group.key,
         browser=settings.browser,
     )
@@ -446,7 +446,7 @@ def bootstrap_command(
         f"({state.value}; imported {len(cookies)} Facebook cookies"
         f"{ignored_message})."
     )
-    LOGGER.info("authentication_bootstrap_completed", group_key=group.key)
+    LOGGER.info("Authentication bootstrap completed", group_key=group.key)
 
 
 @main.command("login")
@@ -474,7 +474,7 @@ def login_command(
         headless=False,
         executable_path=executable_path,
     )
-    LOGGER.info("interactive_login_started", browser=settings.browser)
+    LOGGER.info("Interactive login started", browser=settings.browser)
     click.echo(
         "Opening the optional recovery browser. Complete Facebook login, 2FA, "
         "consent, or checkpoint in that window."
@@ -489,7 +489,7 @@ def login_command(
 
     PlaywrightPostSource(settings).interactive_login(wait_for_user)
     click.echo("Recovery profile saved locally. Cookie values were not exported.")
-    LOGGER.info("interactive_login_completed")
+    LOGGER.info("Interactive login completed")
 
 
 @main.command("doctor")
@@ -578,7 +578,7 @@ def check_command(
         settle_seconds=settle_seconds,
     )
     LOGGER.info(
-        "check_started",
+        "Check started",
         group_key=group.key,
         browser=settings.browser,
         headless=settings.headless,
@@ -669,7 +669,7 @@ def monitor_command(
     sink = _notification_sink(apprise_url=apprise_url, dry_run=dry_run)
     stop_event = threading.Event()
     LOGGER.info(
-        "monitor_started",
+        "Monitor started",
         group_key=group.key,
         browser=settings.browser,
         headless=settings.headless,
@@ -678,9 +678,12 @@ def monitor_command(
         dry_run=dry_run,
     )
 
+    received_signal: int | None = None
+
     def stop_monitor(signum: int, frame: object) -> None:
+        nonlocal received_signal
         del frame
-        LOGGER.info("monitor_stop_signal_received", signal_number=int(signum))
+        received_signal = int(signum)
         stop_event.set()
 
     previous_handlers: dict[signal.Signals, Any] = {}
@@ -710,7 +713,9 @@ def monitor_command(
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-    LOGGER.info("monitor_stopped", group_key=group.key)
+    if received_signal is not None:
+        LOGGER.info("Monitor stop signal received", signal_number=received_signal)
+    LOGGER.info("Monitor stopped", group_key=group.key)
     click.echo("monitor stopped")
 
 

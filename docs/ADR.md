@@ -213,3 +213,78 @@ Reconsider this decision if:
   native Ubuntu ARM64; or
 - the Ubuntu 24.04 base image or browser dependency set no longer produces safe
   native `linux/amd64` and `linux/arm64` containers.
+
+# ADR-002: Use Loguru for human-readable operational logs
+
+- Status: Accepted
+- Date: 2026-07-29
+- Decision owners: fbn maintainers
+
+## Context
+
+The monitor needs secret-free operational output that is easy to follow both in
+an interactive terminal and through `docker compose logs`. The logging layer
+must preserve component and event-specific context, remain independent of the
+standard-library root logger, support Python 3.10 through 3.14, and avoid
+rendering exception locals or other diagnostic data that could contain
+credentials.
+
+The viable shortlist was:
+
+- standard-library `logging` with a custom formatter and `LoggerAdapter`;
+- Loguru;
+- Rich's `RichHandler`;
+- `colorlog` or `coloredlogs`; and
+- retaining structlog with its console renderer.
+
+## Decision
+
+Use Loguru 0.7.3 and replace structlog completely. Emit one line per event with
+a UTC timestamp, level, component, plain-language message, and safe
+`key=value` context. Color is enabled only when standard output is an
+interactive terminal, so redirected and container logs remain plain.
+
+Configure the sink with `backtrace=False` and `diagnose=False`. This prevents
+Loguru's enhanced exception diagnostics from exposing local variables. Continue
+to suppress Apprise's standard-library logger, do not change the root logger,
+and keep page content, cookie data, authentication paths, profile paths, state
+paths, and notification URLs out of logging calls.
+
+## Alternatives considered
+
+### Standard-library logging
+
+Not selected. It has no runtime dependency and excellent interoperability, but
+readable contextual output requires a custom adapter, formatter, and handler
+configuration. That recreates much of the ergonomics requested from a
+human-friendly logging library.
+
+### RichHandler
+
+Not selected. Rich provides the most elaborate terminal presentation and
+tracebacks, but those capabilities and its wider rendering dependency stack are
+unnecessary for timestamped monitor events. Context fields would still require
+custom integration.
+
+### colorlog and coloredlogs
+
+Not selected. They integrate cleanly with standard-library logging but focus on
+color rather than contextual logging ergonomics. `colorlog` would still need
+the same custom adapter layer; `coloredlogs` has not released since 2021.
+
+### structlog console rendering
+
+Rejected because the requested change is to remove structlog, not merely change
+its renderer. It would also retain machine-oriented event calls throughout the
+application.
+
+## Consequences
+
+- Operators get concise readable output in terminals and container logs.
+- Existing safe contextual counts and categories remain available.
+- Loguru adds one small pure-Python runtime dependency.
+- Logging configuration owns Loguru's process-wide sink, which is appropriate
+  for this CLI application but should be revisited if `fbn` becomes an embedded
+  library.
+- Loguru calls must remain outside signal handlers because its sinks are not
+  reentrant.

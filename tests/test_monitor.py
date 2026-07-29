@@ -4,9 +4,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 import pytest
-from structlog.testing import capture_logs
+from loguru import logger
 
 from fbn.exceptions import DeliveryError
+from fbn.logging import configure_logging
 from fbn.models import (
     GroupRef,
     ObservationBatch,
@@ -17,7 +18,6 @@ from fbn.models import (
 )
 from fbn.monitor import MonitorService
 from fbn.notifications import render_digest_chunks
-from fbn.structured_logging import configure_logging
 
 NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
 GROUP = GroupRef("group", "https://www.facebook.com/groups/group/")
@@ -124,21 +124,37 @@ def test_pending_is_delivered_then_marked() -> None:
 def test_operational_logs_include_counts_but_not_post_content() -> None:
     state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
     sink = FakeSink()
+    records: list[dict[str, object]] = []
+
+    def capture_record(message: object) -> None:
+        record = message.record.copy()  # type: ignore[attr-defined]
+        record["extra"] = record["extra"].copy()
+        records.append(record)
+
     configure_logging(verbose=True)
-    with capture_logs() as records:
+    capture_id = logger.add(
+        capture_record,
+        level="DEBUG",
+        filter=lambda record: record["extra"].get("service") == "fbn",
+    )
+    try:
         MonitorService(FakeSource(), state, sink).run_once(GROUP, ScanPolicy())
+    finally:
+        logger.remove(capture_id)
+        logger.remove()
+        logger.disable("fbn")
 
     assert any(
-        record["event"] == "scan_completed"
-        and record["group_key"] == "group"
-        and record["page_state"] == "feed"
-        and record["post_count"] == 1
+        record["message"] == "Scan completed"
+        and record["extra"]["group_key"] == "group"  # type: ignore[index]
+        and record["extra"]["page_state"] == "feed"  # type: ignore[index]
+        and record["extra"]["post_count"] == 1  # type: ignore[index]
         for record in records
     )
     assert any(
-        record["event"] == "notification_chunk_delivery_committed"
-        and record["group_key"] == "group"
-        and record["post_count"] == 1
+        record["message"] == "Notification chunk delivery committed"
+        and record["extra"]["group_key"] == "group"  # type: ignore[index]
+        and record["extra"]["post_count"] == 1  # type: ignore[index]
         for record in records
     )
     output = str(records)
