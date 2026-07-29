@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fbn"
 dynamic = ["version"]
-description = "Monitor a Facebook group through a dedicated local browser profile"
+description = "Unreleased local academic Facebook group monitor"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

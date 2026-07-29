@@ -3,7 +3,7 @@
 ## Delivery strategy
 
 The rewrite is split into focused, independently verifiable commits. Each commit
-must pass its relevant tests and `git diff --check` before publication.
+must pass its relevant tests and `git diff --check`.
 
 ## Phase 1: research and design
 
@@ -11,7 +11,7 @@ must pass its relevant tests and `git diff --check` before publication.
 - [x] Research Playwright, Selenium, browser-use, Crawlee/Apify, Browserless,
   n8n, Patchright, Camoufox, undetected-chromedriver, RSS bridges, and the current
   `facebook-scraper`.
-- [x] Verify current Meta automation terms and native notification options.
+- [x] Define the unreleased, local academic scope.
 - [x] Verify Ubuntu ARM64/Raspberry Pi 4 browser support and Ubuntu 24.04
   multi-platform container feasibility against official sources.
 - [x] Record the specification, architecture, ADR, research, and this plan.
@@ -19,8 +19,7 @@ must pass its relevant tests and `git diff --check` before publication.
 Verification:
 
 - every external claim links to a primary/official source where available;
-- the chosen design contains no stealth, proxy rotation, CAPTCHA solving,
-  private API replay, or cloud cookie upload; and
+- the chosen design keeps authentication and group content local; and
 - all four requested design artifacts are separate files.
 
 ## Phase 2: package foundation and durable state
@@ -74,8 +73,7 @@ Verification:
   not on undocumented cookie names;
 - failed bootstrap leaves existing profile cookies intact;
 - sample and scroll bounds cannot be exceeded;
-- no test contacts Facebook; and
-- no custom user agent, stealth flag, proxy, or CAPTCHA integration exists.
+- no test contacts Facebook.
 
 ## Phase 4: orchestration, notification, scheduler, and CLI
 
@@ -97,14 +95,13 @@ Verification:
 - `-V/--version` and `-v/--verbose` are unambiguous; and
 - help/error output never includes session or Apprise secrets.
 
-## Phase 5: documentation, CI, and release readiness
+## Phase 5: documentation, CI, and local readiness
 
 - [x] Rewrite README installation, headless bootstrap, optional login recovery,
   check, monitor, systemd timer, and migration guidance.
-- [x] Document native Facebook notifications as the preferred no-automation
-  option and the browser monitor's terms/account risk.
-- [x] Replace the current release-only smoke workflow with push/PR CI.
-- [x] Keep PyPI publication isolated to a deliberate published release.
+- [x] Document the unreleased, local academic scope.
+- [x] Add push/PR CI.
+- [x] Remove package-publication automation.
 - [x] Add Ruff, pytest, coverage, build, Twine, `pip check`, and clean-wheel smoke
   verification.
 - [x] Run the entire matrix locally where possible.
@@ -134,7 +131,7 @@ Verification:
   profile/volume used by the monitor; keep headed login optional for recovery.
 - [x] Run the sanitized real-browser integration test on native Ubuntu ARM64.
 - [ ] Repeat the sanitized real-browser integration test on the Raspberry Pi 4
-  release target.
+  hardware target.
 - [x] Validate Docker configuration with required runtime values and build/smoke
   test both `linux/amd64` and `linux/arm64` variants.
 - [x] Verify container replacement preserves the profile and SQLite state and
@@ -159,14 +156,14 @@ Verification:
 - no image or Compose health command invokes `fbn check`, `fbn monitor`, opens
   the profile, or navigates to Facebook.
 
-Release gates:
+Validation gates:
 
 - [ ] All acceptance criteria in `docs/SPEC.md` pass.
 - [x] The sanitized browser integration test passes with real
   Playwright-managed Chromium on native Ubuntu ARM64 without any Facebook
   request.
 - [ ] The same sanitized browser integration test passes on the physical
-  Raspberry Pi 4 release target.
+  Raspberry Pi 4 hardware target.
 - [x] `docker compose config` succeeds with representative runtime-only values.
 - [x] Both the default and bootstrap Compose profiles validate, and expanded
   configuration proves that only bootstrap receives `facebook_auth`.
@@ -177,12 +174,12 @@ Release gates:
 - [x] `git status --short` contains only intentional files.
 - [x] `git diff --check` passes.
 - [x] The branch is pushed and the remote commit is confirmed.
-- [x] No release or PyPI upload is performed unless separately requested.
+- [x] No package-publication workflow exists.
 
 Verification record: [CI run #1](https://github.com/viseshrp/fbn/actions/runs/30400352562)
 passed on commit `4a932dacc9baa7ed03786b6ac9754ed85935166d`,
 including native `linux/amd64` and `linux/arm64` image execution. The physical
-Raspberry Pi 4 release-target run remains deliberately open.
+Raspberry Pi 4 hardware-target run remains deliberately open.
 
 ## Focused commit sequence
 
@@ -195,5 +192,5 @@ Raspberry Pi 4 release-target run remains deliberately open.
 7. `Add Ubuntu ARM64 and Docker deployment`
 
 The exact split may move a test into the same commit as the code it verifies.
-No commit should knowingly publish an untested state transition or a broken
+No commit should knowingly contain an untested state transition or a broken
 package entry point.

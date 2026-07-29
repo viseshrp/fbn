@@ -32,7 +32,6 @@ from .state import SQLiteStateRepository
 
 CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
 LOGGER = logging.getLogger("fbn")
-RISK_ENVVAR = "FBN_ACKNOWLEDGE_AUTOMATION_RISK"
 
 
 class CliError(click.ClickException):
@@ -201,17 +200,6 @@ def _run_options(function: CommandFunction) -> CommandFunction:
             help="Notify a secret-free failure category when a hard error occurs.",
         ),
         click.option(
-            "--acknowledge-automation-risk",
-            is_flag=True,
-            required=True,
-            envvar=RISK_ENVVAR,
-            show_envvar=True,
-            help=(
-                "Acknowledge that Meta may prohibit automated collection and "
-                "may restrict the account."
-            ),
-        ),
-        click.option(
             "-v",
             "--verbose",
             is_flag=True,
@@ -285,14 +273,6 @@ def _configure_logging(verbose: bool) -> None:
     # Apprise debug records can contain destination URLs and notification
     # bodies. Delivery failures are mapped to redacted domain errors instead.
     logging.getLogger("apprise").disabled = True
-
-
-def _require_risk_acknowledgement(value: bool) -> None:
-    if value is not True:
-        raise ConfigurationError(
-            "FBN_ACKNOWLEDGE_AUTOMATION_RISK must be true, or pass "
-            "--acknowledge-automation-risk."
-        )
 
 
 def _safe_error_notification(
@@ -388,17 +368,6 @@ def main() -> None:
     help="Headless authentication validation timeout in seconds.",
 )
 @click.option(
-    "--acknowledge-automation-risk",
-    is_flag=True,
-    required=True,
-    envvar=RISK_ENVVAR,
-    show_envvar=True,
-    help=(
-        "Acknowledge that Meta may prohibit automated collection and may "
-        "restrict the account."
-    ),
-)
-@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -413,12 +382,10 @@ def bootstrap_command(
     auth_file: Path,
     target_id: str,
     navigation_timeout: float,
-    acknowledge_automation_risk: bool,
     verbose: bool,
 ) -> None:
     """Import a secret auth file and verify group access headlessly."""
 
-    _require_risk_acknowledgement(acknowledge_automation_risk)
     _configure_logging(verbose)
     cookies, ignored = load_facebook_cookies(auth_file)
     settings = _browser_settings(
@@ -559,12 +526,10 @@ def check_command(
     dry_run: bool,
     notify_initial: bool,
     include_errors: bool,
-    acknowledge_automation_risk: bool,
     verbose: bool,
 ) -> None:
     """Perform one bounded observation and deliver pending posts."""
 
-    _require_risk_acknowledgement(acknowledge_automation_risk)
     _configure_logging(verbose)
     group = parse_group_ref(target_id)
     settings = _browser_settings(
@@ -633,7 +598,6 @@ def monitor_command(
     dry_run: bool,
     notify_initial: bool,
     include_errors: bool,
-    acknowledge_automation_risk: bool,
     verbose: bool,
     every: str | None,
     to: str | None,
@@ -643,7 +607,6 @@ def monitor_command(
     # Imported lazily so one-shot commands do not initialize scheduling state.
     from .scheduling import MonitorLoop
 
-    _require_risk_acknowledgement(acknowledge_automation_risk)
     _configure_logging(verbose)
     group = parse_group_ref(target_id)
     settings = _browser_settings(

@@ -22,8 +22,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Deterministic plain-text Apprise notifications and a console dry-run mode.
 - Randomized 1–3 hour default scheduling, a 15-minute to 365-day accepted
   interval range, and bounded transient-failure backoff.
-- Python 3.10–3.14 testing, sanitized local-browser integration coverage, and
-  PyPI Trusted Publishing workflow.
+- Python 3.10–3.14 testing and sanitized local-browser integration coverage.
 - Ubuntu 24.04 Docker and Compose deployment for `linux/amd64` and
   `linux/arm64`, including 64-bit Raspberry Pi 4, with a non-root runtime,
   Playwright-managed Chromium, and a persistent local profile/state volume.
@@ -54,12 +53,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process restart instead of losing the post.
 - Changed `-V` / `--version` to the version flag and reserved `-v` /
   `--verbose` for logging.
+- Scoped this version as an unreleased tool for local academic research.
 
 ### Removed
 
 - `facebook-scraper`, `schedule`, and Tenacity runtime dependencies.
 - Facebook username, password, per-monitor cookie-file, and custom-user-agent
   options.
+- The automation-risk acknowledgment option and environment variable.
+- The package-publication workflow.
 - Process-only seen-post state.
 
 ### Security
@@ -68,7 +70,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Newly created Unix state parents are private, existing parent modes are
   preserved, and SQLite database/WAL/SHM files are forced to owner-only access.
 - Authentication, checkpoint, consent, CAPTCHA, access-denied, and unsupported
-  layout states stop instead of being bypassed or retried indefinitely.
+  layout states stop without being retried indefinitely.
 - Authentication bootstrap imports only `facebook.com` cookies from a bounded
   local file, validates real access to the requested group headlessly, ignores
   storage-state origins, and never prints cookie names or values.

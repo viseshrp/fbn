@@ -138,8 +138,7 @@ No raw HTML, cookies, screenshot, or browser trace is included.
 The source authentication file is read without modification and is not copied
 wholesale into the profile. On Docker, only the profile-gated bootstrap service
 receives it as `/run/secrets/facebook_auth`; the monitor service never mounts
-it. The import establishes authentication only. It neither extends the
-account's authorization nor bypasses a site control.
+it.
 
 ### Optional headed recovery
 
@@ -337,8 +336,7 @@ by optional headed recovery.
 - `python -m playwright install --with-deps chromium` installs the matching
   Chromium build and Ubuntu libraries.
 - The user runs fully headless `fbn bootstrap` once with an owner-protected
-  authentication export, group ID, Chromium selection, and the explicit risk
-  acknowledgment.
+  authentication export, group ID, and Chromium selection.
 - The service then runs
   `fbn monitor --browser chromium --headless ...` without a permanent display.
 - The profile remains owner-only. Newly created state parents are owner-only,
@@ -346,9 +344,9 @@ by optional headed recovery.
   remain private across service restarts.
 - Optional headed recovery needs a trusted display, but initial bootstrap does
   not.
-- A release is not considered ARM64-ready until the sanitized fixture suite
+- ARM64 validation is complete when the sanitized fixture suite
   launches the real Playwright-managed regular Chromium binary headlessly on a
-  native Ubuntu ARM64 target, including the Raspberry Pi 4 release target.
+  native Ubuntu ARM64 target, including the Raspberry Pi 4 hardware target.
 
 ### Ubuntu container
 
@@ -400,8 +398,6 @@ permits only one browser context.
 The container contract is:
 
 - run as a dedicated non-root UID/GID;
-- add no stealth, fingerprint-spoofing, webdriver-hiding, or other
-  anti-detection flags;
 - mount the authentication export only into the one-shot bootstrap service as a
   read-only `/run/secrets` file, never into the monitor or an environment
   variable;
@@ -418,7 +414,7 @@ The container contract is:
   open the authenticated profile, or claim that the Facebook account/group is
   healthy.
 
-Docker release validation includes configuration expansion for the default and
+Docker validation includes configuration expansion for the default and
 bootstrap profiles, an assertion that only bootstrap receives
 `facebook_auth`, native or Buildx builds for both target architectures,
 non-root/runtime smoke checks, persistent-volume replacement, and inspection of

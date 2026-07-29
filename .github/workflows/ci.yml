@@ -148,14 +148,13 @@ jobs:
 
       - name: Validate Compose configuration
         env:
-          FBN_ACKNOWLEDGE_AUTOMATION_RISK: "true"
           FBN_APPRISE_URL: json://127.0.0.1:9
           FBN_GROUP: test-group
         run: |
           docker compose config --quiet
           FBN_AUTH_FILE=/dev/null docker compose --profile bootstrap config --quiet
           FBN_AUTH_FILE=/dev/null docker compose --profile bootstrap config --format json |
-            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["environment"]["FBN_ACKNOWLEDGE_AUTOMATION_RISK"] == "true"; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"'
+            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"'
 
       - name: Build the native-architecture image
         run: >-

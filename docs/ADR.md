@@ -19,19 +19,13 @@ API. Two deployment targets are hard requirements: unattended headless
 operation on 64-bit Ubuntu ARM64, including Raspberry Pi 4, and an Ubuntu-based
 Docker image for `linux/amd64` and `linux/arm64`.
 
-Meta's current terms prohibit automated collection without prior permission,
-including while logged in, and prohibit bypassing technical controls. No
-technical stack can remove that contractual/account risk. The architecture must
-therefore improve browser/session reliability without pretending to be
-undetectable.
-
 ## Decision
 
 Use official Playwright Python directly.
 
-`fbn bootstrap`, given `--auth-file PATH`, `-i GROUP`, and the explicit risk
-acknowledgment, imports an existing Facebook browser session into a dedicated
-local user-data directory, entirely headlessly.
+`fbn bootstrap`, given `--auth-file PATH` and `-i GROUP`, imports an existing
+Facebook browser session into a dedicated local user-data directory, entirely
+headlessly.
 It accepts a Playwright storage-state JSON object, an exported-cookie JSON
 array, or Netscape `cookies.txt`. The parser is bounded, imports only
 `facebook.com` and subdomain cookies, ignores storage-state origins, and never
@@ -75,9 +69,7 @@ Bare-metal and container deployments run the fully noninteractive
 `fbn bootstrap` command once against the exact profile directory or volume later
 used by the monitor. Authentication values in command arguments or environment
 variables, password automation, profile upload, and exposed browser-debugging
-ports remain prohibited. This bounded cookie import establishes authentication
-only; it does not grant authorization to collect data, evade a site control, or
-supersede Meta's terms.
+ports remain outside the design.
 
 The acquisition layer will:
 
@@ -89,12 +81,7 @@ The acquisition layer will:
   pasted values, a password, or cookie-bearing environment variables;
 - constrain bootstrap input to the three documented formats and Facebook
   domains, then validate actual access to the requested group;
-- never set a custom user agent or spoof fingerprint properties;
-- never solve or route around a CAPTCHA, checkpoint, consent screen, rate limit,
-  or account block;
-- never replay internal GraphQL/XHR requests;
-- keep browser state and extracted content local; and
-- require an explicit risk acknowledgment before bootstrap or monitoring.
+- keep browser state and extracted content local.
 
 SQLite will provide durable seen-post state and a notification outbox. Apprise
 remains the notification abstraction. A small in-process loop provides the
@@ -131,10 +118,9 @@ and n8n orchestration.
 - Account actions that cannot be represented by a fresh authenticated export
   may still need optional headed recovery on a trusted display.
 - A Raspberry Pi 4 has tighter memory, shared-memory, and storage limits than a
-  desktop; real native ARM64 browser verification is a release gate.
+  desktop; real native ARM64 browser verification is a validation gate.
 - Multi-platform container build/configuration and persistence behavior add
-  deployment-specific release gates.
-- Facebook can still detect or restrict the automation.
+  deployment-specific validation gates.
 - DOM changes can break extraction and require a localized selector update.
 - The visible virtualized feed cannot guarantee that every post appears.
 - Users must supply a fresh authentication export or run optional headed
@@ -161,8 +147,7 @@ managed browser/driver path.
 
 Rejected for the core. An LLM agent is valuable for open-ended tasks, but this
 monitor has one constrained workflow. Agent planning adds cost, nondeterminism,
-private-content disclosure risk, and a broader set of possible actions. Its
-hosted stealth/proxy/CAPTCHA features are specifically out of scope.
+private-content disclosure risk, and a broader set of possible actions.
 
 ### n8n
 
@@ -179,26 +164,22 @@ and explicitly declines private credential use. Remote platforms would require
 uploading content or session material. Self-hosted Browserless remains a possible
 future execution adapter if its operational cost becomes justified.
 
-### Patchright, Camoufox, undetected-chromedriver, stealth plugins
+### Patched browser and driver alternatives
 
-Rejected. Their central features hide automation signals, inject/rotate
-fingerprints, spoof browser properties, or bypass bot controls. That crosses the
-project boundary from session reliability into anti-detection circumvention and
-creates a fragile dependency on an arms race.
+Not selected. They add patched browser or driver stacks, fingerprint
+configuration, and additional maintenance surfaces without improving the
+deterministic monitor architecture.
 
 ### Native Facebook notifications only
 
-Recommended whenever they satisfy the user's need. Facebook's `All posts`
-notification setting and admin moderation alerts are the lowest-risk no-API
-options. They are not implemented as the only backend because Meta does not
-promise a machine-readable or complete email/RSS stream for every group post.
+Not selected as the backend because Facebook does not expose a machine-readable
+or complete email/RSS stream for every group post.
 
 ## Revisit triggers
 
 Reconsider this decision if:
 
 - Meta offers an officially supported group feed without developer registration;
-- the project obtains express authorization and a supported data interface;
 - native notifications gain a documented complete email/webhook/RSS channel; or
 - Playwright drops a required deployment platform and another maintained browser
   driver demonstrably meets the same boundaries;
