@@ -239,6 +239,8 @@ def test_check_propagates_headless_chromium_settings_without_apprise(
             "3",
             "--stagnant-scrolls",
             "1",
+            "--max-post-age",
+            "45m",
             "--navigation-timeout",
             "45",
             "--settle-seconds",
@@ -263,6 +265,7 @@ def test_check_propagates_headless_chromium_settings_without_apprise(
         sample_count=7,
         max_scrolls=3,
         stagnant_scrolls=1,
+        max_post_age_seconds=45 * 60,
         navigation_timeout_seconds=45,
         settle_seconds=0.5,
     )

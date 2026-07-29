@@ -6,7 +6,7 @@ import re
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -28,6 +28,56 @@ _POST_PATH_RE = re.compile(
 )
 _PHOTO_SET_RE = re.compile(rf"^gm\.(?P<post>{_POST_ID_PATTERN})$")
 _WHITESPACE_RE = re.compile(r"\s+")
+_RELATIVE_TIMESTAMP_RE = re.compile(
+    r"^(?P<amount>[0-9]+)\s*(?P<unit>[smhdw])$",
+    re.IGNORECASE,
+)
+_VERBOSE_TIMESTAMP_RE = re.compile(
+    r"^(?P<amount>[0-9]+)\s+"
+    r"(?P<unit>seconds?|minutes?|hours?|days?|weeks?)\s+ago$",
+    re.IGNORECASE,
+)
+_DAY_TIME_RE = re.compile(
+    r"^(?P<day>today|yesterday)\s+at\s+"
+    r"(?P<hour>[0-9]{1,2}):(?P<minute>[0-9]{2})$",
+    re.IGNORECASE,
+)
+_DATE_TIME_RE = re.compile(
+    r"^(?P<day>[0-9]{1,2})\s+(?P<month>[A-Za-z]+)\s+at\s+"
+    r"(?P<hour>[0-9]{1,2}):(?P<minute>[0-9]{2})$",
+    re.IGNORECASE,
+)
+_RELATIVE_UNITS = {
+    "s": "seconds",
+    "m": "minutes",
+    "h": "hours",
+    "d": "days",
+    "w": "weeks",
+    "second": "seconds",
+    "seconds": "seconds",
+    "minute": "minutes",
+    "minutes": "minutes",
+    "hour": "hours",
+    "hours": "hours",
+    "day": "days",
+    "days": "days",
+    "week": "weeks",
+    "weeks": "weeks",
+}
+_MONTHS = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +201,73 @@ def normalize_visible_text(value: object, *, limit: int) -> str:
     return normalized[:limit].rstrip()
 
 
+def parse_facebook_timestamp(
+    value: object,
+    observed_at: datetime,
+) -> datetime | None:
+    """Parse one rendered English Facebook post timestamp conservatively."""
+
+    if (
+        not isinstance(observed_at, datetime)
+        or observed_at.tzinfo is None
+        or observed_at.utcoffset() is None
+    ):
+        raise ValueError("observed_at must be a timezone-aware datetime")
+    if not isinstance(value, str):
+        return None
+
+    text = normalize_visible_text(value, limit=128)
+    if not text:
+        return None
+    if text.casefold() == "just now":
+        return observed_at
+
+    relative = _RELATIVE_TIMESTAMP_RE.fullmatch(text)
+    if relative is None:
+        relative = _VERBOSE_TIMESTAMP_RE.fullmatch(text)
+    if relative is not None:
+        amount = int(relative.group("amount"))
+        unit = _RELATIVE_UNITS[relative.group("unit").casefold()]
+        try:
+            return observed_at - timedelta(**{unit: amount})
+        except OverflowError:
+            return None
+
+    day_time = _DAY_TIME_RE.fullmatch(text)
+    if day_time is not None:
+        hour = int(day_time.group("hour"))
+        minute = int(day_time.group("minute"))
+        if hour > 23 or minute > 59:
+            return None
+        day_offset = 1 if day_time.group("day").casefold() == "yesterday" else 0
+        candidate = observed_at - timedelta(days=day_offset)
+        return candidate.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    date_time = _DATE_TIME_RE.fullmatch(text)
+    if date_time is None:
+        return None
+    month = _MONTHS.get(date_time.group("month").casefold())
+    day = int(date_time.group("day"))
+    hour = int(date_time.group("hour"))
+    minute = int(date_time.group("minute"))
+    if month is None or hour > 23 or minute > 59:
+        return None
+    try:
+        candidate = observed_at.replace(
+            month=month,
+            day=day,
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0,
+        )
+        if candidate > observed_at + timedelta(days=1):
+            candidate = candidate.replace(year=candidate.year - 1)
+    except ValueError:
+        return None
+    return candidate
+
+
 def _require_positive_int(value: object, *, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer.")
@@ -219,6 +336,10 @@ def extract_posts(
             observed_at=observed_at,
             position=position,
             partial=payload.get("partial") is True,
+            published_at=parse_facebook_timestamp(
+                payload.get("timestamp"),
+                observed_at,
+            ),
         )
         extracted.append((position, source_index, post))
         seen_post_ids.add(link.post_id)

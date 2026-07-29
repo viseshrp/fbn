@@ -16,7 +16,12 @@ import click
 from . import __version__
 from .auth import load_facebook_cookies
 from .browser import PlaywrightPostSource
-from .config import SUPPORTED_BROWSERS, BrowserSettings, ScheduleSettings
+from .config import (
+    SUPPORTED_BROWSERS,
+    BrowserSettings,
+    ScheduleSettings,
+    parse_duration,
+)
 from .diagnostics import run_doctor
 from .exceptions import (
     BootstrapInterruptedError,
@@ -129,6 +134,14 @@ def _scan_options(function: CommandFunction) -> CommandFunction:
             help="Stop after this many scrolls reveal no additional posts.",
         ),
         click.option(
+            "--max-post-age",
+            default="1h",
+            envvar="FBN_MAX_POST_AGE",
+            show_default=True,
+            show_envvar=True,
+            help="Notify only posts no older than this duration.",
+        ),
+        click.option(
             "--navigation-timeout",
             type=click.FloatRange(min=5.0, max=180.0),
             default=30.0,
@@ -231,6 +244,7 @@ def _scan_policy(
     sample_count: int,
     max_scrolls: int,
     stagnant_scrolls: int,
+    max_post_age: str,
     navigation_timeout: float,
     settle_seconds: float,
 ) -> ScanPolicy:
@@ -238,6 +252,7 @@ def _scan_policy(
         sample_count=sample_count,
         max_scrolls=max_scrolls,
         stagnant_scrolls=stagnant_scrolls,
+        max_post_age_seconds=parse_duration(max_post_age).total_seconds(),
         navigation_timeout_seconds=navigation_timeout,
         settle_seconds=settle_seconds,
     )
@@ -517,6 +532,7 @@ def check_command(
     sample_count: int,
     max_scrolls: int,
     stagnant_scrolls: int,
+    max_post_age: str,
     navigation_timeout: float,
     settle_seconds: float,
     target_id: str,
@@ -542,6 +558,7 @@ def check_command(
         sample_count=sample_count,
         max_scrolls=max_scrolls,
         stagnant_scrolls=stagnant_scrolls,
+        max_post_age=max_post_age,
         navigation_timeout=navigation_timeout,
         settle_seconds=settle_seconds,
     )
@@ -589,6 +606,7 @@ def monitor_command(
     sample_count: int,
     max_scrolls: int,
     stagnant_scrolls: int,
+    max_post_age: str,
     navigation_timeout: float,
     settle_seconds: float,
     target_id: str,
@@ -619,6 +637,7 @@ def monitor_command(
         sample_count=sample_count,
         max_scrolls=max_scrolls,
         stagnant_scrolls=stagnant_scrolls,
+        max_post_age=max_post_age,
         navigation_timeout=navigation_timeout,
         settle_seconds=settle_seconds,
     )

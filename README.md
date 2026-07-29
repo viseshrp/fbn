@@ -179,6 +179,8 @@ exit code. Only transient navigation failures are backed off and retried.
 Useful options include:
 
 - `--sample-count`: cap the number of recent posts inspected;
+- `--max-post-age`: notify only when Facebook's rendered publication time is
+  within this age; the default is `1h`;
 - `--notify-initial`: notify for the first visible sample instead of baselining;
 - `--include-errors`: notify a concise, redacted operational error; and
 - `-v` / `--verbose`: enable diagnostic logging without page or cookie dumps.
@@ -463,6 +465,13 @@ Update `fbn` and retry once. Repeated retries do not repair a selector change.
 This is the expected baseline behavior. A later unseen post creates a pending
 notification. To test rendering without delivery, use `--dry-run`; dry-run
 events remain pending and may appear again.
+
+### An older post appeared in the feed
+
+Facebook can reorder, pin, or later expose a post that `fbn` has not identified
+before. The post is recorded as seen, but it is not notified unless Facebook's
+rendered publication time is recognized and no older than `--max-post-age`
+(default `1h`). Unknown timestamp layouts fail closed.
 
 ## Migrating from fbn 0.1
 

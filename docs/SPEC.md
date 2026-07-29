@@ -173,6 +173,8 @@ content.
 - A check limits navigation time, number of extracted posts, number of scrolls,
   and consecutive stagnant scrolls.
 - A sample count must be between 1 and 50.
+- `--max-post-age` defaults to `1h` and uses the same strict duration syntax as
+  scheduling. It controls notification eligibility, not feed visibility.
 
 ### FR-3: page-state classification
 
@@ -190,11 +192,15 @@ the same run.
 
 ### FR-4: post extraction
 
-- Identity comes from canonical `/groups/<group>/posts/<post>` or
-  `/groups/<group>/permalink/<post>` links.
+- Identity comes from canonical `/groups/<group>/posts/<post>`,
+  `/groups/<group>/permalink/<post>`, or group-photo
+  `photo/?set=gm.<post>&idorvanity=<group>` links.
 - Tracking query parameters are removed from stored URLs.
-- Each post contains a stable ID, canonical URL, normalized visible text, and an
-  optional author.
+- Each post contains a stable ID, canonical URL, normalized visible text, an
+  optional author, and a parsed publication time when Facebook's rendered
+  timestamp is recognized.
+- Facebook's timestamp character decoys are excluded by retaining only glyphs
+  rendered inside the timestamp link's visible rectangle.
 - Text is capped to prevent unbounded notification/state size.
 - Generated class names are not part of the primary selector contract.
 - Results are deterministically ordered by their visible feed order.
@@ -215,6 +221,11 @@ the same run.
 - The first non-empty successful scan is a baseline unless `--notify-initial`
   is explicitly supplied.
 - New posts and their outbox entries are inserted atomically.
+- Every unseen supported post is stored for deduplication. An initialized group
+  creates an outbox entry only when the post has a recognized Facebook
+  publication timestamp no older than `--max-post-age`.
+- Missing, malformed, future-skewed, or stale publication timestamps fail
+  closed: the post is marked seen but is not notified.
 - Failed notification entries remain pending across process restarts.
 - Delivery is at-least-once: a process crash after a send but before its commit
   may cause a duplicate, but it must not silently lose a pending post.

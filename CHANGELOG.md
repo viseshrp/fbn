@@ -53,6 +53,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process restart instead of losing the post.
 - Accepted Facebook's positioned feed-item wrapper around one primary semantic
   article while continuing to reject deeper quoted/shared-post permalinks.
+- Added photo-only group-post identity handling and a rendered publication-time
+  gate so newly discovered historical posts are recorded without being
+  announced as new. The notification window defaults to one hour and is
+  configurable with `--max-post-age`.
 - Changed `-V` / `--version` to the version flag and reserved `-v` /
   `--verbose` for logging.
 - Scoped this version as an unreleased tool for local academic research.

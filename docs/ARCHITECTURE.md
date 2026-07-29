@@ -192,17 +192,24 @@ The page returns a minimal list of DOM payloads:
   "href": "https://www.facebook.com/groups/example/posts/123/",
   "text": "Visible post text",
   "author": "Optional author",
+  "timestamp": "12m",
   "position": 0
 }
 ```
 
 `fbn.extractor` then validates the host/scheme, parses group and post IDs,
 removes query/fragment tracking data, normalizes Unicode/whitespace, enforces
-text limits, and deduplicates IDs while retaining the first visible position.
+text limits, parses the rendered Facebook timestamp, and deduplicates IDs while
+retaining the first visible position. The browser reconstructs timestamp text
+from glyphs whose rendered rectangles intersect the timestamp link, excluding
+Facebook's off-rectangle character decoys.
 Facebook can redirect a numeric group URL while rendering its post permalinks
 under a custom group alias. The browser adapter accepts one such alias only
 when it is the sole candidate in the visible group-navigation tablist; related
 group links and feed content are never trusted as identity evidence.
+Photo-only posts are identified from a strict Facebook photo link containing
+both `set=gm.<post-id>` and `idorvanity=<group-id>`, then canonicalized to the
+same group-post URL used by state and notifications.
 
 Selectors are kept in one module. Local sanitized fixture tests cover both
 `/posts/` and `/permalink/` forms, duplicate/shared links, missing author/text,
@@ -211,6 +218,12 @@ pinned/reordered content, and unrecognized layouts.
 ## SQLite state and outbox
 
 SQLite runs in WAL mode with foreign keys enabled.
+
+All supported unseen posts enter `posts`, even when their publication time is
+old or unavailable. The outbox gate is separate: after baseline initialization,
+only posts with a confidently parsed publication time inside the configured
+maximum age are queued. Existing pending events remain retryable even after
+they age beyond that window.
 
 ```sql
 CREATE TABLE groups (

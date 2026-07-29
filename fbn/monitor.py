@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from .exceptions import DeliveryError
@@ -36,6 +36,7 @@ class StateRepository(Protocol):
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
+        max_post_age: timedelta | None = None,
     ) -> ObservationBatch:
         """Atomically record a scan and return pending delivery records."""
 
@@ -87,6 +88,7 @@ class MonitorService:
             scan.posts,
             notify_initial=notify_initial,
             observed_at=observed_at,
+            max_post_age=timedelta(seconds=policy.max_post_age_seconds),
         )
         pending = batch.pending
         delivered = 0
@@ -122,7 +124,7 @@ class MonitorService:
         return RunSummary(
             group_key=group.key,
             observed=len(scan.posts),
-            new_posts=0 if batch.baseline else batch.inserted,
+            new_posts=0 if batch.baseline else batch.queued,
             pending=remaining,
             delivered=delivered,
             baseline=batch.baseline,

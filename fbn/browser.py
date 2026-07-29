@@ -69,6 +69,49 @@ DOM_SCAN_SCRIPT = """
     text = text.replace(/(?:\\s+Facebook){2,}\\s*$/i, '').trim();
     return text;
   };
+  const visualText = (element) => {
+    const bounds = element.getBoundingClientRect();
+    const leaves = Array.from(element.querySelectorAll('*'))
+      .filter((candidate) => (
+        candidate.children.length === 0
+        && (candidate.textContent || '').length > 0
+      ))
+      .map((candidate) => ({
+        text: candidate.textContent || '',
+        bounds: candidate.getBoundingClientRect(),
+        style: getComputedStyle(candidate),
+      }))
+      .filter((candidate) => (
+        candidate.bounds.width > 0
+        && candidate.bounds.height > 0
+        && candidate.bounds.bottom > bounds.top
+        && candidate.bounds.top < bounds.bottom
+        && candidate.bounds.right > bounds.left
+        && candidate.bounds.left < bounds.right
+        && candidate.style.visibility !== 'hidden'
+        && candidate.style.display !== 'none'
+        && candidate.style.opacity !== '0'
+      ))
+      .sort((left, right) => (
+        Math.abs(left.bounds.y - right.bounds.y) < 2
+          ? left.bounds.x - right.bounds.x
+          : left.bounds.y - right.bounds.y
+      ));
+    const rendered = leaves.length
+      ? leaves.map((candidate) => candidate.text).join('')
+      : (element.innerText || '');
+    return rendered.replace(/\\s+/g, ' ').trim();
+  };
+  const isTimestampText = (value) => (
+    /^(?:just now|[0-9]+\\s*[smhdw])$/i.test(value)
+    || /^[0-9]+\\s+(?:seconds?|minutes?|hours?|days?|weeks?)\\s+ago$/i.test(
+      value
+    )
+    || /^(?:today|yesterday)\\s+at\\s+[0-9]{1,2}:[0-9]{2}$/i.test(value)
+    || /^[0-9]{1,2}\\s+[A-Za-z]+\\s+at\\s+[0-9]{1,2}:[0-9]{2}$/i.test(
+      value
+    )
+  );
   const semanticItems = feedRoots.flatMap(
     (root) => Array.from(root.querySelectorAll(itemSelector))
   ).filter((item) => item.getClientRects().length > 0);
@@ -138,6 +181,15 @@ DOM_SCAN_SCRIPT = """
     const collapsed = Boolean(
       container.querySelector('[aria-expanded="false"]')
     );
+    const timestampLinks = Array.from(container.querySelectorAll('a'));
+    const trackedTimestamp = timestampLinks.find((candidate) => (
+      (candidate.getAttribute('href') || '').includes('__tn__=%2CO')
+      && isTimestampText(visualText(candidate))
+    ));
+    const selectedText = visualText(selected);
+    const timestamp = trackedTimestamp
+      ? visualText(trackedTimestamp)
+      : (isTimestampText(selectedText) ? selectedText : '');
 
     payloads.push(
       includeContent
@@ -149,6 +201,7 @@ DOM_SCAN_SCRIPT = """
               : null,
             partial: collapsed,
             position: payloads.length,
+            timestamp,
           }
         : null
     );

@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -123,6 +123,8 @@ def test_headless_browser_extracts_ordered_visible_posts(tmp_path: Path) -> None
     assert [post.author for post in posts] == ["Alice Example", "Bob Example"]
     assert "First visible post body" in posts[0].text
     assert posts[0].url == ("https://www.facebook.com/groups/test-group/posts/101/")
+    assert posts[0].published_at == observed_at - timedelta(minutes=2)
+    assert posts[1].published_at == observed_at - timedelta(minutes=5)
     assert posts[1].partial is True
 
 
@@ -172,6 +174,8 @@ def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None
     assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
     assert posts[0].author == "Alice Example"
     assert "Fresh produce!!" in posts[0].text
+    assert payloads[0]["timestamp"] == "41m"
+    assert posts[0].published_at == observed_at - timedelta(minutes=41)
 
 
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])

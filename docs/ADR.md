@@ -88,6 +88,15 @@ remains the notification abstraction. A small in-process loop provides the
 legacy long-running mode, while a one-shot command supports cron, systemd timers,
 and n8n orchestration.
 
+Post identity and freshness are separate decisions. Every supported unseen post
+is persisted for deduplication, including photo-only posts identified through a
+Facebook `set=gm.<post-id>` photo link. Notification eligibility additionally
+requires a recognized rendered Facebook publication timestamp inside a bounded
+maximum age, defaulting to one hour. The browser reconstructs that timestamp
+from characters actually rendered inside the timestamp link; off-rectangle
+decoy characters are excluded. An unknown or stale timestamp is recorded as
+seen but does not enter the notification outbox.
+
 ## Consequences
 
 ### Positive
@@ -100,6 +109,9 @@ and n8n orchestration.
 - The dependency set is smaller and the acquisition path is deterministic.
 - A user can recover a session manually through the optional headed command.
 - Seen posts and pending deliveries survive restarts.
+- Reordered, pinned, or newly extractable historical posts do not create false
+  "new post" alerts when their Facebook publication time is outside the
+  configured window.
 - The same browser backend and profile work for headless bootstrap, unattended
   operation, and optional headed recovery.
 - Ubuntu ARM64 and Ubuntu-container deployments do not depend on a separately
@@ -122,6 +134,8 @@ and n8n orchestration.
 - Multi-platform container build/configuration and persistence behavior add
   deployment-specific validation gates.
 - DOM changes can break extraction and require a localized selector update.
+- A timestamp layout or locale Facebook has not yet modeled fails closed and
+  can suppress a legitimate notification until support is added.
 - The visible virtualized feed cannot guarantee that every post appears.
 - Users must supply a fresh authentication export or run optional headed
   recovery when the session expires.

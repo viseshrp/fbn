@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -9,6 +9,7 @@ from fbn.extractor import (
     chronological_group_url,
     extract_posts,
     normalize_visible_text,
+    parse_facebook_timestamp,
     parse_group_ref,
     parse_post_url,
 )
@@ -172,6 +173,38 @@ def test_extract_posts_normalizes_deduplicates_and_handles_missing_fields() -> N
     assert posts[1].partial is True
     assert posts[1].position == 2
     assert posts[1].observed_at is OBSERVED_AT
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Just now", OBSERVED_AT),
+        ("41m", OBSERVED_AT - timedelta(minutes=41)),
+        ("22h", OBSERVED_AT - timedelta(hours=22)),
+        ("2 minutes ago", OBSERVED_AT - timedelta(minutes=2)),
+        (
+            "Yesterday at 14:48",
+            datetime(2026, 7, 27, 14, 48, tzinfo=timezone.utc),
+        ),
+        (
+            "26 July at 14:48",
+            datetime(2026, 7, 26, 14, 48, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_parse_facebook_timestamp_accepts_rendered_formats(
+    value: str,
+    expected: datetime,
+) -> None:
+    assert parse_facebook_timestamp(value, OBSERVED_AT) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "Sponsored", "characters in DOM order", "Yesterday at 25:00"],
+)
+def test_parse_facebook_timestamp_rejects_unknown_values(value: object) -> None:
+    assert parse_facebook_timestamp(value, OBSERVED_AT) is None
 
 
 def test_extract_posts_has_deterministic_position_order_and_post_limit() -> None:

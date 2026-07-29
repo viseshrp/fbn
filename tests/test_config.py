@@ -214,6 +214,9 @@ def test_browser_settings_validate_choice_and_executable_pairing(
         ("navigation_timeout_seconds", float("inf")),
         ("settle_seconds", -0.1),
         ("settle_seconds", float("nan")),
+        ("max_post_age_seconds", 0),
+        ("max_post_age_seconds", float("inf")),
+        ("max_post_age_seconds", 366 * 24 * 60 * 60),
     ],
 )
 def test_scan_policy_rejects_unbounded_or_invalid_values(

@@ -25,6 +25,7 @@ def post(
     observed_at: datetime = T0,
     author: str | None = "Author",
     text: str | None = None,
+    published_at: datetime | None = None,
 ) -> Post:
     return Post(
         group_key=GROUP.key,
@@ -34,6 +35,7 @@ def post(
         author=author,
         observed_at=observed_at,
         position=position,
+        published_at=published_at,
     )
 
 
@@ -54,6 +56,7 @@ def test_first_nonempty_scan_is_baseline_even_after_empty_success(
     assert empty.pending == ()
     assert baseline.baseline is True
     assert baseline.inserted == 2
+    assert baseline.queued == 0
     assert baseline.pending == ()
 
 
@@ -76,6 +79,7 @@ def test_restart_safe_deduplication_queues_only_unseen_posts(
 
     assert observation.baseline is False
     assert observation.inserted == 1
+    assert observation.queued == 1
     assert [item.post_id for item in observation.pending] == ["new"]
 
 
@@ -89,7 +93,53 @@ def test_notify_initial_populates_outbox_in_position_order(tmp_path: Path) -> No
 
     assert observation.baseline is False
     assert observation.inserted == 2
+    assert observation.queued == 2
     assert [item.post_id for item in observation.pending] == ["first", "later"]
+
+
+def test_recency_gate_records_stale_and_unknown_posts_without_queueing(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    scan_time = T0 + timedelta(hours=2)
+    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
+        repository.observe(GROUP, (post("baseline"),))
+        observation = repository.observe(
+            GROUP,
+            (
+                post(
+                    "stale",
+                    position=0,
+                    observed_at=scan_time,
+                    published_at=T0,
+                ),
+                post(
+                    "unknown",
+                    position=1,
+                    observed_at=scan_time,
+                ),
+                post(
+                    "recent",
+                    position=2,
+                    observed_at=scan_time,
+                    published_at=scan_time - timedelta(minutes=10),
+                ),
+            ),
+            observed_at=scan_time,
+            max_post_age=timedelta(hours=1),
+        )
+
+        stored_ids = {
+            row["post_id"]
+            for row in repository._require_connection()
+            .execute("SELECT post_id FROM posts")
+            .fetchall()
+        }
+
+    assert observation.inserted == 3
+    assert observation.queued == 1
+    assert [item.post_id for item in observation.pending] == ["recent"]
+    assert stored_ids == {"baseline", "stale", "unknown", "recent"}
 
 
 def test_posts_and_outbox_entries_are_inserted_atomically(

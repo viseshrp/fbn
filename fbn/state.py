@@ -6,7 +6,7 @@ import os
 import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import TracebackType
 
 from .config import ensure_private_directory, resolve_state_file
@@ -54,6 +54,7 @@ CREATE INDEX IF NOT EXISTS outbox_pending_order
 
 PRAGMA user_version = 1;
 """
+_MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 
 def _utc_now() -> datetime:
@@ -75,6 +76,20 @@ def _timestamp(value: datetime, field_name: str) -> str:
 def _parse_timestamp(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return _as_utc(parsed, "stored timestamp")
+
+
+def _is_recent_enough(
+    post: Post,
+    scan_time: datetime,
+    max_post_age: timedelta | None,
+) -> bool:
+    if max_post_age is None:
+        return True
+    if post.published_at is None:
+        return False
+    published_at = _as_utc(post.published_at, "published_at")
+    age = scan_time - published_at
+    return -_MAX_FUTURE_SKEW <= age <= max_post_age
 
 
 def _event_id(group_key: str, post_id: str) -> str:
@@ -174,6 +189,7 @@ class SQLiteStateRepository:
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
+        max_post_age: timedelta | None = None,
     ) -> ObservationBatch:
         """Atomically store unseen posts and, when appropriate, outbox rows."""
 
@@ -181,6 +197,10 @@ class SQLiteStateRepository:
             raise ValueError("group must be a GroupRef")
         if not isinstance(notify_initial, bool):
             raise ValueError("notify_initial must be a boolean")
+        if max_post_age is not None and (
+            not isinstance(max_post_age, timedelta) or max_post_age <= timedelta(0)
+        ):
+            raise ValueError("max_post_age must be a positive timedelta or None")
         scan_time = _as_utc(
             self._clock() if observed_at is None else observed_at,
             "observed_at",
@@ -200,6 +220,7 @@ class SQLiteStateRepository:
             first_non_empty_scan = not initialized and bool(unique_posts)
             baseline = first_non_empty_scan and not notify_initial
             inserted_posts: list[Post] = []
+            queued = 0
 
             for post in unique_posts:
                 cursor = connection.execute(
@@ -249,6 +270,8 @@ class SQLiteStateRepository:
 
             if not baseline:
                 for post in inserted_posts:
+                    if not _is_recent_enough(post, scan_time, max_post_age):
+                        continue
                     connection.execute(
                         """
                         INSERT INTO outbox (
@@ -271,6 +294,7 @@ class SQLiteStateRepository:
                             scan_timestamp,
                         ),
                     )
+                    queued += 1
 
             connection.execute(
                 """
@@ -289,6 +313,7 @@ class SQLiteStateRepository:
         return ObservationBatch(
             baseline=baseline,
             inserted=len(inserted_posts),
+            queued=queued,
             pending=pending,
         )
 
