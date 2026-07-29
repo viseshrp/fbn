@@ -126,6 +126,29 @@ def test_headless_browser_extracts_ordered_visible_posts(tmp_path: Path) -> None
     assert posts[1].partial is True
 
 
+def test_headless_browser_accepts_one_article_inside_positioned_feed_item(
+    tmp_path: Path,
+) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("positioned_wrapper_feed.html"))
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+
+    posts = extract_posts(payloads, group, observed_at, limit=10)
+
+    assert len(payloads) == 1
+    assert [post.post_id for post in posts] == ["201"]
+    assert all(post.post_id != "999" for post in posts)
+    assert posts[0].author == "Alice Example"
+    assert "Visible post inside a positioned feed wrapper" in posts[0].text
+
+
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
 def test_headless_browser_rejects_links_outside_direct_feed_items(
     tmp_path: Path,

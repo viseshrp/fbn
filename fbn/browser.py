@@ -45,6 +45,8 @@ DOM_SCAN_SCRIPT = """
     'a[href*="/groups/"][href*="/permalink/"]';
   const itemSelector =
     '[role="article"],[aria-posinset],[data-pagelet*="FeedUnit"]';
+  const positionedItemSelector =
+    '[aria-posinset],[data-pagelet*="FeedUnit"]';
   const feedSelector = '[role="feed"],[data-pagelet*="GroupFeed"]';
   const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
     (root) => root.getClientRects().length > 0
@@ -83,9 +85,29 @@ DOM_SCAN_SCRIPT = """
     seenContainers.add(container);
 
     const candidates = Array.from(container.querySelectorAll(linkSelector));
-    const directCandidates = candidates.filter(
-      (candidate) => candidate.closest(itemSelector) === container
-    );
+    const directCandidates = candidates.filter((candidate) => {
+      const positionedItem = candidate.closest(positionedItemSelector);
+      if (container.matches(positionedItemSelector)) {
+        if (positionedItem !== container) {
+          return false;
+        }
+
+        // Current Facebook markup places the actual post article inside a
+        // separate aria-posinset feed wrapper. Permit that one semantic
+        // article layer, but reject deeper quoted/shared post articles.
+        let articleDepth = container.matches('[role="article"]') ? 1 : 0;
+        let cursor = candidate.parentElement;
+        while (cursor && cursor !== container) {
+          if (cursor.matches('[role="article"]')) {
+            articleDepth += 1;
+          }
+          cursor = cursor.parentElement;
+        }
+        return cursor === container && articleDepth <= 1;
+      }
+
+      return candidate.closest(itemSelector) === container;
+    });
     const selected = directCandidates[0];
     if (!selected) {
       // Never promote the permalink from a nested quoted/shared post to the

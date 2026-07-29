@@ -51,6 +51,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--notify-initial` as an explicit override.
 - Made notification delivery at least once so an Apprise failure survives a
   process restart instead of losing the post.
+- Accepted Facebook's positioned feed-item wrapper around one primary semantic
+  article while continuing to reject deeper quoted/shared-post permalinks.
 - Changed `-V` / `--version` to the version flag and reserved `-v` /
   `--verbose` for logging.
 - Scoped this version as an unreleased tool for local academic research.
