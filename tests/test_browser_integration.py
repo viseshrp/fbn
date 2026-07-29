@@ -153,6 +153,27 @@ def test_headless_browser_accepts_one_article_inside_positioned_feed_item(
     assert "Visible post inside a positioned feed wrapper" in posts[0].text
 
 
+def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("photo_feed.html"))
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+
+    posts = extract_posts(payloads, group, observed_at, limit=10)
+
+    assert len(payloads) == 1
+    assert [post.post_id for post in posts] == ["202"]
+    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
+    assert posts[0].author == "Alice Example"
+    assert "Fresh produce!!" in posts[0].text
+
+
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
 def test_headless_browser_rejects_links_outside_direct_feed_items(
     tmp_path: Path,

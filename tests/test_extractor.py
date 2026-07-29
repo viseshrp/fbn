@@ -86,6 +86,22 @@ def test_parse_post_url_accepts_posts_and_permalink_and_strips_tracking() -> Non
     )
 
 
+def test_parse_post_url_accepts_group_photo_identity_link() -> None:
+    photo = parse_post_url(
+        "https://www.facebook.com/photo/?fbid=987"
+        "&set=gm.27558491783808657"
+        "&idorvanity=1663189947098862"
+        "&__cft__[0]=tracking"
+    )
+
+    assert photo is not None
+    assert (photo.group_key, photo.post_id, photo.url) == (
+        "1663189947098862",
+        "27558491783808657",
+        "https://www.facebook.com/groups/1663189947098862/posts/27558491783808657/",
+    )
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -101,6 +117,9 @@ def test_parse_post_url_accepts_posts_and_permalink_and_strips_tracking() -> Non
         "https://www.facebook.com/groups/local/posts/0/",
         "https://www.facebook.com/groups/local/photos/123/",
         "https://www.facebook.com/groups/local/posts/123/comments/",
+        "https://www.facebook.com/photo/?fbid=987&set=gm.123",
+        "https://www.facebook.com/photo/?fbid=987&idorvanity=local",
+        "https://www.facebook.com/photo/?set=gm.123&idorvanity=local&idorvanity=other",
     ],
 )
 def test_parse_post_url_rejects_noncanonical_or_hostile_links(

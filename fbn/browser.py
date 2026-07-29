@@ -42,7 +42,8 @@ DOM_SCAN_SCRIPT = """
 (includeContent) => {
   const linkSelector =
     'a[href*="/groups/"][href*="/posts/"],' +
-    'a[href*="/groups/"][href*="/permalink/"]';
+    'a[href*="/groups/"][href*="/permalink/"],' +
+    'a[href*="/photo/"][href*="set=gm."][href*="idorvanity="]';
   const itemSelector =
     '[role="article"],[aria-posinset],[data-pagelet*="FeedUnit"]';
   const positionedItemSelector =
