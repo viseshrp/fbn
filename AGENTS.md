@@ -13,6 +13,24 @@ or other credentials in source, fixtures, commands, logs, test output, commits,
 or reports. Tests must use synthetic data and local sanitized fixtures; they
 must never contact Facebook or send a real notification.
 
+## Main-branch-only workflow
+
+All work must be performed directly on `main`. Before making changes, verify
+that the checkout is on `main`; remain there for editing, validation, commits,
+and pushes. This is an experimental project, so do not create, switch to, or
+publish feature, fix, topic, release, `agent/*`, or other auxiliary branches.
+Do not create branch-based worktrees or open branch-based pull requests.
+
+Every task that changes repository files must end with a focused commit
+containing only that task's changes and a push to `main`, unless the user
+explicitly says not to commit or push. Do not leave completed agent changes
+only in the working tree, bundle unrelated work, or force-push.
+
+If `main` is unavailable, protected, or contains work that cannot be preserved
+safely, stop and report the blocker. Never create another branch as a
+workaround, and never delete or rewrite existing branches unless the user
+explicitly requests it.
+
 ## Mandatory Docker-only local validation
 
 **Every local test or executable validation must run inside a Docker
