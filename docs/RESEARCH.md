@@ -26,54 +26,42 @@ and Raspberry Pi 4 deployment. The server runtime uses Playwright-managed
 regular Chromium in headless mode, while an Ubuntu 24.04 multi-platform
 container provides the same runtime for `linux/amd64` and `linux/arm64`.
 
-This improves session continuity and makes the page load through a normal browser
-engine. It does **not** make automation invisible and cannot guarantee that Meta
-will not detect or restrict it.
-
-## The non-technical constraint
-
-Meta's current terms are decisive:
-
-- The [Meta Terms of Service](https://www.facebook.com/terms) prohibit automated
-  access or data collection without prior permission, including while logged in,
-  and prohibit bypassing technological access controls.
-- The
-  [Automated Data Collection Terms](https://www.facebook.com/legal/automated_data_collection_terms)
-  require separate express written permission. Accepting those terms alone is not
-  permission.
-- [Facebook's robots.txt](https://www.facebook.com/robots.txt) repeats the
-  express-permission requirement.
-
-A login cookie proves that a browser session is authenticated. It does not grant
-permission to automate collection, expand the account's authorization, or
-permit bypassing a control. The rewrite therefore will not claim to be
-undetectable and will not contain fingerprint spoofing, CAPTCHA solving, proxy
-rotation, hidden GraphQL replay, fake user agents, or other anti-detection
-features.
-
-The supported no-API alternative is to enable Facebook's native
-[All posts group notifications](https://www.facebook.com/help/187225274663021).
-Admins can also use native
-[keyword and engagement alerts](https://www.facebook.com/help/279588033089477/).
-Users who need a guaranteed, terms-supported data feed must use Meta-authorized
-access or a feed supplied by the group administrator.
-
 ## Tool comparison
 
 | Tool | Finding | Decision |
 | --- | --- | --- |
 | [Playwright Python](https://playwright.dev/python/docs/intro) | Pip-installable, actively maintained, supports persistent contexts, installed Chrome, managed Chromium, semantic locators, explicit browser lifecycle control, and current Ubuntu x86-64/ARM64 releases. | Use directly. |
 | [Selenium](https://github.com/SeleniumHQ/selenium) | Mature and viable, but offers no detection advantage and requires more profile and synchronization boilerplate. Its official Selenium Manager does not support Linux ARM64 or Raspberry Pi. | Do not add a second browser backend. |
-| [browser-use](https://github.com/browser-use/browser-use) | Useful for open-ended, LLM-directed browser tasks and can reuse browser profiles. Its agent loop adds model cost, nondeterminism, a broader action surface, and potential disclosure of private group content to a model or cloud service. Its hosted offering markets stealth, proxies, and CAPTCHA handling. | Do not use in the deterministic monitor core. Revisit only for an attended recovery assistant. |
+| [browser-use](https://github.com/browser-use/browser-use) | Useful for open-ended, LLM-directed browser tasks and can reuse browser profiles. Its agent loop adds model cost, nondeterminism, a broader action surface, and potential disclosure of private group content to a model or cloud service. | Do not use in the deterministic monitor core. Revisit only for an attended recovery assistant. |
 | [Crawlee Python](https://github.com/apify/crawlee-python) | Strong crawling queues, storage, retry, and proxy infrastructure around Playwright. That machinery is excessive for one bounded group scan, and automatic retries/proxy features conflict with fail-closed behavior. | Do not use. |
-| [Apify Facebook Groups Scraper](https://apify.com/apify/facebook-groups-scraper) | The official Apify actor supports public groups only and states that private-group credential use would conflict with Facebook's terms. Cloud execution would also require sending data or session material to a third party. | Do not use for authenticated groups. |
+| [Apify Facebook Groups Scraper](https://apify.com/apify/facebook-groups-scraper) | The official Apify actor supports public groups only. Cloud execution would also require sending data or session material to a third party. | Do not use for authenticated groups. |
 | [Browserless](https://github.com/browserless/browserless) | Can self-host browser/CDP infrastructure with queues and persistence, but adds Docker, operations, and licensing considerations. Cloud use creates the same session-disclosure concern. | Possible future self-hosted execution backend, not a dependency. |
 | [n8n](https://github.com/n8n-io/n8n) | Excellent scheduler/orchestrator. Its Facebook nodes use the Graph API and credentials; it does not provide a native, non-Graph private-group reader. | Optional orchestration around `fbn check`, not acquisition. |
-| [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) | A Playwright fork whose stated purpose is to be undetected by patching automation signals. | Reject. |
-| [Camoufox](https://github.com/daijro/camoufox) | An anti-detect Firefox fork with fingerprint injection/rotation, WebGL and WebRTC spoofing, and humanized input. | Reject. |
-| [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) | Explicitly targets bot-mitigation bypass and has a stale PyPI release relative to current Chrome. | Reject. |
+| [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) | A Playwright fork with an additional patch and maintenance surface. | Do not add without a demonstrated need. |
+| [Camoufox](https://github.com/daijro/camoufox) | A customized Firefox stack that would add a second browser family and fingerprint configuration surface. | Do not add a second browser backend. |
+| [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) | Adds a separate Selenium/driver stack and has a stale PyPI release relative to current Chrome. | Do not add. |
 | [facebook-scraper](https://github.com/kevinzg/facebook-scraper) | Direct requests/mobile-HTML parser. Last repository commit found was in October 2023; its README warns that private groups may fail and frequent scraping may cause blocks. | Remove. |
-| [RSSHub](https://github.com/DIYgod/RSSHub) / [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge) | No current official Facebook group feed exists. Unofficial Facebook bridges have the same fragile scraping and authorization problem. | Do not depend on them. |
+| [RSSHub](https://github.com/DIYgod/RSSHub) / [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge) | No current maintained Facebook group feed was found, and unofficial bridges retain the same fragile page dependency. | Do not depend on them. |
+
+## Human-date parsing follow-up
+
+GitHub repository metadata was refreshed on 2026-07-29 for the calendar-day
+notification change:
+
+| Library | GitHub finding | Fit |
+| --- | --- | --- |
+| [Arrow](https://github.com/arrow-py/arrow) | 9,050 stars and active maintenance. | Strong general date/time API, but not a direct parser for Facebook's relative website strings. |
+| [Pendulum](https://github.com/python-pendulum/pendulum) | 6,674 stars and active maintenance. | Strong timezone/date arithmetic, but not a direct human-relative parser for this input. |
+| [Maya](https://github.com/kennethreitz/maya) | 3,412 stars, but its latest GitHub release is 0.6.1 from 2019. | More stars than `dateparser`, but not selected because the release line is stale. |
+| [dateparser](https://github.com/scrapinghub/dateparser) | 2,846 stars, active commits, and release 1.4.1 from June 2026. Its documented scope is parsing human-readable absolute and relative dates with timezone settings and an explicit relative base. | Use. It is the most popular actively maintained direct parser evaluated for the required input. |
+| [parsedatetime](https://github.com/bear/parsedatetime) | 711 stars and active maintenance. | Viable, but substantially less adopted than `dateparser`. |
+
+`fbn` keeps a narrow allowlist for recognized Facebook timestamp shapes, then
+delegates actual date arithmetic to `dateparser`. This avoids accepting arbitrary
+feed text as a date while removing hand-written month, year-rollover, and
+relative-duration calculations. `zoneinfo` plus the `tzdata` package validates
+the IANA timezone used consistently by Chromium, parsing, and the calendar-day
+gate.
 
 ## Ubuntu ARM64 and Raspberry Pi feasibility
 
@@ -108,8 +96,7 @@ python -m playwright install --with-deps chromium
 fbn bootstrap \
   --auth-file /private/path/facebook-auth.json \
   -i my-group \
-  --browser chromium \
-  --acknowledge-automation-risk
+  --browser chromium
 fbn monitor --browser chromium --headless ...
 ```
 
@@ -118,11 +105,9 @@ Playwright's
 documents `channel="chromium"` as the opt-in to regular Chromium's current
 headless implementation rather than the separate headless shell. `fbn` uses
 that channel for ARM64 and container bootstrap and monitoring, and the same
-managed Chromium for optional headed recovery. This is a supported browser
-selection, not webdriver hiding, fingerprint spoofing, or another stealth
-technique.
+managed Chromium for optional headed recovery.
 
-Documentation support is necessary but not sufficient. A release still needs a
+Documentation support is necessary but not sufficient. Validation still needs a
 sanitized local-fixture test that launches the actual managed browser headlessly
 on native Ubuntu ARM64 and the Raspberry Pi 4 target. No live Facebook account,
 cookie, or request belongs in that test.

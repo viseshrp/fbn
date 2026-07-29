@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,6 +10,7 @@ from fbn.extractor import (
     chronological_group_url,
     extract_posts,
     normalize_visible_text,
+    parse_facebook_timestamp,
     parse_group_ref,
     parse_post_url,
 )
@@ -86,6 +88,22 @@ def test_parse_post_url_accepts_posts_and_permalink_and_strips_tracking() -> Non
     )
 
 
+def test_parse_post_url_accepts_group_photo_identity_link() -> None:
+    photo = parse_post_url(
+        "https://www.facebook.com/photo/?fbid=987"
+        "&set=gm.27558491783808657"
+        "&idorvanity=1663189947098862"
+        "&__cft__[0]=tracking"
+    )
+
+    assert photo is not None
+    assert (photo.group_key, photo.post_id, photo.url) == (
+        "1663189947098862",
+        "27558491783808657",
+        "https://www.facebook.com/groups/1663189947098862/posts/27558491783808657/",
+    )
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -101,6 +119,9 @@ def test_parse_post_url_accepts_posts_and_permalink_and_strips_tracking() -> Non
         "https://www.facebook.com/groups/local/posts/0/",
         "https://www.facebook.com/groups/local/photos/123/",
         "https://www.facebook.com/groups/local/posts/123/comments/",
+        "https://www.facebook.com/photo/?fbid=987&set=gm.123",
+        "https://www.facebook.com/photo/?fbid=987&idorvanity=local",
+        "https://www.facebook.com/photo/?set=gm.123&idorvanity=local&idorvanity=other",
     ],
 )
 def test_parse_post_url_rejects_noncanonical_or_hostile_links(
@@ -153,6 +174,63 @@ def test_extract_posts_normalizes_deduplicates_and_handles_missing_fields() -> N
     assert posts[1].partial is True
     assert posts[1].position == 2
     assert posts[1].observed_at is OBSERVED_AT
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Just now", OBSERVED_AT),
+        ("41m", OBSERVED_AT - timedelta(minutes=41)),
+        ("22h", OBSERVED_AT - timedelta(hours=22)),
+        ("2 minutes ago", OBSERVED_AT - timedelta(minutes=2)),
+        ("Today at 09:30", datetime(2026, 7, 28, 9, 30, tzinfo=timezone.utc)),
+        (
+            "Yesterday at 14:48",
+            datetime(2026, 7, 27, 14, 48, tzinfo=timezone.utc),
+        ),
+        (
+            "26 July at 14:48",
+            datetime(2026, 7, 26, 14, 48, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_parse_facebook_timestamp_accepts_rendered_formats(
+    value: str,
+    expected: datetime,
+) -> None:
+    assert parse_facebook_timestamp(value, OBSERVED_AT) == expected
+
+
+def test_parse_facebook_timestamp_uses_configured_calendar_timezone() -> None:
+    observed_at = datetime(2026, 7, 30, 2, 30, tzinfo=timezone.utc)
+    new_york = ZoneInfo("America/New_York")
+
+    parsed = parse_facebook_timestamp(
+        "Today at 21:00",
+        observed_at,
+        timezone_name="America/New_York",
+    )
+
+    assert parsed == datetime(2026, 7, 29, 21, 0, tzinfo=new_york)
+    assert parsed is not None
+    assert parsed.tzinfo is new_york
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "Sponsored", "characters in DOM order", "Yesterday at 25:00"],
+)
+def test_parse_facebook_timestamp_rejects_unknown_values(value: object) -> None:
+    assert parse_facebook_timestamp(value, OBSERVED_AT) is None
+
+
+def test_parse_facebook_timestamp_rejects_invalid_timezone() -> None:
+    with pytest.raises(ValueError, match="IANA timezone"):
+        parse_facebook_timestamp(
+            "41m",
+            OBSERVED_AT,
+            timezone_name="Mars/Olympus_Mons",
+        )
 
 
 def test_extract_posts_has_deterministic_position_order_and_post_limit() -> None:

@@ -5,36 +5,7 @@ notifications through [Apprise](https://github.com/caronc/apprise). Version 0.2
 uses Playwright with a dedicated, persistent browser profile instead of direct
 mobile-page requests.
 
-The persistent profile makes authenticated page rendering more reliable. It
-does not make automation undetectable, bypass Facebook controls, or guarantee
-that an account will not be challenged, limited, or disabled.
-
-## Read this before using fbn
-
-Facebook's native
-[All posts group notifications](https://www.facebook.com/help/187225274663021)
-are the preferred no-automation option. Group administrators may also have
-[keyword and engagement alerts](https://www.facebook.com/help/279588033089477/).
-
-Meta's [Terms of Service](https://www.facebook.com/terms) and
-[Automated Data Collection Terms](https://www.facebook.com/legal/automated_data_collection_terms)
-may prohibit automated collection without prior permission, including from a
-logged-in account. Authentication cookies establish a session; they do not
-grant permission to automate collection. Use `fbn` only where you have
-legitimate group access and any permission that applies to your use.
-
-`fbn` deliberately does not include:
-
-- Facebook Graph API or undocumented private API calls;
-- password-based automated login or authentication data in command-line
-  arguments or environment variables;
-- custom fingerprints, fake user agents, or webdriver hiding;
-- proxies or IP rotation;
-- CAPTCHA, checkpoint, consent, or account-challenge solving; or
-- any guarantee that every post will appear in Facebook's visible feed.
-
-If Facebook presents an account action, `fbn` stops. The user must resolve it
-personally, optionally using the headed `fbn login` recovery command.
+This version is an unreleased research tool for local academic use.
 
 ## Requirements
 
@@ -49,10 +20,11 @@ personally, optionally using the headed `fbn login` recovery command.
 
 ## Install
 
-Create a virtual environment if desired, then install `fbn`:
+Clone the repository, create a virtual environment if desired, and install the
+local checkout:
 
 ```console
-python -m pip install --upgrade fbn
+python -m pip install .
 ```
 
 Install the default Playwright-managed Chromium build:
@@ -98,8 +70,7 @@ chmod 600 /private/path/facebook-auth.json
 fbn bootstrap \
   --auth-file /private/path/facebook-auth.json \
   -i my-group \
-  --browser chromium \
-  --acknowledge-automation-risk
+  --browser chromium
 ```
 
 `bootstrap` is fully headless and noninteractive. It auto-detects these input
@@ -154,8 +125,7 @@ Start with a dry run:
 fbn check \
   --id my-group \
   --browser chromium \
-  --dry-run \
-  --acknowledge-automation-risk
+  --dry-run
 ```
 
 `--id` accepts a Facebook group ID, group slug, or canonical group URL. The
@@ -172,8 +142,7 @@ export FBN_APPRISE_URL='mailto://user:app-password@example.com'
 
 fbn check \
   --id my-group \
-  --browser chromium \
-  --acknowledge-automation-risk
+  --browser chromium
 ```
 
 Keeping `FBN_APPRISE_URL` out of shell history is safer than passing
@@ -192,9 +161,9 @@ discard the post.
 fbn monitor \
   --id my-group \
   --browser chromium \
+  --timezone America/New_York \
   --every 1h \
-  --to 3h \
-  --acknowledge-automation-risk
+  --to 3h
 ```
 
 If `--every` and `--to` are omitted, `monitor` waits a randomized 1–3 hours
@@ -203,14 +172,16 @@ between checks. The minimum accepted interval is 15 minutes. Supported units are
 The maximum accepted interval is 365 days.
 
 Checks and monitoring are headless by default. `--headed` is an explicit
-troubleshooting choice on a trusted display; neither mode is an anti-detection
-feature. Authentication, account-action, access-denied, browser-profile,
+troubleshooting choice on a trusted display. Authentication, account-action,
+access-denied, browser-profile,
 configuration, and unsupported-layout failures stop the loop with a nonzero
 exit code. Only transient navigation failures are backed off and retried.
 
 Useful options include:
 
 - `--sample-count`: cap the number of recent posts inspected;
+- `--timezone`: set the IANA timezone used to interpret Facebook timestamps and
+  decide whether a post was published today; the default is `UTC`;
 - `--notify-initial`: notify for the first visible sample instead of baselining;
 - `--include-errors`: notify a concise, redacted operational error; and
 - `-v` / `--verbose`: enable diagnostic logging without page or cookie dumps.
@@ -232,8 +203,7 @@ Compose builds the image for that host's architecture:
 docker compose build
 ```
 
-Maintainers can also produce a multi-platform OCI archive without publishing
-it:
+To produce a multi-platform OCI archive:
 
 ```console
 docker buildx build \
@@ -250,7 +220,7 @@ context and Git, but it is still sensitive:
 ```dotenv
 FBN_GROUP=my-group
 FBN_APPRISE_URL=mailto://user:app-password@example.com
-FBN_ACKNOWLEDGE_AUTOMATION_RISK=true
+FBN_TIMEZONE=America/New_York
 FBN_EVERY=1h
 FBN_TO=3h
 FBN_UID=1000
@@ -266,11 +236,11 @@ chmod 600 .env
 docker compose build
 ```
 
-Compose refuses to start the monitor unless the group, Apprise URL, and
-explicit automation-risk acknowledgment are present. Cookies, browser state,
-and group content are not baked into the image. Docker does retain container
-environment metadata, including the Apprise URL, so only users trusted with the
-Docker daemon should be able to inspect the deployment.
+Compose refuses to start the monitor unless the group and Apprise URL are
+present. Cookies, browser state, and group content are not baked into the
+image. Docker does retain container environment metadata, including the
+Apprise URL, so only users trusted with the Docker daemon should be able to
+inspect the deployment.
 
 ### Bootstrap the persistent profile once
 
@@ -290,16 +260,14 @@ FBN_AUTH_FILE=/absolute/private/path/facebook-auth.json \
 Inside the one-shot container the source is available only at
 `/run/secrets/facebook_auth`. Its contents are not placed in an environment
 variable, copied into the image, or mounted into the long-running `fbn`
-service. The `bootstrap` service gets the group and required risk
-acknowledgment from `FBN_GROUP` and `FBN_ACKNOWLEDGE_AUTOMATION_RISK` in
-`.env`; its command is equivalent to:
+service. The `bootstrap` service gets the group from `FBN_GROUP` in `.env`; its
+command is equivalent to:
 
 ```console
 fbn bootstrap \
   --auth-file /run/secrets/facebook_auth \
   -i "$FBN_GROUP" \
-  --browser chromium \
-  --acknowledge-automation-risk
+  --browser chromium
 ```
 
 The command performs no prompts and needs no display, X11, VNC, or browser
@@ -378,8 +346,7 @@ chmod 600 /home/alice/.config/fbn/facebook-auth.json
   --auth-file /home/alice/.config/fbn/facebook-auth.json \
   -i my-group \
   --browser chromium \
-  --profile-dir /home/alice/.local/share/fbn/profile \
-  --acknowledge-automation-risk
+  --profile-dir /home/alice/.local/share/fbn/profile
 ```
 
 After bootstrap succeeds, remove or continue protecting the source file. It is
@@ -403,7 +370,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/fbn/fbn.env
-ExecStart=/home/alice/.local/venvs/fbn/bin/fbn check --id my-group --browser chromium --headless --acknowledge-automation-risk
+ExecStart=/home/alice/.local/venvs/fbn/bin/fbn check --id my-group --browser chromium --headless
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -453,8 +420,7 @@ schedule may invoke the one-shot command:
 fbn check \
   --id my-group \
   --browser chromium \
-  --headless \
-  --acknowledge-automation-risk
+  --headless
 ```
 
 Set `FBN_APPRISE_URL`, `FBN_PROFILE_DIR`, and `FBN_STATE_FILE` in the execution
@@ -484,8 +450,7 @@ values into the terminal.
 ### Checkpoint, CAPTCHA, consent, or account action
 
 Automation stops deliberately. Open `fbn login`, resolve the page personally,
-and decide whether continued automation is permitted and acceptable. `fbn`
-does not route around the challenge.
+then resume the local monitor.
 
 ### Profile already in use
 
@@ -495,14 +460,22 @@ profile lock prevents concurrent processes from corrupting browser state.
 ### Unsupported or changed layout
 
 `fbn` fails closed instead of treating an unrecognized page as an empty group.
-Update `fbn` and retry once. Repeated retries do not repair a selector change and
-may increase account risk.
+Update `fbn` and retry once. Repeated retries do not repair a selector change.
 
 ### No notification on the first check
 
 This is the expected baseline behavior. A later unseen post creates a pending
 notification. To test rendering without delivery, use `--dry-run`; dry-run
 events remain pending and may appear again.
+
+### An older post appeared in the feed
+
+Facebook can reorder, pin, or later expose a post that `fbn` has not identified
+before. The post is recorded as seen, but it is notified only when Facebook's
+rendered publication date is today in `--timezone`. This is a calendar-day
+boundary, not a rolling 24-hour window: a post from 11:59 PM yesterday is
+ineligible after midnight, while a post from early this morning remains
+eligible late tonight. Unknown timestamp layouts fail closed.
 
 ## Migrating from fbn 0.1
 
@@ -545,16 +518,9 @@ python -m twine check dist/*
 docker build --tag fbn:local .
 ```
 
-Tests use synthetic local pages and fake notification transports. They must
-never use Facebook credentials, private group content, or live Facebook
-requests.
-
-The PyPI workflow runs only for a published GitHub release whose tag matches the
-package version. PyPI must have a Trusted Publisher configured for this
-repository, the `python-publish.yml` workflow, and the `pypi` GitHub
-environment. There is no stored API-token fallback.
+Automated tests use synthetic local pages and fake notification transports.
 
 ## License
 
-`fbn` is distributed under the MIT License. See the
+The source code is available under the MIT License. See the
 [license](https://github.com/viseshrp/fbn/blob/main/LICENSE).

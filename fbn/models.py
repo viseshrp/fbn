@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def _require_non_empty(value: str, field_name: str) -> None:
@@ -15,6 +16,20 @@ def _require_non_empty(value: str, field_name: str) -> None:
 def _require_non_negative(value: int, field_name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _require_timezone_name(value: str) -> None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 255
+    ):
+        raise ValueError("timezone_name must be an IANA timezone name")
+    try:
+        ZoneInfo(value)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise ValueError("timezone_name must be an IANA timezone name") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +56,7 @@ class Post:
     observed_at: datetime
     position: int
     partial: bool = False
+    published_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.group_key, "group_key")
@@ -55,6 +71,14 @@ class Post:
         _require_non_negative(self.position, "position")
         if not isinstance(self.partial, bool):
             raise ValueError("partial must be a boolean")
+        if self.published_at is not None:
+            if not isinstance(self.published_at, datetime):
+                raise ValueError("published_at must be a datetime or None")
+            if (
+                self.published_at.tzinfo is None
+                or self.published_at.utcoffset() is None
+            ):
+                raise ValueError("published_at must be timezone-aware")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +90,7 @@ class ScanPolicy:
     stagnant_scrolls: int = 2
     navigation_timeout_seconds: float = 30
     settle_seconds: float = 1
+    timezone_name: str = "UTC"
 
     def __post_init__(self) -> None:
         if (
@@ -100,6 +125,7 @@ class ScanPolicy:
             or self.settle_seconds < 0
         ):
             raise ValueError("settle_seconds must be non-negative")
+        _require_timezone_name(self.timezone_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,12 +183,14 @@ class ObservationBatch:
 
     baseline: bool
     inserted: int
+    queued: int
     pending: tuple[PendingNotification, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.baseline, bool):
             raise ValueError("baseline must be a boolean")
         _require_non_negative(self.inserted, "inserted")
+        _require_non_negative(self.queued, "queued")
         if not isinstance(self.pending, tuple) or not all(
             isinstance(item, PendingNotification) for item in self.pending
         ):

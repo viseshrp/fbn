@@ -8,7 +8,10 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import dateparser
 
 from .exceptions import ConfigurationError
 from .models import GroupRef, Post
@@ -26,7 +29,19 @@ _POST_PATH_RE = re.compile(
     rf"^/groups/(?P<group>{_GROUP_KEY_PATTERN})/"
     rf"(?P<kind>posts|permalink)/(?P<post>{_POST_ID_PATTERN})/?$"
 )
+_PHOTO_SET_RE = re.compile(rf"^gm\.(?P<post>{_POST_ID_PATTERN})$")
 _WHITESPACE_RE = re.compile(r"\s+")
+_CLOCK_PATTERN = r"(?:[01]?[0-9]|2[0-3]):[0-5][0-9]"
+_FACEBOOK_TIMESTAMP_RE = re.compile(
+    r"^(?:"
+    r"just now"
+    r"|[0-9]+\s*[smhdw]"
+    r"|[0-9]+\s+(?:seconds?|minutes?|hours?|days?|weeks?)\s+ago"
+    rf"|(?:today|yesterday)\s+at\s+{_CLOCK_PATTERN}"
+    rf"|[0-9]{{1,2}}\s+[A-Za-z]+\s+at\s+{_CLOCK_PATTERN}"
+    r")$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,25 +112,44 @@ def chronological_group_url(group: GroupRef) -> str:
 
 
 def parse_post_url(value: object) -> PostLink | None:
-    """Parse a canonical Facebook group post/permalink URL, if valid."""
+    """Parse a supported Facebook group post identity URL, if valid."""
 
     if not isinstance(value, str):
         return None
 
     path = _facebook_path(value)
     match = _POST_PATH_RE.fullmatch(path) if path is not None else None
-    if match is None:
+    if match is not None:
+        group_key = match.group("group")
+        post_id = match.group("post")
+        kind = match.group("kind")
+        canonical_url = f"{FACEBOOK_ORIGIN}/groups/{group_key}/{kind}/{post_id}/"
+    elif path in {"/photo", "/photo/"}:
+        parsed = urlsplit(value)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        set_values = query.get("set", ())
+        group_values = query.get("idorvanity", ())
+        photo_match = (
+            _PHOTO_SET_RE.fullmatch(set_values[0]) if len(set_values) == 1 else None
+        )
+        if (
+            photo_match is None
+            or len(group_values) != 1
+            or _SIMPLE_GROUP_RE.fullmatch(group_values[0]) is None
+        ):
+            return None
+        group_key = group_values[0]
+        post_id = photo_match.group("post")
+        canonical_url = f"{FACEBOOK_ORIGIN}/groups/{group_key}/posts/{post_id}/"
+    else:
         return None
 
-    group_key = match.group("group")
-    post_id = match.group("post")
     if post_id.isdigit() and post_id.startswith("0"):
         return None
-    kind = match.group("kind")
     return PostLink(
         group_key=group_key,
         post_id=post_id,
-        url=f"{FACEBOOK_ORIGIN}/groups/{group_key}/{kind}/{post_id}/",
+        url=canonical_url,
     )
 
 
@@ -129,6 +163,52 @@ def normalize_visible_text(value: object, *, limit: int) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     normalized = _WHITESPACE_RE.sub(" ", normalized).strip()
     return normalized[:limit].rstrip()
+
+
+def parse_facebook_timestamp(
+    value: object,
+    observed_at: datetime,
+    *,
+    timezone_name: str = "UTC",
+) -> datetime | None:
+    """Parse one rendered English Facebook timestamp in an IANA timezone."""
+
+    if (
+        not isinstance(observed_at, datetime)
+        or observed_at.tzinfo is None
+        or observed_at.utcoffset() is None
+    ):
+        raise ValueError("observed_at must be a timezone-aware datetime")
+    try:
+        local_timezone = ZoneInfo(timezone_name)
+    except (TypeError, ValueError, ZoneInfoNotFoundError) as exc:
+        raise ValueError("timezone_name must be an IANA timezone name") from exc
+    if not isinstance(value, str):
+        return None
+
+    text = normalize_visible_text(value, limit=128)
+    if not text or _FACEBOOK_TIMESTAMP_RE.fullmatch(text) is None:
+        return None
+
+    relative_base = observed_at.astimezone(local_timezone)
+    try:
+        parsed = dateparser.parse(
+            text,
+            languages=["en"],
+            settings={
+                "DATE_ORDER": "DMY",
+                "PREFER_DATES_FROM": "past",
+                "RELATIVE_BASE": relative_base,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "TIMEZONE": timezone_name,
+                "TO_TIMEZONE": timezone_name,
+            },
+        )
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(local_timezone)
 
 
 def _require_positive_int(value: object, *, name: str) -> None:
@@ -151,6 +231,7 @@ def extract_posts(
     *,
     text_limit: int = DEFAULT_TEXT_LIMIT,
     allowed_group_keys: Collection[str] | None = None,
+    timezone_name: str = "UTC",
 ) -> tuple[Post, ...]:
     """Convert ordered DOM payloads into bounded, deduplicated posts.
 
@@ -199,6 +280,11 @@ def extract_posts(
             observed_at=observed_at,
             position=position,
             partial=payload.get("partial") is True,
+            published_at=parse_facebook_timestamp(
+                payload.get("timestamp"),
+                observed_at,
+                timezone_name=timezone_name,
+            ),
         )
         extracted.append((position, source_index, post))
         seen_post_ids.add(link.post_id)

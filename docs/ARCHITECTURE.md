@@ -138,8 +138,7 @@ No raw HTML, cookies, screenshot, or browser trace is included.
 The source authentication file is read without modification and is not copied
 wholesale into the profile. On Docker, only the profile-gated bootstrap service
 receives it as `/run/secrets/facebook_auth`; the monitor service never mounts
-it. The import establishes authentication only. It neither extends the
-account's authorization nor bypasses a site control.
+it.
 
 ### Optional headed recovery
 
@@ -193,17 +192,27 @@ The page returns a minimal list of DOM payloads:
   "href": "https://www.facebook.com/groups/example/posts/123/",
   "text": "Visible post text",
   "author": "Optional author",
+  "timestamp": "12m",
   "position": 0
 }
 ```
 
 `fbn.extractor` then validates the host/scheme, parses group and post IDs,
 removes query/fragment tracking data, normalizes Unicode/whitespace, enforces
-text limits, and deduplicates IDs while retaining the first visible position.
+text limits, parses the rendered Facebook timestamp with `dateparser`, and
+deduplicates IDs while retaining the first visible position. Parsing uses the
+scan time as an explicit relative base and the configured IANA timezone. The
+Playwright context uses that same timezone so rendering, parsing, and calendar
+comparison share one boundary. The browser reconstructs timestamp text from
+glyphs whose rendered rectangles intersect the timestamp link, excluding
+Facebook's off-rectangle character decoys.
 Facebook can redirect a numeric group URL while rendering its post permalinks
 under a custom group alias. The browser adapter accepts one such alias only
 when it is the sole candidate in the visible group-navigation tablist; related
 group links and feed content are never trusted as identity evidence.
+Photo-only posts are identified from a strict Facebook photo link containing
+both `set=gm.<post-id>` and `idorvanity=<group-id>`, then canonicalized to the
+same group-post URL used by state and notifications.
 
 Selectors are kept in one module. Local sanitized fixture tests cover both
 `/posts/` and `/permalink/` forms, duplicate/shared links, missing author/text,
@@ -212,6 +221,13 @@ pinned/reordered content, and unrecognized layouts.
 ## SQLite state and outbox
 
 SQLite runs in WAL mode with foreign keys enabled.
+
+All supported unseen posts enter `posts`, even when their publication time is
+from another day or unavailable. The outbox gate is separate: after baseline
+initialization, only posts with a confidently parsed publication date equal to
+the scan's calendar date in the configured timezone are queued. This is not a
+rolling 24-hour comparison. Existing pending events remain retryable after the
+calendar day changes.
 
 ```sql
 CREATE TABLE groups (
@@ -337,8 +353,7 @@ by optional headed recovery.
 - `python -m playwright install --with-deps chromium` installs the matching
   Chromium build and Ubuntu libraries.
 - The user runs fully headless `fbn bootstrap` once with an owner-protected
-  authentication export, group ID, Chromium selection, and the explicit risk
-  acknowledgment.
+  authentication export, group ID, and Chromium selection.
 - The service then runs
   `fbn monitor --browser chromium --headless ...` without a permanent display.
 - The profile remains owner-only. Newly created state parents are owner-only,
@@ -346,9 +361,9 @@ by optional headed recovery.
   remain private across service restarts.
 - Optional headed recovery needs a trusted display, but initial bootstrap does
   not.
-- A release is not considered ARM64-ready until the sanitized fixture suite
+- ARM64 validation is complete when the sanitized fixture suite
   launches the real Playwright-managed regular Chromium binary headlessly on a
-  native Ubuntu ARM64 target, including the Raspberry Pi 4 release target.
+  native Ubuntu ARM64 target, including the Raspberry Pi 4 hardware target.
 
 ### Ubuntu container
 
@@ -400,8 +415,6 @@ permits only one browser context.
 The container contract is:
 
 - run as a dedicated non-root UID/GID;
-- add no stealth, fingerprint-spoofing, webdriver-hiding, or other
-  anti-detection flags;
 - mount the authentication export only into the one-shot bootstrap service as a
   read-only `/run/secrets` file, never into the monitor or an environment
   variable;
@@ -418,7 +431,7 @@ The container contract is:
   open the authenticated profile, or claim that the Facebook account/group is
   healthy.
 
-Docker release validation includes configuration expansion for the default and
+Docker validation includes configuration expansion for the default and
 bootstrap profiles, an assertion that only bootstrap receives
 `facebook_auth`, native or Buildx builds for both target architectures,
 non-root/runtime smoke checks, persistent-volume replacement, and inspection of

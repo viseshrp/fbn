@@ -42,12 +42,75 @@ DOM_SCAN_SCRIPT = """
 (includeContent) => {
   const linkSelector =
     'a[href*="/groups/"][href*="/posts/"],' +
-    'a[href*="/groups/"][href*="/permalink/"]';
+    'a[href*="/groups/"][href*="/permalink/"],' +
+    'a[href*="/photo/"][href*="set=gm."][href*="idorvanity="]';
   const itemSelector =
     '[role="article"],[aria-posinset],[data-pagelet*="FeedUnit"]';
+  const positionedItemSelector =
+    '[aria-posinset],[data-pagelet*="FeedUnit"]';
   const feedSelector = '[role="feed"],[data-pagelet*="GroupFeed"]';
   const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
     (root) => root.getClientRects().length > 0
+  );
+  const cleanContainerText = (container, authorElement) => {
+    let text = (container.innerText || '').trim();
+    text = text.replace(/^(?:Facebook\\s+){2,}/i, '').trim();
+
+    const author = authorElement
+      ? (authorElement.innerText || '').trim()
+      : '';
+    if (author && text.startsWith(author)) {
+      const separator = text.indexOf('·', author.length);
+      if (separator >= 0 && separator <= author.length + 512) {
+        text = text.slice(separator + 1).trim();
+      }
+    }
+    text = text.replace(/^Follow(?:\\s+\\S){8,}?\\s+·\\s*/i, '').trim();
+    text = text.replace(/(?:\\s+Facebook){2,}\\s*$/i, '').trim();
+    return text;
+  };
+  const visualText = (element) => {
+    const bounds = element.getBoundingClientRect();
+    const leaves = Array.from(element.querySelectorAll('*'))
+      .filter((candidate) => (
+        candidate.children.length === 0
+        && (candidate.textContent || '').length > 0
+      ))
+      .map((candidate) => ({
+        text: candidate.textContent || '',
+        bounds: candidate.getBoundingClientRect(),
+        style: getComputedStyle(candidate),
+      }))
+      .filter((candidate) => (
+        candidate.bounds.width > 0
+        && candidate.bounds.height > 0
+        && candidate.bounds.bottom > bounds.top
+        && candidate.bounds.top < bounds.bottom
+        && candidate.bounds.right > bounds.left
+        && candidate.bounds.left < bounds.right
+        && candidate.style.visibility !== 'hidden'
+        && candidate.style.display !== 'none'
+        && candidate.style.opacity !== '0'
+      ))
+      .sort((left, right) => (
+        Math.abs(left.bounds.y - right.bounds.y) < 2
+          ? left.bounds.x - right.bounds.x
+          : left.bounds.y - right.bounds.y
+      ));
+    const rendered = leaves.length
+      ? leaves.map((candidate) => candidate.text).join('')
+      : (element.innerText || '');
+    return rendered.replace(/\\s+/g, ' ').trim();
+  };
+  const isTimestampText = (value) => (
+    /^(?:just now|[0-9]+\\s*[smhdw])$/i.test(value)
+    || /^[0-9]+\\s+(?:seconds?|minutes?|hours?|days?|weeks?)\\s+ago$/i.test(
+      value
+    )
+    || /^(?:today|yesterday)\\s+at\\s+(?:[01]?[0-9]|2[0-3]):[0-5][0-9]$/i
+      .test(value)
+    || /^[0-9]{1,2}\\s+[A-Za-z]+\\s+at\\s+(?:[01]?[0-9]|2[0-3]):[0-5][0-9]$/i
+      .test(value)
   );
   const semanticItems = feedRoots.flatMap(
     (root) => Array.from(root.querySelectorAll(itemSelector))
@@ -83,9 +146,29 @@ DOM_SCAN_SCRIPT = """
     seenContainers.add(container);
 
     const candidates = Array.from(container.querySelectorAll(linkSelector));
-    const directCandidates = candidates.filter(
-      (candidate) => candidate.closest(itemSelector) === container
-    );
+    const directCandidates = candidates.filter((candidate) => {
+      const positionedItem = candidate.closest(positionedItemSelector);
+      if (container.matches(positionedItemSelector)) {
+        if (positionedItem !== container) {
+          return false;
+        }
+
+        // Current Facebook markup places the actual post article inside a
+        // separate aria-posinset feed wrapper. Permit that one semantic
+        // article layer, but reject deeper quoted/shared post articles.
+        let articleDepth = container.matches('[role="article"]') ? 1 : 0;
+        let cursor = candidate.parentElement;
+        while (cursor && cursor !== container) {
+          if (cursor.matches('[role="article"]')) {
+            articleDepth += 1;
+          }
+          cursor = cursor.parentElement;
+        }
+        return cursor === container && articleDepth <= 1;
+      }
+
+      return candidate.closest(itemSelector) === container;
+    });
     const selected = directCandidates[0];
     if (!selected) {
       // Never promote the permalink from a nested quoted/shared post to the
@@ -98,17 +181,27 @@ DOM_SCAN_SCRIPT = """
     const collapsed = Boolean(
       container.querySelector('[aria-expanded="false"]')
     );
+    const timestampLinks = Array.from(container.querySelectorAll('a'));
+    const trackedTimestamp = timestampLinks.find((candidate) => (
+      (candidate.getAttribute('href') || '').includes('__tn__=%2CO')
+      && isTimestampText(visualText(candidate))
+    ));
+    const selectedText = visualText(selected);
+    const timestamp = trackedTimestamp
+      ? visualText(trackedTimestamp)
+      : (isTimestampText(selectedText) ? selectedText : '');
 
     payloads.push(
       includeContent
         ? {
             href: selected.href || selected.getAttribute('href') || '',
-            text: (container.innerText || '').trim(),
+            text: cleanContainerText(container, authorElement),
             author: authorElement
               ? (authorElement.innerText || '').trim()
               : null,
             partial: collapsed,
             position: payloads.length,
+            timestamp,
           }
         : null
     );
@@ -609,8 +702,10 @@ class PlaywrightPostSource:
     def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
         """Fetch a bounded, deterministic sample from the visible group feed."""
 
-        observed_at = datetime.now(timezone.utc)
-        with self._context(headless=self.settings.headless) as context:
+        with self._context(
+            headless=self.settings.headless,
+            timezone_id=policy.timezone_name,
+        ) as context:
             page: Page | None = None
             try:
                 page = context.new_page()
@@ -637,6 +732,7 @@ class PlaywrightPostSource:
                         bounded=False,
                     )
 
+                observed_at = datetime.now(timezone.utc)
                 posts = self._scan_feed(page, group, policy, observed_at)
                 if not posts:
                     raise LayoutChangedError(
@@ -690,6 +786,7 @@ class PlaywrightPostSource:
                 observed_at,
                 limit=policy.sample_count,
                 allowed_group_keys=allowed_group_keys,
+                timezone_name=policy.timezone_name,
             )
             for post in extracted:
                 if post.post_id in seen_ids:
@@ -759,6 +856,7 @@ class PlaywrightPostSource:
         *,
         headless: bool,
         acquire_lock: bool = True,
+        timezone_id: str | None = None,
     ) -> Iterator[BrowserContext]:
         profile_dir = self._prepare_profile()
         if acquire_lock:
@@ -767,12 +865,17 @@ class PlaywrightPostSource:
                 self._open_context(
                     profile_dir,
                     headless=headless,
+                    timezone_id=timezone_id,
                 ) as context,
             ):
                 yield context
             return
 
-        with self._open_context(profile_dir, headless=headless) as context:
+        with self._open_context(
+            profile_dir,
+            headless=headless,
+            timezone_id=timezone_id,
+        ) as context:
             yield context
 
     @contextmanager
@@ -781,6 +884,7 @@ class PlaywrightPostSource:
         profile_dir: Path,
         *,
         headless: bool,
+        timezone_id: str | None,
     ) -> Iterator[BrowserContext]:
         marker_missing = self._check_profile_browser(profile_dir)
         stack = ExitStack()
@@ -799,6 +903,7 @@ class PlaywrightPostSource:
                 playwright,
                 profile_dir=profile_dir,
                 headless=headless,
+                timezone_id=timezone_id,
             )
             if marker_missing:
                 self._write_profile_browser_marker(profile_dir)
@@ -874,6 +979,7 @@ class PlaywrightPostSource:
         *,
         profile_dir: Path,
         headless: bool,
+        timezone_id: str | None,
     ) -> BrowserContext:
         kwargs: dict[str, object] = {
             "headless": headless,
@@ -881,6 +987,8 @@ class PlaywrightPostSource:
         }
         if not headless:
             kwargs["no_viewport"] = True
+        if timezone_id is not None:
+            kwargs["timezone_id"] = timezone_id
 
         browser = self.settings.browser
         if browser == "chrome":

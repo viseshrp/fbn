@@ -4,9 +4,9 @@
 
 `fbn` monitors the recent visible posts in one Facebook group and sends a
 notification when it observes a new post. It is a local, pip-installable command
-line tool for a user who already has legitimate access to the group. It must run
-unattended after setup on Ubuntu ARM64, including a Raspberry Pi 4, and in an
-Ubuntu-based container on either `linux/amd64` or `linux/arm64`.
+line tool for unreleased, local academic research. It must run unattended after
+setup on Ubuntu ARM64, including a Raspberry Pi 4, and in an Ubuntu-based
+container on either `linux/amd64` or `linux/arm64`.
 
 The 0.2 rewrite replaces direct HTTP/mobile-page scraping and repeated
 credential submission with a persistent browser profile bootstrapped from an
@@ -17,14 +17,13 @@ existing authenticated session.
 ### Install and authenticate
 
 ```console
-python -m pip install fbn
+python -m pip install .
 python -m playwright install chromium
 chmod 600 /private/path/facebook-auth.json
 fbn bootstrap \
   --auth-file /private/path/facebook-auth.json \
   -i my-group \
-  --browser chromium \
-  --acknowledge-automation-risk
+  --browser chromium
 ```
 
 `fbn bootstrap` is fully headless and noninteractive. It imports Facebook-domain
@@ -39,23 +38,20 @@ An installed stable Chrome channel remains an optional desktop alternative:
 fbn bootstrap \
   --auth-file /private/path/facebook-auth.json \
   -i my-group \
-  --browser chrome \
-  --acknowledge-automation-risk
+  --browser chrome
 ```
 
 On Ubuntu ARM64 and Raspberry Pi 4, the supported server runtime is
 Playwright-managed regular Chromium:
 
 ```console
-python -m pip install fbn
+python -m pip install .
 python -m playwright install --with-deps chromium
 fbn bootstrap \
   --auth-file /private/path/facebook-auth.json \
   -i my-group \
-  --browser chromium \
-  --acknowledge-automation-risk
-fbn monitor --id my-group --browser chromium --headless \
-  --acknowledge-automation-risk
+  --browser chromium
+fbn monitor --id my-group --browser chromium --headless
 ```
 
 Bootstrap and monitoring use the same dedicated profile path. No display, X11,
@@ -69,8 +65,7 @@ path only when the user must personally resolve an account action.
 fbn check \
   --id my-group \
   --browser chromium \
-  --apprise-url 'json://localhost:8000/notify' \
-  --acknowledge-automation-risk
+  --apprise-url 'json://localhost:8000/notify'
 ```
 
 The first successful check establishes a baseline. Later checks notify only for
@@ -84,8 +79,7 @@ fbn monitor \
   --browser chromium \
   --every 1h \
   --to 3h \
-  --apprise-url 'mailto://user:token@example.com' \
-  --acknowledge-automation-risk
+  --apprise-url 'mailto://user:token@example.com'
 ```
 
 `monitor` sleeps for a random duration in the inclusive range after each check.
@@ -133,7 +127,7 @@ content.
   `FBN_PROFILE_DIR`.
 - The profile directory is created with owner-only permissions on Unix.
 - `fbn bootstrap --auth-file PATH -i GROUP` is fully headless and
-  noninteractive and requires `--acknowledge-automation-risk`.
+  noninteractive.
 - Supported inputs are a Playwright storage-state JSON object with a `cookies`
   array, an exported-cookie JSON array, and Netscape `cookies.txt`.
 - The source file is bounded to 10 MiB and decoded as UTF-8. Cookie names and
@@ -171,7 +165,7 @@ content.
 - Chromium and headless operation are the defaults for bootstrap, checks, and
   monitoring.
 - `--headed` is an explicit check/monitor troubleshooting opt-in on a trusted
-  display. It is not an anti-detection mode.
+  display.
 - Unattended service definitions retain explicit `--headless` for operational
   clarity even though it is the default.
 - The browser uses its native user agent and fingerprint. `fbn` does not spoof
@@ -179,6 +173,9 @@ content.
 - A check limits navigation time, number of extracted posts, number of scrolls,
   and consecutive stagnant scrolls.
 - A sample count must be between 1 and 50.
+- `--timezone` accepts an IANA timezone name and defaults to `UTC`. It controls
+  browser rendering, timestamp interpretation, and the same-day notification
+  boundary.
 
 ### FR-3: page-state classification
 
@@ -196,11 +193,17 @@ the same run.
 
 ### FR-4: post extraction
 
-- Identity comes from canonical `/groups/<group>/posts/<post>` or
-  `/groups/<group>/permalink/<post>` links.
+- Identity comes from canonical `/groups/<group>/posts/<post>`,
+  `/groups/<group>/permalink/<post>`, or group-photo
+  `photo/?set=gm.<post>&idorvanity=<group>` links.
 - Tracking query parameters are removed from stored URLs.
-- Each post contains a stable ID, canonical URL, normalized visible text, and an
-  optional author.
+- Each post contains a stable ID, canonical URL, normalized visible text, an
+  optional author, and a parsed publication time when Facebook's rendered
+  timestamp is recognized.
+- Allowlisted English Facebook timestamp forms are parsed with `dateparser`
+  using the timezone-aware scan time as an explicit relative base.
+- Facebook's timestamp character decoys are excluded by retaining only glyphs
+  rendered inside the timestamp link's visible rectangle.
 - Text is capped to prevent unbounded notification/state size.
 - Generated class names are not part of the primary selector contract.
 - Results are deterministically ordered by their visible feed order.
@@ -221,6 +224,14 @@ the same run.
 - The first non-empty successful scan is a baseline unless `--notify-initial`
   is explicitly supplied.
 - New posts and their outbox entries are inserted atomically.
+- Every unseen supported post is stored for deduplication. An initialized group
+  creates an outbox entry only when the post has a recognized Facebook
+  publication date equal to the current calendar date in `--timezone`.
+- The eligibility rule is a calendar comparison, not an elapsed-age comparison.
+  A post immediately before midnight is ineligible immediately after midnight,
+  while a post from early today remains eligible late today.
+- Missing, malformed, materially future-skewed, or other-day publication
+  timestamps fail closed: the post is marked seen but is not notified.
 - Failed notification entries remain pending across process restarts.
 - Delivery is at-least-once: a process crash after a send but before its commit
   may cause a duplicate, but it must not silently lose a pending post.
@@ -272,8 +283,7 @@ the same run.
   Playwright-managed regular Chromium path described in FR-2.
 - The project provides an Ubuntu 24.04 container definition that can build for
   `linux/amd64` and `linux/arm64`.
-- The runtime container is non-root and adds no stealth or anti-detection
-  browser flags.
+- The runtime container is non-root.
 - Browser profile and SQLite state paths are mounted on one persistent,
   owner-controlled volume and survive container replacement.
 - Facebook authentication is created by a fully headless, one-shot
@@ -291,35 +301,24 @@ the same run.
   the internal scheduler; authentication, account-action, access, profile, and
   layout hard-stop exits remain stopped for operator action.
 - Authentication and Apprise secrets are injected only at runtime and are
-  absent from image build arguments, layers, and published image metadata. The
+  absent from image build arguments, layers, and image metadata. The
   documented authentication source lives outside the build context.
 - The health check is exactly a local `python -c 'import fbn'` package probe. It
   must not invoke `check` or `monitor`, launch a browser, navigate to Facebook,
   inspect the authenticated profile, or infer account/group health.
 
-## Compliance and safety requirements
+## Local security requirements
 
-- The CLI and README must state that Meta may prohibit automated collection
-  without prior permission even for a logged-in account.
-- `bootstrap`, `check`, and `monitor` require
-  `--acknowledge-automation-risk`.
-- No CAPTCHA solving, proxy rotation, fingerprint spoofing, webdriver hiding,
-  stealth browser fork, private GraphQL replay, or undocumented API call is
-  included.
 - Browser challenges are hard stops. A user may provide a fresh authenticated
   export or personally resolve the action with optional headed `fbn login`.
 - The tool does not upload browser profiles, cookies, traces, screenshots, or
   extracted group content.
-- Authentication import establishes a browser session only; it does not grant
-  collection permission, authorize data access the account does not already
-  have, or evade a Facebook control.
 - Container deployment does not expose its authentication secret, persistent
   volume, display, VNC, or browser-debugging endpoint to an untrusted network.
 - Live Facebook credentials and content are forbidden in tests and CI.
 
 ## Non-goals
 
-- Guaranteed undetectability or avoidance of account action.
 - Bulk group scraping, historical export, comments, reactions, member lists, or
   media downloads.
 - Meta Graph API integration.
@@ -362,15 +361,14 @@ The rewrite is complete when:
    filtering, storage-origin exclusion, size and shape validation, secret-free
    errors, group-access validation, and rollback on bootstrap failure;
 6. no runtime dependency on `facebook-scraper`, `schedule`, Tenacity,
-   browser-use, or a stealth browser remains;
+   or browser-use remains;
 7. no test contacts Facebook;
 8. Ruff, pytest, build, Twine validation, clean-wheel smoke tests, and
    `git diff --check` pass;
-9. CI runs on pushes and pull requests, while PyPI publishing remains restricted
-   to a deliberate release event;
+9. CI runs on pushes and pull requests, with no package-publication workflow;
 10. a sanitized local-page integration test launches the actual
    Playwright-managed regular Chromium browser headlessly on native Ubuntu
-   ARM64, including a Raspberry Pi 4 release target, and does not contact
+   ARM64, including a Raspberry Pi 4 hardware target, and does not contact
    Facebook;
 11. the Ubuntu 24.04 container configuration validates and the image builds for
     both `linux/amd64` and `linux/arm64`;

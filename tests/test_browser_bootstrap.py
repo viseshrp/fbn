@@ -76,6 +76,7 @@ class FakeContext:
         self.new_page_error = new_page_error
         self.requested_headless: list[bool] = []
         self.requested_lock: list[bool] = []
+        self.requested_timezone: list[str | None] = []
         self.cookie_reads = 0
         self.cookie_error_reads = cookie_error_reads or set()
         self.closed = False
@@ -124,9 +125,11 @@ def source_with_context(
         *,
         headless: bool,
         acquire_lock: bool = True,
+        timezone_id: str | None = None,
     ) -> Iterator[FakeContext]:
         context.requested_headless.append(headless)
         context.requested_lock.append(acquire_lock)
+        context.requested_timezone.append(timezone_id)
         yield context
 
     monkeypatch.setattr(source, "_context", fake_context)
@@ -357,6 +360,7 @@ def test_fetch_maps_generic_playwright_navigation_error_to_transient(
     assert context.page.closed is True
     assert context.requested_headless == [True]
     assert context.requested_lock == [True]
+    assert context.requested_timezone == ["UTC"]
 
 
 @pytest.mark.parametrize("operation", ["bootstrap", "fetch", "login"])

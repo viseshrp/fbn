@@ -214,6 +214,10 @@ def test_browser_settings_validate_choice_and_executable_pairing(
         ("navigation_timeout_seconds", float("inf")),
         ("settle_seconds", -0.1),
         ("settle_seconds", float("nan")),
+        ("timezone_name", ""),
+        ("timezone_name", " America/New_York"),
+        ("timezone_name", "Mars/Olympus_Mons"),
+        ("timezone_name", 123),
     ],
 )
 def test_scan_policy_rejects_unbounded_or_invalid_values(
@@ -225,8 +229,9 @@ def test_scan_policy_rejects_unbounded_or_invalid_values(
 
 
 def test_scan_policy_is_frozen_and_has_no_instance_dictionary() -> None:
-    policy = ScanPolicy()
+    policy = ScanPolicy(timezone_name="America/New_York")
 
     assert not hasattr(policy, "__dict__")
+    assert policy.timezone_name == "America/New_York"
     with pytest.raises(FrozenInstanceError):
         policy.sample_count = 20

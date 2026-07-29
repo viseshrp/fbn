@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -39,7 +39,11 @@ def _fixture(name: str) -> str:
 
 
 @contextmanager
-def _local_context(tmp_path: Path) -> Iterator[object]:
+def _local_context(
+    tmp_path: Path,
+    *,
+    timezone_id: str | None = None,
+) -> Iterator[object]:
     requested = os.environ.get("FBN_TEST_BROWSER", "chromium")
     settings = BrowserSettings(
         browser=requested,
@@ -48,7 +52,10 @@ def _local_context(tmp_path: Path) -> Iterator[object]:
     )
     source = PlaywrightPostSource(settings)
     try:
-        with source._context(headless=True) as context:
+        with source._context(
+            headless=True,
+            timezone_id=timezone_id,
+        ) as context:
             yield context
             return
     except BrowserUnavailableError:
@@ -66,10 +73,26 @@ def _local_context(tmp_path: Path) -> Iterator[object]:
         )
     )
     try:
-        with fallback._context(headless=True) as context:
+        with fallback._context(
+            headless=True,
+            timezone_id=timezone_id,
+        ) as context:
             yield context
     except BrowserUnavailableError:
         pytest.skip("no local Playwright Chromium or Chrome browser is installed")
+
+
+def test_headless_browser_uses_configured_timezone(tmp_path: Path) -> None:
+    with _local_context(tmp_path, timezone_id="America/New_York") as context:
+        page = context.new_page()
+        try:
+            timezone_id = page.evaluate(
+                "() => Intl.DateTimeFormat().resolvedOptions().timeZone"
+            )
+        finally:
+            page.close()
+
+    assert timezone_id == "America/New_York"
 
 
 def test_headless_browser_classifies_all_sanitized_page_states(
@@ -123,7 +146,59 @@ def test_headless_browser_extracts_ordered_visible_posts(tmp_path: Path) -> None
     assert [post.author for post in posts] == ["Alice Example", "Bob Example"]
     assert "First visible post body" in posts[0].text
     assert posts[0].url == ("https://www.facebook.com/groups/test-group/posts/101/")
+    assert posts[0].published_at == observed_at - timedelta(minutes=2)
+    assert posts[1].published_at == observed_at - timedelta(minutes=5)
     assert posts[1].partial is True
+
+
+def test_headless_browser_accepts_one_article_inside_positioned_feed_item(
+    tmp_path: Path,
+) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("positioned_wrapper_feed.html"))
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+
+    posts = extract_posts(payloads, group, observed_at, limit=10)
+
+    assert len(payloads) == 1
+    assert [post.post_id for post in posts] == ["201"]
+    assert all(post.post_id != "999" for post in posts)
+    assert posts[0].author == "Alice Example"
+    assert not posts[0].text.startswith("Facebook")
+    assert not posts[0].text.endswith("Facebook")
+    assert "Follow" not in posts[0].text
+    assert "metadata" not in posts[0].text
+    assert "Visible post inside a positioned feed wrapper" in posts[0].text
+
+
+def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("photo_feed.html"))
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+
+    posts = extract_posts(payloads, group, observed_at, limit=10)
+
+    assert len(payloads) == 1
+    assert [post.post_id for post in posts] == ["202"]
+    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
+    assert posts[0].author == "Alice Example"
+    assert "Fresh produce!!" in posts[0].text
+    assert payloads[0]["timestamp"] == "41m"
+    assert posts[0].published_at == observed_at - timedelta(minutes=41)
 
 
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])

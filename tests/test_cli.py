@@ -131,7 +131,6 @@ def test_bootstrap_imports_auth_file_and_validates_headlessly(
             "pi-group",
             "--profile-dir",
             str(profile_dir),
-            "--acknowledge-automation-risk",
         ],
     )
 
@@ -153,26 +152,6 @@ def test_bootstrap_imports_auth_file_and_validates_headlessly(
     assert "foreign-secret" not in result.output
 
 
-def test_bootstrap_requires_risk_acknowledgement(tmp_path: Path) -> None:
-    auth_file = tmp_path / "facebook-auth.json"
-    auth_file.write_text("[]", encoding="utf-8")
-
-    result = CliRunner().invoke(
-        cli.main,
-        [
-            "bootstrap",
-            "--auth-file",
-            str(auth_file),
-            "--id",
-            "pi-group",
-        ],
-        env={"FBN_ACKNOWLEDGE_AUTOMATION_RISK": ""},
-    )
-
-    assert result.exit_code == 2
-    assert "acknowledge-automation-risk" in result.output
-
-
 def test_verbose_logging_does_not_enable_dependency_or_root_debug() -> None:
     root_logger = logging.getLogger()
     apprise_logger = logging.getLogger("apprise")
@@ -191,25 +170,7 @@ def test_verbose_logging_does_not_enable_dependency_or_root_debug() -> None:
         apprise_logger.disabled = original_disabled
 
 
-@pytest.mark.parametrize("command", ["check", "monitor"])
-def test_observation_commands_require_explicit_risk_acknowledgement(
-    command: str,
-) -> None:
-    result = CliRunner().invoke(
-        cli.main,
-        [command, "--id", "example-group", "--dry-run"],
-        env={
-            "FBN_ACKNOWLEDGE_AUTOMATION_RISK": "",
-            "FBN_APPRISE_URL": "",
-        },
-    )
-
-    assert result.exit_code == 2
-    assert "acknowledge-automation-risk" in result.output
-    assert "missing option" in result.output.lower()
-
-
-def test_risk_acknowledgement_environment_variable_satisfies_required_flag(
+def test_check_runs_without_release_acknowledgement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     called = False
@@ -230,50 +191,12 @@ def test_risk_acknowledgement_environment_variable_satisfies_required_flag(
     result = CliRunner().invoke(
         cli.main,
         ["check", "--id", "compose-group", "--dry-run"],
-        env={
-            "FBN_ACKNOWLEDGE_AUTOMATION_RISK": "true",
-            "FBN_APPRISE_URL": "",
-        },
+        env={"FBN_APPRISE_URL": ""},
     )
 
     assert result.exit_code == 0, result.output
     assert called is True
     assert "baseline: observed=0 new=0 delivered=0 pending=0" in result.output
-
-
-@pytest.mark.parametrize("value", ["false", "0"])
-@pytest.mark.parametrize("command", ["bootstrap", "check", "monitor"])
-def test_false_risk_acknowledgement_never_starts_command(
-    value: str,
-    command: str,
-    tmp_path: Path,
-) -> None:
-    arguments = [command]
-    if command == "bootstrap":
-        auth_file = tmp_path / "cookies.json"
-        auth_file.write_text("[]", encoding="utf-8")
-        arguments.extend(
-            [
-                "--auth-file",
-                str(auth_file),
-                "--id",
-                "example-group",
-            ]
-        )
-    else:
-        arguments.extend(["--id", "example-group", "--dry-run"])
-
-    result = CliRunner().invoke(
-        cli.main,
-        arguments,
-        env={
-            "FBN_ACKNOWLEDGE_AUTOMATION_RISK": value,
-            "FBN_APPRISE_URL": "",
-        },
-    )
-
-    assert result.exit_code == 2
-    assert "must be true" in result.output
 
 
 def test_check_propagates_headless_chromium_settings_without_apprise(
@@ -316,12 +239,13 @@ def test_check_propagates_headless_chromium_settings_without_apprise(
             "3",
             "--stagnant-scrolls",
             "1",
+            "--timezone",
+            "America/New_York",
             "--navigation-timeout",
             "45",
             "--settle-seconds",
             "0.5",
             "--dry-run",
-            "--acknowledge-automation-risk",
         ],
         env={"FBN_APPRISE_URL": ""},
     )
@@ -341,6 +265,7 @@ def test_check_propagates_headless_chromium_settings_without_apprise(
         sample_count=7,
         max_scrolls=3,
         stagnant_scrolls=1,
+        timezone_name="America/New_York",
         navigation_timeout_seconds=45,
         settle_seconds=0.5,
     )
@@ -359,7 +284,6 @@ def test_check_requires_apprise_unless_dry_run(tmp_path: Path) -> None:
             "example-group",
             "--profile-dir",
             str(tmp_path / "profile"),
-            "--acknowledge-automation-risk",
         ],
         env={"FBN_APPRISE_URL": ""},
     )
@@ -449,7 +373,6 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
             "--to",
             "30m",
             "--dry-run",
-            "--acknowledge-automation-risk",
         ],
         env={"FBN_APPRISE_URL": ""},
     )
@@ -499,7 +422,6 @@ def test_typed_failure_uses_stable_nonzero_exit_and_does_not_echo_secret(
             "example-group",
             "--apprise-url",
             secret,
-            "--acknowledge-automation-risk",
         ],
     )
 
@@ -525,7 +447,6 @@ def test_local_state_os_error_is_redacted_and_uses_stable_exit(
             "--id",
             "example-group",
             "--dry-run",
-            "--acknowledge-automation-risk",
         ],
         env={"FBN_APPRISE_URL": ""},
     )

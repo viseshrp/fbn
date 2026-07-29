@@ -14,10 +14,10 @@ services:
     stop_grace_period: 2m
     shm_size: "1gb"
     environment:
-      FBN_ACKNOWLEDGE_AUTOMATION_RISK: "${FBN_ACKNOWLEDGE_AUTOMATION_RISK:?Set FBN_ACKNOWLEDGE_AUTOMATION_RISK=true}"
       FBN_APPRISE_URL: "${FBN_APPRISE_URL:?Set FBN_APPRISE_URL to an Apprise URL}"
       FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
       FBN_STATE_FILE: /home/fbn/.local/share/fbn/state.sqlite3
+      FBN_TIMEZONE: "${FBN_TIMEZONE:-UTC}"
     volumes:
       - fbn-data:/home/fbn/.local/share/fbn
     command:
@@ -42,7 +42,6 @@ services:
     stop_grace_period: 2m
     shm_size: "1gb"
     environment:
-      FBN_ACKNOWLEDGE_AUTOMATION_RISK: "${FBN_ACKNOWLEDGE_AUTOMATION_RISK:?Set FBN_ACKNOWLEDGE_AUTOMATION_RISK=true}"
       FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
     volumes:
       - fbn-data:/home/fbn/.local/share/fbn
