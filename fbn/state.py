@@ -78,18 +78,18 @@ def _parse_timestamp(value: str) -> datetime:
     return _as_utc(parsed, "stored timestamp")
 
 
-def _is_recent_enough(
+def _is_same_calendar_day(
     post: Post,
     scan_time: datetime,
-    max_post_age: timedelta | None,
 ) -> bool:
-    if max_post_age is None:
-        return True
     if post.published_at is None:
         return False
     published_at = _as_utc(post.published_at, "published_at")
     age = scan_time - published_at
-    return -_MAX_FUTURE_SKEW <= age <= max_post_age
+    local_scan_time = scan_time.astimezone(post.published_at.tzinfo)
+    return (
+        age >= -_MAX_FUTURE_SKEW and local_scan_time.date() == post.published_at.date()
+    )
 
 
 def _event_id(group_key: str, post_id: str) -> str:
@@ -189,7 +189,7 @@ class SQLiteStateRepository:
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
-        max_post_age: timedelta | None = None,
+        same_day_only: bool = False,
     ) -> ObservationBatch:
         """Atomically store unseen posts and, when appropriate, outbox rows."""
 
@@ -197,10 +197,8 @@ class SQLiteStateRepository:
             raise ValueError("group must be a GroupRef")
         if not isinstance(notify_initial, bool):
             raise ValueError("notify_initial must be a boolean")
-        if max_post_age is not None and (
-            not isinstance(max_post_age, timedelta) or max_post_age <= timedelta(0)
-        ):
-            raise ValueError("max_post_age must be a positive timedelta or None")
+        if not isinstance(same_day_only, bool):
+            raise ValueError("same_day_only must be a boolean")
         scan_time = _as_utc(
             self._clock() if observed_at is None else observed_at,
             "observed_at",
@@ -270,7 +268,7 @@ class SQLiteStateRepository:
 
             if not baseline:
                 for post in inserted_posts:
-                    if not _is_recent_enough(post, scan_time, max_post_age):
+                    if same_day_only and not _is_same_calendar_day(post, scan_time):
                         continue
                     connection.execute(
                         """

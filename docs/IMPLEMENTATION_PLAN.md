@@ -156,6 +156,30 @@ Verification:
 - no image or Compose health command invokes `fbn check`, `fbn monitor`, opens
   the profile, or navigates to Facebook.
 
+## Phase 7: calendar-day notification eligibility
+
+- [x] Compare maintained Python human-date parsers using current GitHub
+  repository and release metadata.
+- [x] Replace hand-written Facebook timestamp arithmetic with `dateparser`
+  using an explicit relative base.
+- [x] Add an IANA `--timezone` / `FBN_TIMEZONE` setting and apply it to the
+  browser context, timestamp parser, and state gate.
+- [x] Replace the rolling one-hour threshold with a same-calendar-day rule.
+- [x] Add tests proving that an early-morning post remains eligible late the
+  same day and a minutes-old post across midnight is ineligible.
+- [x] Rebuild and smoke-test the Ubuntu ARM64 image.
+- [x] Verify the same-day gate against the authenticated group without sending.
+- [x] Replace the detached monitor and confirm a clean first scan.
+
+Verification:
+
+- supported rendered Facebook timestamps parse through `dateparser`;
+- invalid timestamp clocks and unknown layouts fail closed;
+- the calendar comparison uses the configured IANA timezone rather than UTC or
+  elapsed hours;
+- every unseen post is still recorded for deduplication; and
+- existing pending outbox rows remain retryable after midnight.
+
 Validation gates:
 
 - [ ] All acceptance criteria in `docs/SPEC.md` pass.
@@ -190,6 +214,8 @@ Raspberry Pi 4 hardware-target run remains deliberately open.
 5. `Add rewrite test coverage`
 6. `Document and automate the browser monitor`
 7. `Add Ubuntu ARM64 and Docker deployment`
+8. `Filter notifications by Facebook post time`
+9. `Use calendar-day post eligibility`
 
 The exact split may move a test into the same commit as the code it verifies.
 No commit should knowingly contain an untested state transition or a broken

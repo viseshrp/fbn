@@ -16,12 +16,7 @@ import click
 from . import __version__
 from .auth import load_facebook_cookies
 from .browser import PlaywrightPostSource
-from .config import (
-    SUPPORTED_BROWSERS,
-    BrowserSettings,
-    ScheduleSettings,
-    parse_duration,
-)
+from .config import SUPPORTED_BROWSERS, BrowserSettings, ScheduleSettings
 from .diagnostics import run_doctor
 from .exceptions import (
     BootstrapInterruptedError,
@@ -134,12 +129,16 @@ def _scan_options(function: CommandFunction) -> CommandFunction:
             help="Stop after this many scrolls reveal no additional posts.",
         ),
         click.option(
-            "--max-post-age",
-            default="1h",
-            envvar="FBN_MAX_POST_AGE",
+            "--timezone",
+            "timezone_name",
+            default="UTC",
+            envvar="FBN_TIMEZONE",
             show_default=True,
             show_envvar=True,
-            help="Notify only posts no older than this duration.",
+            help=(
+                "IANA timezone for Facebook timestamps and the same-day "
+                "notification boundary."
+            ),
         ),
         click.option(
             "--navigation-timeout",
@@ -244,7 +243,7 @@ def _scan_policy(
     sample_count: int,
     max_scrolls: int,
     stagnant_scrolls: int,
-    max_post_age: str,
+    timezone_name: str,
     navigation_timeout: float,
     settle_seconds: float,
 ) -> ScanPolicy:
@@ -252,7 +251,7 @@ def _scan_policy(
         sample_count=sample_count,
         max_scrolls=max_scrolls,
         stagnant_scrolls=stagnant_scrolls,
-        max_post_age_seconds=parse_duration(max_post_age).total_seconds(),
+        timezone_name=timezone_name,
         navigation_timeout_seconds=navigation_timeout,
         settle_seconds=settle_seconds,
     )
@@ -532,7 +531,7 @@ def check_command(
     sample_count: int,
     max_scrolls: int,
     stagnant_scrolls: int,
-    max_post_age: str,
+    timezone_name: str,
     navigation_timeout: float,
     settle_seconds: float,
     target_id: str,
@@ -558,7 +557,7 @@ def check_command(
         sample_count=sample_count,
         max_scrolls=max_scrolls,
         stagnant_scrolls=stagnant_scrolls,
-        max_post_age=max_post_age,
+        timezone_name=timezone_name,
         navigation_timeout=navigation_timeout,
         settle_seconds=settle_seconds,
     )
@@ -606,7 +605,7 @@ def monitor_command(
     sample_count: int,
     max_scrolls: int,
     stagnant_scrolls: int,
-    max_post_age: str,
+    timezone_name: str,
     navigation_timeout: float,
     settle_seconds: float,
     target_id: str,
@@ -637,7 +636,7 @@ def monitor_command(
         sample_count=sample_count,
         max_scrolls=max_scrolls,
         stagnant_scrolls=stagnant_scrolls,
-        max_post_age=max_post_age,
+        timezone_name=timezone_name,
         navigation_timeout=navigation_timeout,
         settle_seconds=settle_seconds,
     )

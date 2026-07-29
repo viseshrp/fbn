@@ -199,9 +199,12 @@ The page returns a minimal list of DOM payloads:
 
 `fbn.extractor` then validates the host/scheme, parses group and post IDs,
 removes query/fragment tracking data, normalizes Unicode/whitespace, enforces
-text limits, parses the rendered Facebook timestamp, and deduplicates IDs while
-retaining the first visible position. The browser reconstructs timestamp text
-from glyphs whose rendered rectangles intersect the timestamp link, excluding
+text limits, parses the rendered Facebook timestamp with `dateparser`, and
+deduplicates IDs while retaining the first visible position. Parsing uses the
+scan time as an explicit relative base and the configured IANA timezone. The
+Playwright context uses that same timezone so rendering, parsing, and calendar
+comparison share one boundary. The browser reconstructs timestamp text from
+glyphs whose rendered rectangles intersect the timestamp link, excluding
 Facebook's off-rectangle character decoys.
 Facebook can redirect a numeric group URL while rendering its post permalinks
 under a custom group alias. The browser adapter accepts one such alias only
@@ -220,10 +223,11 @@ pinned/reordered content, and unrecognized layouts.
 SQLite runs in WAL mode with foreign keys enabled.
 
 All supported unseen posts enter `posts`, even when their publication time is
-old or unavailable. The outbox gate is separate: after baseline initialization,
-only posts with a confidently parsed publication time inside the configured
-maximum age are queued. Existing pending events remain retryable even after
-they age beyond that window.
+from another day or unavailable. The outbox gate is separate: after baseline
+initialization, only posts with a confidently parsed publication date equal to
+the scan's calendar date in the configured timezone are queued. This is not a
+rolling 24-hour comparison. Existing pending events remain retryable after the
+calendar day changes.
 
 ```sql
 CREATE TABLE groups (

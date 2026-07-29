@@ -161,6 +161,7 @@ discard the post.
 fbn monitor \
   --id my-group \
   --browser chromium \
+  --timezone America/New_York \
   --every 1h \
   --to 3h
 ```
@@ -179,8 +180,8 @@ exit code. Only transient navigation failures are backed off and retried.
 Useful options include:
 
 - `--sample-count`: cap the number of recent posts inspected;
-- `--max-post-age`: notify only when Facebook's rendered publication time is
-  within this age; the default is `1h`;
+- `--timezone`: set the IANA timezone used to interpret Facebook timestamps and
+  decide whether a post was published today; the default is `UTC`;
 - `--notify-initial`: notify for the first visible sample instead of baselining;
 - `--include-errors`: notify a concise, redacted operational error; and
 - `-v` / `--verbose`: enable diagnostic logging without page or cookie dumps.
@@ -219,6 +220,7 @@ context and Git, but it is still sensitive:
 ```dotenv
 FBN_GROUP=my-group
 FBN_APPRISE_URL=mailto://user:app-password@example.com
+FBN_TIMEZONE=America/New_York
 FBN_EVERY=1h
 FBN_TO=3h
 FBN_UID=1000
@@ -469,9 +471,11 @@ events remain pending and may appear again.
 ### An older post appeared in the feed
 
 Facebook can reorder, pin, or later expose a post that `fbn` has not identified
-before. The post is recorded as seen, but it is not notified unless Facebook's
-rendered publication time is recognized and no older than `--max-post-age`
-(default `1h`). Unknown timestamp layouts fail closed.
+before. The post is recorded as seen, but it is notified only when Facebook's
+rendered publication date is today in `--timezone`. This is a calendar-day
+boundary, not a rolling 24-hour window: a post from 11:59 PM yesterday is
+ineligible after midnight, while a post from early this morning remains
+eligible late tonight. Unknown timestamp layouts fail closed.
 
 ## Migrating from fbn 0.1
 

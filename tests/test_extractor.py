@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -182,6 +183,7 @@ def test_extract_posts_normalizes_deduplicates_and_handles_missing_fields() -> N
         ("41m", OBSERVED_AT - timedelta(minutes=41)),
         ("22h", OBSERVED_AT - timedelta(hours=22)),
         ("2 minutes ago", OBSERVED_AT - timedelta(minutes=2)),
+        ("Today at 09:30", datetime(2026, 7, 28, 9, 30, tzinfo=timezone.utc)),
         (
             "Yesterday at 14:48",
             datetime(2026, 7, 27, 14, 48, tzinfo=timezone.utc),
@@ -199,12 +201,36 @@ def test_parse_facebook_timestamp_accepts_rendered_formats(
     assert parse_facebook_timestamp(value, OBSERVED_AT) == expected
 
 
+def test_parse_facebook_timestamp_uses_configured_calendar_timezone() -> None:
+    observed_at = datetime(2026, 7, 30, 2, 30, tzinfo=timezone.utc)
+    new_york = ZoneInfo("America/New_York")
+
+    parsed = parse_facebook_timestamp(
+        "Today at 21:00",
+        observed_at,
+        timezone_name="America/New_York",
+    )
+
+    assert parsed == datetime(2026, 7, 29, 21, 0, tzinfo=new_york)
+    assert parsed is not None
+    assert parsed.tzinfo is new_york
+
+
 @pytest.mark.parametrize(
     "value",
     [None, "", "Sponsored", "characters in DOM order", "Yesterday at 25:00"],
 )
 def test_parse_facebook_timestamp_rejects_unknown_values(value: object) -> None:
     assert parse_facebook_timestamp(value, OBSERVED_AT) is None
+
+
+def test_parse_facebook_timestamp_rejects_invalid_timezone() -> None:
+    with pytest.raises(ValueError, match="IANA timezone"):
+        parse_facebook_timestamp(
+            "41m",
+            OBSERVED_AT,
+            timezone_name="Mars/Olympus_Mons",
+        )
 
 
 def test_extract_posts_has_deterministic_position_order_and_post_limit() -> None:

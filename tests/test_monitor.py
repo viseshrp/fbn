@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
@@ -104,7 +104,7 @@ def test_baseline_without_pending_does_not_notify() -> None:
     assert summary.new_posts == 0
     assert summary.delivered == 0
     assert sink.sent == []
-    assert state.observe_kwargs["max_post_age"] == timedelta(hours=1)
+    assert state.observe_kwargs["same_day_only"] is True
 
 
 def test_pending_is_delivered_then_marked() -> None:
@@ -119,7 +119,7 @@ def test_pending_is_delivered_then_marked() -> None:
     assert summary.pending == 0
 
 
-def test_inserted_but_stale_posts_are_not_reported_as_new() -> None:
+def test_inserted_but_other_day_posts_are_not_reported_as_new() -> None:
     state = FakeState(ObservationBatch(False, 2, 0, ()))
     sink = FakeSink()
 

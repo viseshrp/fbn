@@ -39,7 +39,11 @@ def _fixture(name: str) -> str:
 
 
 @contextmanager
-def _local_context(tmp_path: Path) -> Iterator[object]:
+def _local_context(
+    tmp_path: Path,
+    *,
+    timezone_id: str | None = None,
+) -> Iterator[object]:
     requested = os.environ.get("FBN_TEST_BROWSER", "chromium")
     settings = BrowserSettings(
         browser=requested,
@@ -48,7 +52,10 @@ def _local_context(tmp_path: Path) -> Iterator[object]:
     )
     source = PlaywrightPostSource(settings)
     try:
-        with source._context(headless=True) as context:
+        with source._context(
+            headless=True,
+            timezone_id=timezone_id,
+        ) as context:
             yield context
             return
     except BrowserUnavailableError:
@@ -66,10 +73,26 @@ def _local_context(tmp_path: Path) -> Iterator[object]:
         )
     )
     try:
-        with fallback._context(headless=True) as context:
+        with fallback._context(
+            headless=True,
+            timezone_id=timezone_id,
+        ) as context:
             yield context
     except BrowserUnavailableError:
         pytest.skip("no local Playwright Chromium or Chrome browser is installed")
+
+
+def test_headless_browser_uses_configured_timezone(tmp_path: Path) -> None:
+    with _local_context(tmp_path, timezone_id="America/New_York") as context:
+        page = context.new_page()
+        try:
+            timezone_id = page.evaluate(
+                "() => Intl.DateTimeFormat().resolvedOptions().timeZone"
+            )
+        finally:
+            page.close()
+
+    assert timezone_id == "America/New_York"
 
 
 def test_headless_browser_classifies_all_sanitized_page_states(

@@ -91,11 +91,22 @@ and n8n orchestration.
 Post identity and freshness are separate decisions. Every supported unseen post
 is persisted for deduplication, including photo-only posts identified through a
 Facebook `set=gm.<post-id>` photo link. Notification eligibility additionally
-requires a recognized rendered Facebook publication timestamp inside a bounded
-maximum age, defaulting to one hour. The browser reconstructs that timestamp
-from characters actually rendered inside the timestamp link; off-rectangle
-decoy characters are excluded. An unknown or stale timestamp is recorded as
-seen but does not enter the notification outbox.
+requires a recognized rendered Facebook publication timestamp whose calendar
+date is today in a configured IANA timezone. The same timezone is applied to the
+Playwright context, timestamp parser, and notification boundary. The browser
+reconstructs timestamp text from characters actually rendered inside the
+timestamp link; off-rectangle decoy characters are excluded. An unknown
+timestamp or a timestamp from another calendar day is recorded as seen but does
+not enter the notification outbox.
+
+Use `dateparser` for the allowlisted English Facebook timestamp forms, with the
+scan time supplied as its explicit relative base. Arrow and Pendulum are more
+general date/time libraries but do not directly parse the website-style
+relative strings needed here. Maya has more GitHub stars than `dateparser`, but
+its latest release is substantially older and it is not selected. `dateparser`
+is the most popular actively maintained direct human-date parser evaluated for
+this requirement. Standard-library `zoneinfo`, backed by the `tzdata` package,
+validates IANA timezone names and performs the final calendar comparison.
 
 ## Consequences
 
@@ -110,8 +121,8 @@ seen but does not enter the notification outbox.
 - A user can recover a session manually through the optional headed command.
 - Seen posts and pending deliveries survive restarts.
 - Reordered, pinned, or newly extractable historical posts do not create false
-  "new post" alerts when their Facebook publication time is outside the
-  configured window.
+  "new post" alerts when their Facebook publication date is not today in the
+  configured timezone.
 - The same browser backend and profile work for headless bootstrap, unattended
   operation, and optional headed recovery.
 - Ubuntu ARM64 and Ubuntu-container deployments do not depend on a separately
@@ -134,6 +145,7 @@ seen but does not enter the notification outbox.
 - Multi-platform container build/configuration and persistence behavior add
   deployment-specific validation gates.
 - DOM changes can break extraction and require a localized selector update.
+- Human-date parsing and portable IANA timezone data add runtime dependencies.
 - A timestamp layout or locale Facebook has not yet modeled fails closed and
   can suppress a legitimate notification until support is added.
 - The visible virtualized feed cannot guarantee that every post appears.

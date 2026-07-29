@@ -107,10 +107,10 @@ DOM_SCAN_SCRIPT = """
     || /^[0-9]+\\s+(?:seconds?|minutes?|hours?|days?|weeks?)\\s+ago$/i.test(
       value
     )
-    || /^(?:today|yesterday)\\s+at\\s+[0-9]{1,2}:[0-9]{2}$/i.test(value)
-    || /^[0-9]{1,2}\\s+[A-Za-z]+\\s+at\\s+[0-9]{1,2}:[0-9]{2}$/i.test(
-      value
-    )
+    || /^(?:today|yesterday)\\s+at\\s+(?:[01]?[0-9]|2[0-3]):[0-5][0-9]$/i
+      .test(value)
+    || /^[0-9]{1,2}\\s+[A-Za-z]+\\s+at\\s+(?:[01]?[0-9]|2[0-3]):[0-5][0-9]$/i
+      .test(value)
   );
   const semanticItems = feedRoots.flatMap(
     (root) => Array.from(root.querySelectorAll(itemSelector))
@@ -702,8 +702,10 @@ class PlaywrightPostSource:
     def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
         """Fetch a bounded, deterministic sample from the visible group feed."""
 
-        observed_at = datetime.now(timezone.utc)
-        with self._context(headless=self.settings.headless) as context:
+        with self._context(
+            headless=self.settings.headless,
+            timezone_id=policy.timezone_name,
+        ) as context:
             page: Page | None = None
             try:
                 page = context.new_page()
@@ -730,6 +732,7 @@ class PlaywrightPostSource:
                         bounded=False,
                     )
 
+                observed_at = datetime.now(timezone.utc)
                 posts = self._scan_feed(page, group, policy, observed_at)
                 if not posts:
                     raise LayoutChangedError(
@@ -783,6 +786,7 @@ class PlaywrightPostSource:
                 observed_at,
                 limit=policy.sample_count,
                 allowed_group_keys=allowed_group_keys,
+                timezone_name=policy.timezone_name,
             )
             for post in extracted:
                 if post.post_id in seen_ids:
@@ -852,6 +856,7 @@ class PlaywrightPostSource:
         *,
         headless: bool,
         acquire_lock: bool = True,
+        timezone_id: str | None = None,
     ) -> Iterator[BrowserContext]:
         profile_dir = self._prepare_profile()
         if acquire_lock:
@@ -860,12 +865,17 @@ class PlaywrightPostSource:
                 self._open_context(
                     profile_dir,
                     headless=headless,
+                    timezone_id=timezone_id,
                 ) as context,
             ):
                 yield context
             return
 
-        with self._open_context(profile_dir, headless=headless) as context:
+        with self._open_context(
+            profile_dir,
+            headless=headless,
+            timezone_id=timezone_id,
+        ) as context:
             yield context
 
     @contextmanager
@@ -874,6 +884,7 @@ class PlaywrightPostSource:
         profile_dir: Path,
         *,
         headless: bool,
+        timezone_id: str | None,
     ) -> Iterator[BrowserContext]:
         marker_missing = self._check_profile_browser(profile_dir)
         stack = ExitStack()
@@ -892,6 +903,7 @@ class PlaywrightPostSource:
                 playwright,
                 profile_dir=profile_dir,
                 headless=headless,
+                timezone_id=timezone_id,
             )
             if marker_missing:
                 self._write_profile_browser_marker(profile_dir)
@@ -967,6 +979,7 @@ class PlaywrightPostSource:
         *,
         profile_dir: Path,
         headless: bool,
+        timezone_id: str | None,
     ) -> BrowserContext:
         kwargs: dict[str, object] = {
             "headless": headless,
@@ -974,6 +987,8 @@ class PlaywrightPostSource:
         }
         if not headless:
             kwargs["no_viewport"] = True
+        if timezone_id is not None:
+            kwargs["timezone_id"] = timezone_id
 
         browser = self.settings.browser
         if browser == "chrome":

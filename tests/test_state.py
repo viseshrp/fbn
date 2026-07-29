@@ -4,6 +4,7 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -16,6 +17,7 @@ GROUP = GroupRef(
     url="https://www.facebook.com/groups/example-group/",
 )
 T0 = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 def post(
@@ -97,21 +99,28 @@ def test_notify_initial_populates_outbox_in_position_order(tmp_path: Path) -> No
     assert [item.post_id for item in observation.pending] == ["first", "later"]
 
 
-def test_recency_gate_records_stale_and_unknown_posts_without_queueing(
+def test_same_day_gate_records_other_day_and_unknown_posts_without_queueing(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "state.sqlite3"
-    scan_time = T0 + timedelta(hours=2)
+    scan_time = datetime(2026, 7, 29, 23, 30, tzinfo=NEW_YORK)
     with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
         repository.observe(GROUP, (post("baseline"),))
         observation = repository.observe(
             GROUP,
             (
                 post(
-                    "stale",
+                    "other-day",
                     position=0,
                     observed_at=scan_time,
-                    published_at=T0,
+                    published_at=datetime(
+                        2026,
+                        7,
+                        28,
+                        23,
+                        59,
+                        tzinfo=NEW_YORK,
+                    ),
                 ),
                 post(
                     "unknown",
@@ -119,14 +128,21 @@ def test_recency_gate_records_stale_and_unknown_posts_without_queueing(
                     observed_at=scan_time,
                 ),
                 post(
-                    "recent",
+                    "same-day-old",
                     position=2,
                     observed_at=scan_time,
-                    published_at=scan_time - timedelta(minutes=10),
+                    published_at=datetime(
+                        2026,
+                        7,
+                        29,
+                        0,
+                        15,
+                        tzinfo=NEW_YORK,
+                    ),
                 ),
             ),
             observed_at=scan_time,
-            max_post_age=timedelta(hours=1),
+            same_day_only=True,
         )
 
         stored_ids = {
@@ -138,8 +154,52 @@ def test_recency_gate_records_stale_and_unknown_posts_without_queueing(
 
     assert observation.inserted == 3
     assert observation.queued == 1
-    assert [item.post_id for item in observation.pending] == ["recent"]
-    assert stored_ids == {"baseline", "stale", "unknown", "recent"}
+    assert [item.post_id for item in observation.pending] == ["same-day-old"]
+    assert stored_ids == {"baseline", "other-day", "unknown", "same-day-old"}
+
+
+def test_same_day_gate_rejects_recent_post_across_midnight(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    scan_time = datetime(2026, 7, 30, 0, 5, tzinfo=NEW_YORK)
+    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
+        repository.observe(GROUP, (post("baseline"),))
+        observation = repository.observe(
+            GROUP,
+            (
+                post(
+                    "six-minutes-old-yesterday",
+                    position=0,
+                    observed_at=scan_time,
+                    published_at=datetime(
+                        2026,
+                        7,
+                        29,
+                        23,
+                        59,
+                        tzinfo=NEW_YORK,
+                    ),
+                ),
+                post(
+                    "four-minutes-old-today",
+                    position=1,
+                    observed_at=scan_time,
+                    published_at=datetime(
+                        2026,
+                        7,
+                        30,
+                        0,
+                        1,
+                        tzinfo=NEW_YORK,
+                    ),
+                ),
+            ),
+            observed_at=scan_time,
+            same_day_only=True,
+        )
+
+    assert observation.inserted == 2
+    assert observation.queued == 1
+    assert [item.post_id for item in observation.pending] == ["four-minutes-old-today"]
 
 
 def test_posts_and_outbox_entries_are_inserted_atomically(

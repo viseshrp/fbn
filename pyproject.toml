@@ -33,9 +33,11 @@ classifiers = [
 dependencies = [
   "apprise>=1.9,<2",
   "click>=8.1,<9",
+  "dateparser>=1.4.1,<2",
   "filelock>=3.16,<4",
   "platformdirs>=4.3,<5",
   "playwright>=1.61,<2",
+  "tzdata>=2025.2,<2027",
 ]
 
 [project.optional-dependencies]

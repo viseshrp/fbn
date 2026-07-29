@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def _require_non_empty(value: str, field_name: str) -> None:
@@ -15,6 +16,20 @@ def _require_non_empty(value: str, field_name: str) -> None:
 def _require_non_negative(value: int, field_name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _require_timezone_name(value: str) -> None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 255
+    ):
+        raise ValueError("timezone_name must be an IANA timezone name")
+    try:
+        ZoneInfo(value)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise ValueError("timezone_name must be an IANA timezone name") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +90,7 @@ class ScanPolicy:
     stagnant_scrolls: int = 2
     navigation_timeout_seconds: float = 30
     settle_seconds: float = 1
-    max_post_age_seconds: float = 3_600
+    timezone_name: str = "UTC"
 
     def __post_init__(self) -> None:
         if (
@@ -110,15 +125,7 @@ class ScanPolicy:
             or self.settle_seconds < 0
         ):
             raise ValueError("settle_seconds must be non-negative")
-        if (
-            isinstance(self.max_post_age_seconds, bool)
-            or not isinstance(self.max_post_age_seconds, (int, float))
-            or not math.isfinite(self.max_post_age_seconds)
-            or not 0 < self.max_post_age_seconds <= 365 * 24 * 60 * 60
-        ):
-            raise ValueError(
-                "max_post_age_seconds must be positive and at most 365 days"
-            )
+        _require_timezone_name(self.timezone_name)
 
 
 @dataclass(frozen=True, slots=True)

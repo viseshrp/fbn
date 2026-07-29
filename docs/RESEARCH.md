@@ -43,6 +43,26 @@ container provides the same runtime for `linux/amd64` and `linux/arm64`.
 | [facebook-scraper](https://github.com/kevinzg/facebook-scraper) | Direct requests/mobile-HTML parser. Last repository commit found was in October 2023; its README warns that private groups may fail and frequent scraping may cause blocks. | Remove. |
 | [RSSHub](https://github.com/DIYgod/RSSHub) / [RSS-Bridge](https://github.com/RSS-Bridge/rss-bridge) | No current maintained Facebook group feed was found, and unofficial bridges retain the same fragile page dependency. | Do not depend on them. |
 
+## Human-date parsing follow-up
+
+GitHub repository metadata was refreshed on 2026-07-29 for the calendar-day
+notification change:
+
+| Library | GitHub finding | Fit |
+| --- | --- | --- |
+| [Arrow](https://github.com/arrow-py/arrow) | 9,050 stars and active maintenance. | Strong general date/time API, but not a direct parser for Facebook's relative website strings. |
+| [Pendulum](https://github.com/python-pendulum/pendulum) | 6,674 stars and active maintenance. | Strong timezone/date arithmetic, but not a direct human-relative parser for this input. |
+| [Maya](https://github.com/kennethreitz/maya) | 3,412 stars, but its latest GitHub release is 0.6.1 from 2019. | More stars than `dateparser`, but not selected because the release line is stale. |
+| [dateparser](https://github.com/scrapinghub/dateparser) | 2,846 stars, active commits, and release 1.4.1 from June 2026. Its documented scope is parsing human-readable absolute and relative dates with timezone settings and an explicit relative base. | Use. It is the most popular actively maintained direct parser evaluated for the required input. |
+| [parsedatetime](https://github.com/bear/parsedatetime) | 711 stars and active maintenance. | Viable, but substantially less adopted than `dateparser`. |
+
+`fbn` keeps a narrow allowlist for recognized Facebook timestamp shapes, then
+delegates actual date arithmetic to `dateparser`. This avoids accepting arbitrary
+feed text as a date while removing hand-written month, year-rollover, and
+relative-duration calculations. `zoneinfo` plus the `tzdata` package validates
+the IANA timezone used consistently by Chromium, parsing, and the calendar-day
+gate.
+
 ## Ubuntu ARM64 and Raspberry Pi feasibility
 
 The platform choice is based on current primary documentation, not an
