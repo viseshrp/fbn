@@ -201,6 +201,7 @@ def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None
     assert "contributor" not in posts[0].text
     assert "decoy" not in posts[0].text
     assert "41m" not in posts[0].text
+    assert "\u034f" not in posts[0].text
     assert payloads[0]["timestamp"] == "41m"
     assert posts[0].published_at == observed_at - timedelta(minutes=41)
 

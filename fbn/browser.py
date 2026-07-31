@@ -54,15 +54,16 @@ DOM_SCAN_SCRIPT = """
   const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
     (root) => root.getClientRects().length > 0
   );
+  const stripGraphemeJoiners = (value) => value.replace(/\\u034f/g, '');
   const cleanContainerText = (container, authorElement, timestampElement) => {
-    let text = (container.innerText || '').trim();
+    let text = stripGraphemeJoiners(container.innerText || '').trim();
     text = text.replace(/^(?:Facebook\\s+){2,}/i, '').trim();
 
     const author = authorElement
       ? (authorElement.innerText || '').trim()
       : '';
     const rawTimestamp = timestampElement
-      ? (timestampElement.innerText || '').trim()
+      ? stripGraphemeJoiners(timestampElement.innerText || '').trim()
       : '';
     const timestampStart = rawTimestamp ? text.indexOf(rawTimestamp) : -1;
     const authorStartsText = Boolean(author && text.startsWith(author));
@@ -124,7 +125,7 @@ DOM_SCAN_SCRIPT = """
     const rendered = leaves.length
       ? leaves.map((candidate) => candidate.text).join('')
       : (element.innerText || '');
-    return rendered.replace(/\\s+/g, ' ').trim();
+    return stripGraphemeJoiners(rendered).replace(/\\s+/g, ' ').trim();
   };
   const isTimestampText = (value) => (
     /^(?:just now|[0-9]+\\s*[smhdw])$/i.test(value)
