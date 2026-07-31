@@ -196,7 +196,11 @@ def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None
     assert [post.post_id for post in posts] == ["202"]
     assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
     assert posts[0].author == "Alice Example"
-    assert "Fresh produce!!" in posts[0].text
+    assert posts[0].text.startswith("Fresh produce!!")
+    assert "Follow" not in posts[0].text
+    assert "contributor" not in posts[0].text
+    assert "decoy" not in posts[0].text
+    assert "41m" not in posts[0].text
     assert payloads[0]["timestamp"] == "41m"
     assert posts[0].published_at == observed_at - timedelta(minutes=41)
 

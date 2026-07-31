@@ -54,14 +54,36 @@ DOM_SCAN_SCRIPT = """
   const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
     (root) => root.getClientRects().length > 0
   );
-  const cleanContainerText = (container, authorElement) => {
+  const cleanContainerText = (container, authorElement, timestampElement) => {
     let text = (container.innerText || '').trim();
     text = text.replace(/^(?:Facebook\\s+){2,}/i, '').trim();
 
     const author = authorElement
       ? (authorElement.innerText || '').trim()
       : '';
-    if (author && text.startsWith(author)) {
+    const rawTimestamp = timestampElement
+      ? (timestampElement.innerText || '').trim()
+      : '';
+    const timestampStart = rawTimestamp ? text.indexOf(rawTimestamp) : -1;
+    const authorStartsText = Boolean(author && text.startsWith(author));
+    const timestampPrefix = authorStartsText && timestampStart >= author.length
+      ? text.slice(author.length, timestampStart)
+      : '';
+    const timestampIsInHeader = (
+      /^Follow(?:\\s|$)/i.test(text)
+      || (authorStartsText && /[·•]/.test(timestampPrefix))
+    );
+
+    // Timestamp links render a small value but expose off-screen character
+    // decoys through innerText. Remove a bounded leading header through that
+    // exact raw element instead of copying its decoys into the post body.
+    let removedTimestampHeader = false;
+    if (timestampStart >= 0 && timestampStart <= 1_024 && timestampIsInHeader) {
+      text = text.slice(timestampStart + rawTimestamp.length).trim();
+      text = text.replace(/^[·•]\\s*/, '').trim();
+      removedTimestampHeader = true;
+    }
+    if (!removedTimestampHeader && authorStartsText) {
       const separator = text.indexOf('·', author.length);
       if (separator >= 0 && separator <= author.length + 512) {
         text = text.slice(separator + 1).trim();
@@ -189,15 +211,19 @@ DOM_SCAN_SCRIPT = """
       && isTimestampText(visualText(candidate))
     ));
     const selectedText = visualText(selected);
-    const timestamp = trackedTimestamp
-      ? visualText(trackedTimestamp)
-      : (isTimestampText(selectedText) ? selectedText : '');
+    const timestampElement = trackedTimestamp
+      || (isTimestampText(selectedText) ? selected : null);
+    const timestamp = timestampElement ? visualText(timestampElement) : '';
 
     payloads.push(
       includeContent
         ? {
             href: selected.href || selected.getAttribute('href') || '',
-            text: cleanContainerText(container, authorElement),
+            text: cleanContainerText(
+              container,
+              authorElement,
+              timestampElement
+            ),
             author: authorElement
               ? (authorElement.innerText || '').trim()
               : null,
