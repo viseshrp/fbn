@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
 
+from filelock import FileLock
+from filelock import Timeout as FileLockTimeout
+
 from .config import ensure_private_directory, resolve_state_file
-from .exceptions import ConfigurationError
+from .exceptions import ConfigurationError, MonitorInUseError
 from .models import GroupRef, ObservationBatch, PendingNotification, Post
 
 _SCHEMA = """
@@ -181,6 +185,26 @@ class SQLiteStateRepository:
         if connection is not None:
             connection.close()
             self._connection = None
+
+    @contextmanager
+    def run_lock(self) -> Iterator[None]:
+        """Exclusively own one observation and delivery cycle for this state file."""
+
+        lock_path = self.path.with_name(f".{self.path.name}.run.lock")
+        lock = FileLock(str(lock_path))
+        try:
+            lock.acquire(timeout=0)
+        except FileLockTimeout as exc:
+            raise MonitorInUseError(
+                "Another fbn monitor is already using this state database."
+            ) from exc
+
+        try:
+            if os.name != "nt" and lock_path.exists():
+                lock_path.chmod(0o600)
+            yield
+        finally:
+            lock.release()
 
     def observe(
         self,

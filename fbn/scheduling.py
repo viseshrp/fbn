@@ -10,7 +10,11 @@ from threading import Event
 from typing import Protocol
 
 from .config import ScheduleSettings
-from .exceptions import ConfigurationError, TransientNavigationError
+from .exceptions import (
+    ConfigurationError,
+    MonitorInUseError,
+    TransientNavigationError,
+)
 from .logging import get_logger
 from .models import GroupRef, RunSummary, ScanPolicy
 
@@ -131,7 +135,7 @@ class MonitorLoop:
         commit_delivery: bool = True,
         stop_event: EventLike | None = None,
     ) -> None:
-        """Run until the event is set; propagate every non-transient failure."""
+        """Run until stopped; retry transient failures and defer to an active peer."""
 
         stopper = Event() if stop_event is None else stop_event
         LOGGER.info(
@@ -159,6 +163,16 @@ class MonitorLoop:
                     notify_initial=notify_initial,
                     commit_delivery=commit_delivery,
                 )
+            except MonitorInUseError:
+                next_interval = self._success_interval()
+                LOGGER.info(
+                    "Scheduled check skipped because another monitor is active",
+                    group_key=group.key,
+                    delay_seconds=int(next_interval.total_seconds()),
+                )
+                if stopper.wait(next_interval.total_seconds()):
+                    return
+                continue
             except TransientNavigationError:
                 failed_at = self._now()
                 failure_number = self._state.consecutive_failures(group) + 1

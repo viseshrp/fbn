@@ -6,7 +6,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from fbn.config import ScheduleSettings
-from fbn.exceptions import ConfigurationError, DeliveryError, TransientNavigationError
+from fbn.exceptions import (
+    ConfigurationError,
+    DeliveryError,
+    MonitorInUseError,
+    TransientNavigationError,
+)
 from fbn.models import GroupRef, RunSummary, ScanPolicy
 from fbn.scheduling import MAX_BACKOFF, MonitorLoop, backoff_for_failure
 
@@ -214,6 +219,39 @@ def test_pre_attempt_guard_survives_nontransient_crash_and_error_propagates() ->
     assert service.calls == 1
     assert service.guard_values == [START + timedelta(hours=1)]
     assert state.next_at == START + timedelta(hours=1)
+    assert state.failure_history == []
+
+
+def test_active_peer_defers_without_changing_shared_schedule() -> None:
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(
+        state,
+        clock,
+        [MonitorInUseError("already active"), None],
+    )
+    event = FakeEvent(clock, [False, True])
+    schedule = ScheduleSettings(timedelta(minutes=15), timedelta(minutes=15))
+
+    MonitorLoop(
+        service,
+        state,
+        schedule,
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 2
+    assert service.guard_values == [
+        START + timedelta(minutes=15),
+        START + timedelta(minutes=30),
+    ]
+    assert event.waits == [15 * 60, 15 * 60]
+    assert state.set_history == [
+        START + timedelta(minutes=15),
+        START + timedelta(minutes=30),
+        START + timedelta(minutes=30),
+    ]
     assert state.failure_history == []
 
 

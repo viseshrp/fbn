@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -83,6 +85,43 @@ def test_restart_safe_deduplication_queues_only_unseen_posts(
     assert observation.inserted == 1
     assert observation.queued == 1
     assert [item.post_id for item in observation.pending] == ["new"]
+
+
+def test_run_lock_rejects_a_competing_process(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    script = """
+import sys
+
+from fbn.exceptions import MonitorInUseError
+from fbn.state import SQLiteStateRepository
+
+repository = SQLiteStateRepository(sys.argv[1])
+try:
+    with repository.run_lock():
+        pass
+except MonitorInUseError:
+    raise SystemExit(0)
+finally:
+    repository.close()
+raise SystemExit(1)
+"""
+
+    with (
+        SQLiteStateRepository(state_path, clock=lambda: T0) as repository,
+        repository.run_lock(),
+    ):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(state_path)],
+            check=False,
+            cwd=Path(__file__).parents[1],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    assert result.returncode == 0
+    if os.name != "nt":
+        lock_path = state_path.with_name(f".{state_path.name}.run.lock")
+        assert lock_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_notify_initial_populates_outbox_in_position_order(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import pytest
@@ -56,6 +57,15 @@ class FakeState:
         self.delivered: list[str] = []
         self.failed: list[tuple[list[str], str]] = []
         self.observe_kwargs: dict[str, object] = {}
+        self.lock_events: list[str] = []
+
+    @contextmanager
+    def run_lock(self) -> Iterator[None]:
+        self.lock_events.append("acquired")
+        try:
+            yield
+        finally:
+            self.lock_events.append("released")
 
     def observe(self, *args: object, **kwargs: object) -> ObservationBatch:
         self.observe_kwargs = kwargs
@@ -70,6 +80,7 @@ class FakeState:
         event_ids: Sequence[str],
         delivered_at: datetime | None = None,
     ) -> None:
+        self.lock_events.append("marked")
         self.delivered.extend(event_ids)
         self.current_pending = [
             item for item in self.current_pending if item.event_id not in event_ids
@@ -119,6 +130,33 @@ def test_pending_is_delivered_then_marked() -> None:
     assert state.delivered == ["event-123"]
     assert summary.delivered == 1
     assert summary.pending == 0
+
+
+def test_run_lock_encloses_fetch_and_delivery() -> None:
+    state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
+
+    class LockAwareSource(FakeSource):
+        def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
+            state.lock_events.append("fetched")
+            return super().fetch_recent(group, policy)
+
+    class LockAwareSink(FakeSink):
+        def send(self, notification: object) -> None:
+            state.lock_events.append("sent")
+            super().send(notification)
+
+    MonitorService(LockAwareSource(), state, LockAwareSink()).run_once(
+        GROUP,
+        ScanPolicy(),
+    )
+
+    assert state.lock_events == [
+        "acquired",
+        "fetched",
+        "sent",
+        "marked",
+        "released",
+    ]
 
 
 def test_operational_logs_include_counts_but_not_post_content() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -31,6 +32,9 @@ class PostSource(Protocol):
 
 class StateRepository(Protocol):
     """Durable seen-post and notification-outbox operations."""
+
+    def run_lock(self) -> AbstractContextManager[None]:
+        """Exclusively own one observation and delivery cycle."""
 
     def observe(
         self,
@@ -83,6 +87,24 @@ class MonitorService:
         commit_delivery: bool = True,
     ) -> RunSummary:
         """Run one bounded check with at-least-once outbox delivery."""
+
+        with self.state.run_lock():
+            return self._run_once_locked(
+                group,
+                policy,
+                notify_initial=notify_initial,
+                commit_delivery=commit_delivery,
+            )
+
+    def _run_once_locked(
+        self,
+        group: GroupRef,
+        policy: ScanPolicy,
+        *,
+        notify_initial: bool,
+        commit_delivery: bool,
+    ) -> RunSummary:
+        """Run one check while the state-backed process lock is held."""
 
         LOGGER.info("Observation started", group_key=group.key)
         try:

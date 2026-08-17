@@ -63,6 +63,12 @@ class ProfileInUseError(FbnError):
     exit_code = 10
 
 
+class MonitorInUseError(FbnError):
+    """Another process is running a check against the same state database."""
+
+    exit_code = 12
+
+
 class BootstrapInterruptedError(FbnError):
     """A termination signal interrupted authentication bootstrap."""
 
