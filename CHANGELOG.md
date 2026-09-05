@@ -26,9 +26,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Ubuntu 24.04 Docker and Compose deployment for `linux/amd64` and
   `linux/arm64`, including 64-bit Raspberry Pi 4, with a non-root runtime,
   Playwright-managed Chromium, and a persistent local profile/state volume.
-- A profile-gated Compose bootstrap service that receives authentication
-  material through a read-only `/run/secrets` mount; the monitor service never
-  receives that source file.
+- A Compose bootstrap service that receives authentication material through a
+  read-only `/run/secrets` mount and gates monitor startup; the monitor service
+  never receives that source file.
 - Native amd64 and arm64 image CI covering package startup, Chromium
   diagnostics, and sanitized offline DOM extraction.
 - A container-local package-import health check that never launches a browser,
@@ -51,6 +51,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit check/monitor troubleshooting mode.
 - Disabled automatic Docker monitor restarts so fail-closed account, access,
   profile, and layout exits remain stopped instead of looping.
+- Made `docker compose up` run authentication bootstrap before starting the
+  monitor and reuse the existing external profile/state volume by default.
 - Made the first non-empty scan a baseline by default, with
   `--notify-initial` as an explicit override.
 - Made notification delivery at least once so an Apprise failure survives a

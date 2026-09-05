@@ -20,6 +20,9 @@ services:
       FBN_TIMEZONE: "${FBN_TIMEZONE:-UTC}"
     volumes:
       - fbn-data:/home/fbn/.local/share/fbn
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     command:
       - monitor
       - --id
@@ -29,13 +32,11 @@ services:
       - --headless
       - --verbose
       - --every
-      - "${FBN_EVERY:-1h}"
+      - "${FBN_EVERY:-50m}"
       - --to
-      - "${FBN_TO:-3h}"
+      - "${FBN_TO:-50m}"
 
   bootstrap:
-    profiles:
-      - bootstrap
     image: fbn:local
     build: *fbn-build
     init: true
@@ -60,9 +61,9 @@ services:
 
 secrets:
   facebook_auth:
-    # /dev/null keeps the default monitor independent of the bootstrap source.
-    # Set FBN_AUTH_FILE to a private host file when invoking the bootstrap profile.
-    file: "${FBN_AUTH_FILE:-/dev/null}"
+    file: "${FBN_AUTH_FILE:?Set FBN_AUTH_FILE to a private authentication export}"
 
 volumes:
   fbn-data:
+    external: true
+    name: "${FBN_DATA_VOLUME:-fbn-monitor-data}"

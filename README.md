@@ -221,9 +221,11 @@ context and Git, but it is still sensitive:
 ```dotenv
 FBN_GROUP=my-group
 FBN_APPRISE_URL=mailto://user:app-password@example.com
+FBN_AUTH_FILE=/absolute/private/path/facebook-auth.json
+FBN_DATA_VOLUME=fbn-monitor-data
 FBN_TIMEZONE=America/New_York
-FBN_EVERY=1h
-FBN_TO=3h
+FBN_EVERY=50m
+FBN_TO=50m
 FBN_UID=1000
 FBN_GID=1000
 ```
@@ -237,65 +239,49 @@ chmod 600 .env
 docker compose build
 ```
 
-Compose refuses to start the monitor unless the group and Apprise URL are
-present. Cookies, browser state, and group content are not baked into the
-image. Docker does retain container environment metadata, including the
-Apprise URL, so only users trusted with the Docker daemon should be able to
-inspect the deployment.
+Compose refuses to start unless the group, Apprise URL, and authentication-file
+path are present. The authentication file must remain outside the repository.
+Cookies, browser state, and group content are not baked into the image. Docker
+does retain container environment metadata, including the Apprise URL, so only
+users trusted with the Docker daemon should be able to inspect the deployment.
 
-### Bootstrap the persistent profile once
+### Start bootstrap and monitoring together
 
-The named `fbn-data` volume is mounted at
+The external volume named by `FBN_DATA_VOLUME` is mounted at
 `/home/fbn/.local/share/fbn`. It holds both the dedicated browser profile and
-SQLite state. The separate `bootstrap` service mounts the authentication file
-as a read-only Compose secret, validates group access headlessly, and writes the
-resulting session only to that volume:
+SQLite state. Create it once on a new installation; an existing
+`fbn-monitor-data` volume is reused by default:
 
 ```console
-chmod 600 /absolute/private/path/facebook-auth.json
-
-FBN_AUTH_FILE=/absolute/private/path/facebook-auth.json \
-  docker compose --profile bootstrap run --rm --no-deps bootstrap
+docker volume create fbn-monitor-data
 ```
 
-Inside the one-shot container the source is available only at
-`/run/secrets/facebook_auth`. Its contents are not placed in an environment
-variable, copied into the image, or mounted into the long-running `fbn`
-service. The `bootstrap` service gets the group from `FBN_GROUP` in `.env`; its
-command is equivalent to:
+Protect the local configuration and authentication export, then start the
+Compose application:
 
 ```console
-fbn bootstrap \
-  --auth-file /run/secrets/facebook_auth \
-  -i "$FBN_GROUP" \
-  --browser chromium
+chmod 600 .env /absolute/private/path/facebook-auth.json
+docker compose up --detach
 ```
 
-The command performs no prompts and needs no display, X11, VNC, or browser
-debugging port. When it succeeds, remove or protect the source authentication
-file according to your recovery policy. To replace an expired session, stop the
-monitor, repeat the one-shot bootstrap with a fresh export, and restart it.
-
-### Run the monitor
-
-After bootstrap, start only the default monitor service:
-
-```console
-docker compose up --detach fbn
-docker compose logs --follow fbn
-```
+Compose runs the one-shot `bootstrap` service first. It mounts the
+authentication export read-only at `/run/secrets/facebook_auth`, validates the
+group headlessly, and updates only the persistent profile. The long-running
+`fbn` service starts only after bootstrap exits successfully. The source file
+is not placed in an environment variable, copied into the image, or mounted
+into the monitor service. Bootstrap requires no display, X11, VNC, or browser
+debugging port.
 
 The Compose command is explicitly
 `fbn monitor --browser chromium --headless --verbose ...`. Chromium uses a 1
 GiB shared memory allocation, and `init: true` forwards termination cleanly.
 The monitor writes human-readable Loguru records to standard output, so the
-`docker compose logs --follow fbn` command above shows startup, waits, scan
+`docker compose logs --follow` shows bootstrap, startup, waits, scan
 counts, delivery counts, and retry categories as they happen. Each line has a
 UTC timestamp, level, component, plain-language event, and safe `key=value`
 context. Non-interactive container output contains no ANSI color codes. Records
 never include page text, cookie values, authentication-file paths, or Apprise
-URLs. The profile-gated `bootstrap` service does not start with this command,
-and the monitor has no authentication-file secret mount. Both services allow
+URLs. The monitor has no authentication-file secret mount. Both services allow
 two minutes for graceful termination so bootstrap has time to verify cookie
 rollback and the monitor can close Chromium.
 
@@ -303,7 +289,8 @@ The monitor restart policy is deliberately `no`. Its internal scheduler already
 backs off transient navigation failures; authentication, checkpoint, access,
 profile, and layout hard stops must leave the container stopped instead of
 causing a rapid Docker restart loop. Inspect the logs, resolve the condition,
-and run `docker compose up --detach fbn` again. If startup after a host reboot
+replace the authentication export when required, and run
+`docker compose up --detach` again. If startup after a host reboot
 is required, configure it explicitly without an automatic failure restart.
 Stop the container without deleting its profile/state volume:
 
