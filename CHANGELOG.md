@@ -62,8 +62,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added photo-only group-post identity handling and parsed rendered publication
   timestamps with `dateparser` in a configured IANA timezone.
 - Replaced calendar-day notification eligibility with a durable feed boundary.
-  Every unnotified post before the latest queued item is queued atomically,
+  Every unnotified post before the stored marker is queued atomically,
   independent of its parsed publication date.
+- Made catch-up scans look beyond the normal sample for the stored post marker.
+  When that marker is still missing, visible unnotified posts are queued without
+  moving it, so posts exposed by later scans are not silently skipped.
 - Changed `-V` / `--version` to the version flag and reserved `-v` /
   `--verbose` for logging.
 - Scoped this version as an unreleased tool for local academic research.

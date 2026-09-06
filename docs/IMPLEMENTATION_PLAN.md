@@ -186,13 +186,14 @@ part of extraction metadata.
 ## Phase 8: durable notification boundary
 
 - [x] Persist a per-group notification boundary post ID.
-- [x] Queue every unnotified visible post before the newest visible boundary.
+- [x] Queue every unnotified visible post before the stored boundary.
 - [x] Advance the boundary in the same transaction as posts and outbox rows.
-- [x] Fall back to a visible outbox post, or the full bounded sample when every
-  prior boundary has left the sample.
+- [x] Use additional bounded scroll passes to look for the stored boundary.
+- [x] Queue every unnotified visible post while retaining a missing boundary so
+  later scans can close the gap without dropping posts.
 - [x] Migrate version 1 databases from the latest outbox batch.
-- [x] Cover baseline, restart, reordering, missing-boundary, and migration cases
-  with local synthetic tests.
+- [x] Cover baseline, restart, reordering, sample overflow, missing-boundary,
+  and migration cases with local synthetic tests.
 
 Validation gates:
 

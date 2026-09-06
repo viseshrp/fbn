@@ -170,9 +170,11 @@ content.
   clarity even though it is the default.
 - The browser uses its native user agent and fingerprint. `fbn` does not spoof
   either.
-- A check limits navigation time, number of extracted posts, number of scrolls,
-  and consecutive stagnant scrolls.
-- A sample count must be between 1 and 50.
+- A check limits navigation time, number of scrolls, consecutive stagnant
+  scrolls, and extracted posts.
+- A sample count must be between 1 and 50. A normal scan retains at most that
+  many posts. When a stored notification boundary exists, the catch-up limit is
+  the sample count multiplied by the allowed extraction passes.
 - `--timezone` accepts an IANA timezone name and defaults to `UTC`. It controls
   browser rendering and timestamp interpretation.
 
@@ -226,15 +228,18 @@ the same run.
 - The first non-empty baseline stores the top visible post as the notification
   boundary. `--notify-initial` instead queues the visible sample and stores its
   top post as the boundary.
-- On later scans, every unnotified post before the most recent visible boundary
-  is queued, regardless of its parsed publication date. Items after the
-  boundary are recorded without notification.
-- If the stored boundary is absent, the newest visible post already present in
-  the outbox is used as a fallback boundary. If no queued post is visible, the
-  bounded sample is treated as newer and all unnotified visible posts are
-  queued.
-- The boundary advances to the newest visible queued post. Existing version 1
-  databases seed it from the top-positioned item in their latest outbox batch.
+- On later scans, every unnotified post before the stored boundary is queued,
+  regardless of its parsed publication date. Items after a visible boundary
+  are recorded without notification.
+- The browser continues through its bounded scroll passes while looking for a
+  stored boundary that is outside the normal sample.
+- If the stored boundary is still absent, all unnotified visible posts are
+  queued and the stored boundary is retained. Repeated scans therefore keep
+  the gap open and queue posts that become visible later.
+- A visible boundary advances to the newest visible queued post. If no boundary
+  has ever been stored, a visible outbox item may be used as a fallback.
+  Existing version 1 databases seed the boundary from the top-positioned item
+  in their latest outbox batch.
 - Failed notification entries remain pending across process restarts.
 - Delivery is at-least-once: a process crash after a send but before its commit
   may cause a duplicate, but it must not silently lose a pending post.

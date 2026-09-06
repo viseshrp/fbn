@@ -51,7 +51,13 @@ browser is an optional recovery path only.
 
 ```python
 class PostSource(Protocol):
-    def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult: ...
+    def fetch_recent(
+        self,
+        group: GroupRef,
+        policy: ScanPolicy,
+        *,
+        boundary_post_id: str | None = None,
+    ) -> ScanResult: ...
 
 
 class StateRepository(Protocol):
@@ -225,10 +231,12 @@ SQLite runs in WAL mode with foreign keys enabled.
 
 All supported unseen posts enter `posts`, even when their publication time is
 unavailable. The first non-empty scan stores the top post as a notification
-boundary. Later scans queue each unnotified post that appears before the newest
-visible boundary and advance the boundary to the newest queued post. If no
-stored or previously queued boundary is visible, the whole bounded sample is
-treated as newer. Existing pending events remain retryable across restarts.
+boundary. Later scans look through the allowed scroll passes for that post,
+queue each unnotified post above it, and advance the boundary to the newest
+queued post. If the stored boundary is not found, every unnotified visible post
+is queued but the boundary is retained. This open gap lets later scans queue
+posts that were previously beyond the scan limit. Existing pending events
+remain retryable across restarts.
 
 ```sql
 CREATE TABLE groups (

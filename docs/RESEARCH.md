@@ -195,8 +195,8 @@ Facebook-generated class names are not a stable contract. The extractor will:
 4. derive identity from the group and post IDs in those URLs;
 5. scope visible text and an optional author to the nearest semantic post
    container;
-6. scroll a bounded number of times until the requested sample is reached or no
-   new post IDs appear; and
+6. scroll a bounded number of times until the normal sample is reached, the
+   stored post marker is found, or no new post IDs appear; and
 7. deduplicate by `(group_key, post_id)`.
 
 Playwright recommends user-facing and ARIA locators over structural CSS/XPath

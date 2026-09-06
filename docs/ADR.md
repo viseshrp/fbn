@@ -92,9 +92,11 @@ Post identity and notification order are separate decisions. Every supported
 unseen post is persisted for deduplication, including photo-only posts
 identified through a Facebook `set=gm.<post-id>` photo link. The first baseline
 stores the top visible post as a durable boundary. Later scans queue every
-unnotified post before the newest visible boundary, then advance the boundary
-with the outbox transaction. If no stored or previously queued boundary remains
-visible, the whole bounded sample is treated as newer.
+unnotified post before the stored boundary, then advance a visible boundary
+with the outbox transaction. The browser uses its remaining bounded scroll
+passes to look for a boundary outside the normal sample. If the stored boundary
+is still missing, every unnotified visible post is queued while the old boundary
+is retained, leaving the gap open for later scans.
 
 Rendered Facebook publication timestamps remain parsed for post metadata, but
 they do not control notification eligibility. The configured IANA timezone is

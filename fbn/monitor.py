@@ -26,7 +26,13 @@ LOGGER = get_logger("monitor")
 class PostSource(Protocol):
     """A bounded source of recent posts."""
 
-    def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
+    def fetch_recent(
+        self,
+        group: GroupRef,
+        policy: ScanPolicy,
+        *,
+        boundary_post_id: str | None = None,
+    ) -> ScanResult:
         """Fetch recent posts or raise a typed acquisition failure."""
 
 
@@ -35,6 +41,9 @@ class StateRepository(Protocol):
 
     def run_lock(self) -> AbstractContextManager[None]:
         """Exclusively own one observation and delivery cycle."""
+
+    def notification_boundary(self, group: GroupRef) -> str | None:
+        """Return the post that the next scan should try to reach."""
 
     def observe(
         self,
@@ -107,7 +116,12 @@ class MonitorService:
 
         LOGGER.info("Observation started", group_key=group.key)
         try:
-            scan = self.source.fetch_recent(group, policy)
+            boundary_post_id = self.state.notification_boundary(group)
+            scan = self.source.fetch_recent(
+                group,
+                policy,
+                boundary_post_id=boundary_post_id,
+            )
         except Exception as exc:
             LOGGER.warning(
                 "Observation scan failed",

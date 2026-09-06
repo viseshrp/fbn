@@ -755,8 +755,14 @@ class PlaywrightPostSource:
             for cookie in cookies
         }
 
-    def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
-        """Fetch a bounded, deterministic sample from the visible group feed."""
+    def fetch_recent(
+        self,
+        group: GroupRef,
+        policy: ScanPolicy,
+        *,
+        boundary_post_id: str | None = None,
+    ) -> ScanResult:
+        """Fetch recent posts, looking deeper for the stored post marker."""
 
         LOGGER.debug(
             "Feed fetch started",
@@ -764,6 +770,7 @@ class PlaywrightPostSource:
             browser=self.settings.browser,
             headless=self.settings.headless,
             sample_count=policy.sample_count,
+            boundary_search=boundary_post_id is not None,
         )
         with self._context(
             headless=self.settings.headless,
@@ -802,7 +809,13 @@ class PlaywrightPostSource:
                     )
 
                 observed_at = datetime.now(timezone.utc)
-                posts = self._scan_feed(page, group, policy, observed_at)
+                posts = self._scan_feed(
+                    page,
+                    group,
+                    policy,
+                    observed_at,
+                    boundary_post_id=boundary_post_id,
+                )
                 if not posts:
                     raise LayoutChangedError(
                         "A feed was present, but no supported post permalinks "
@@ -830,12 +843,18 @@ class PlaywrightPostSource:
         group: GroupRef,
         policy: ScanPolicy,
         observed_at: datetime,
+        *,
+        boundary_post_id: str | None = None,
     ) -> ScanResult:
         accumulated: list[Post] = []
         seen_ids: set[str] = set()
         stagnant = 0
         scrolls = 0
+        limit_reached = False
         allowed_group_keys: frozenset[str] = frozenset({group.key})
+        post_limit = policy.sample_count
+        if boundary_post_id is not None:
+            post_limit *= policy.max_scrolls + 1
 
         for scan_index in range(policy.max_scrolls + 1):
             state = wait_for_terminal_page(
@@ -853,7 +872,7 @@ class PlaywrightPostSource:
                 collect_dom_payloads(page),
                 group,
                 observed_at,
-                limit=policy.sample_count,
+                limit=post_limit,
                 allowed_group_keys=allowed_group_keys,
                 timezone_name=policy.timezone_name,
             )
@@ -869,13 +888,26 @@ class PlaywrightPostSource:
                     continue
                 seen_ids.add(post.post_id)
                 accumulated.append(replace(post, position=len(accumulated)))
-                if len(accumulated) >= policy.sample_count:
+                if post.post_id == boundary_post_id:
                     return ScanResult(
                         posts=tuple(accumulated),
                         page_state=PageState.FEED.value,
                         scrolls=scrolls,
-                        bounded=True,
+                        bounded=False,
                     )
+                if len(accumulated) >= post_limit:
+                    if boundary_post_id is None:
+                        return ScanResult(
+                            posts=tuple(accumulated),
+                            page_state=PageState.FEED.value,
+                            scrolls=scrolls,
+                            bounded=True,
+                        )
+                    limit_reached = True
+                    break
+
+            if limit_reached:
+                break
 
             stagnant = stagnant + 1 if len(accumulated) == before else 0
             if stagnant >= policy.stagnant_scrolls or scan_index == policy.max_scrolls:
@@ -887,12 +919,21 @@ class PlaywrightPostSource:
             scrolls += 1
             page.wait_for_timeout(policy.settle_seconds * 1_000)
 
+        if boundary_post_id is not None:
+            LOGGER.warning(
+                "Stored post marker was not reached within scan limits",
+                group_key=group.key,
+                post_count=len(accumulated),
+                scroll_count=scrolls,
+            )
         return ScanResult(
             posts=tuple(accumulated),
             page_state=PageState.FEED.value,
             scrolls=scrolls,
             bounded=(
-                scrolls >= policy.max_scrolls or stagnant >= policy.stagnant_scrolls
+                limit_reached
+                or scrolls >= policy.max_scrolls
+                or stagnant >= policy.stagnant_scrolls
             ),
         )
 

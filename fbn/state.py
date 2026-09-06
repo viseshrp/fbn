@@ -192,6 +192,28 @@ class SQLiteStateRepository:
         finally:
             lock.release()
 
+    def notification_boundary(self, group: GroupRef) -> str | None:
+        """Return the stored post marker for a group, if one exists."""
+
+        if not isinstance(group, GroupRef):
+            raise ValueError("group must be a GroupRef")
+        row = (
+            self._require_connection()
+            .execute(
+                """
+                SELECT notification_boundary_post_id
+                FROM groups
+                WHERE group_key = ?
+                """,
+                (group.key,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        value = row["notification_boundary_post_id"]
+        return str(value) if value is not None else None
+
     def observe(
         self,
         group: GroupRef,
@@ -583,12 +605,13 @@ class SQLiteStateRepository:
         ordered_posts: Sequence[Post],
         boundary_post_id: str | None,
     ) -> Post | None:
-        """Return the newest visible post already used as a notification boundary."""
+        """Return the stored marker, or an outbox fallback when no marker exists."""
 
         if boundary_post_id is not None:
-            for post in ordered_posts:
-                if post.post_id == boundary_post_id:
-                    return post
+            return next(
+                (post for post in ordered_posts if post.post_id == boundary_post_id),
+                None,
+            )
 
         notified_ids = SQLiteStateRepository._visible_outbox_post_ids(
             connection,
@@ -607,9 +630,13 @@ class SQLiteStateRepository:
         ordered_posts: Sequence[Post],
         current_boundary_post_id: str | None,
     ) -> str | None:
-        """Choose the newest visible queued post, retaining the current boundary."""
+        """Advance a visible marker, but keep a missing marker as an open gap."""
 
         if not ordered_posts:
+            return current_boundary_post_id
+        if current_boundary_post_id is not None and all(
+            post.post_id != current_boundary_post_id for post in ordered_posts
+        ):
             return current_boundary_post_id
         queued_ids = SQLiteStateRepository._visible_outbox_post_ids(
             connection,

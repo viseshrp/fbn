@@ -45,14 +45,30 @@ PENDING = PendingNotification(
 
 
 class FakeSource:
-    def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
+    def __init__(self) -> None:
+        self.boundary_post_id: str | None = None
+
+    def fetch_recent(
+        self,
+        group: GroupRef,
+        policy: ScanPolicy,
+        *,
+        boundary_post_id: str | None = None,
+    ) -> ScanResult:
         assert group is GROUP
+        self.boundary_post_id = boundary_post_id
         return ScanResult((POST,), "feed", 0, False)
 
 
 class FakeState:
-    def __init__(self, batch: ObservationBatch) -> None:
+    def __init__(
+        self,
+        batch: ObservationBatch,
+        *,
+        boundary_post_id: str | None = None,
+    ) -> None:
         self.batch = batch
+        self.boundary_post_id = boundary_post_id
         self.current_pending = list(batch.pending)
         self.delivered: list[str] = []
         self.failed: list[tuple[list[str], str]] = []
@@ -66,6 +82,10 @@ class FakeState:
             yield
         finally:
             self.lock_events.append("released")
+
+    def notification_boundary(self, group: GroupRef) -> str | None:
+        assert group is GROUP
+        return self.boundary_post_id
 
     def observe(self, *args: object, **kwargs: object) -> ObservationBatch:
         self.observe_kwargs = kwargs
@@ -132,13 +152,35 @@ def test_pending_is_delivered_then_marked() -> None:
     assert summary.pending == 0
 
 
+def test_source_looks_for_the_stored_notification_boundary() -> None:
+    state = FakeState(
+        ObservationBatch(True, 1, 0, ()),
+        boundary_post_id="remembered-post",
+    )
+    source = FakeSource()
+
+    MonitorService(source, state, FakeSink()).run_once(GROUP, ScanPolicy())
+
+    assert source.boundary_post_id == "remembered-post"
+
+
 def test_run_lock_encloses_fetch_and_delivery() -> None:
     state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
 
     class LockAwareSource(FakeSource):
-        def fetch_recent(self, group: GroupRef, policy: ScanPolicy) -> ScanResult:
+        def fetch_recent(
+            self,
+            group: GroupRef,
+            policy: ScanPolicy,
+            *,
+            boundary_post_id: str | None = None,
+        ) -> ScanResult:
             state.lock_events.append("fetched")
-            return super().fetch_recent(group, policy)
+            return super().fetch_recent(
+                group,
+                policy,
+                boundary_post_id=boundary_post_id,
+            )
 
     class LockAwareSink(FakeSink):
         def send(self, notification: object) -> None:

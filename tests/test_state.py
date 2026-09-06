@@ -217,7 +217,9 @@ def test_boundary_advances_and_survives_restart(tmp_path: Path) -> None:
     assert boundary == "newest"
 
 
-def test_missing_boundary_queues_the_entire_visible_sample(tmp_path: Path) -> None:
+def test_missing_boundary_queues_visible_posts_without_moving_the_marker(
+    tmp_path: Path,
+) -> None:
     state_path = tmp_path / "state.sqlite3"
     with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
         repository.observe(GROUP, (post("baseline"),))
@@ -234,9 +236,45 @@ def test_missing_boundary_queues_the_entire_visible_sample(tmp_path: Path) -> No
             (post("newest", position=0), post("next", position=1)),
             observed_at=T0 + timedelta(hours=1),
         )
+        boundary = repository.notification_boundary(GROUP)
 
     assert observation.queued == 2
     assert [item.post_id for item in observation.pending] == ["newest", "next"]
+    assert boundary == "outside-sample"
+
+
+def test_missing_boundary_keeps_queueing_posts_that_appear_later(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
+        repository.observe(GROUP, (post("old-boundary"),))
+        first = repository.observe(
+            GROUP,
+            tuple(post(f"new-{index}", position=index) for index in range(10)),
+            observed_at=T0 + timedelta(hours=1),
+        )
+        repository.mark_delivered(tuple(item.event_id for item in first.pending))
+
+        second_posts = tuple(
+            post(
+                f"new-{index}" if index < 9 else "previously-outside-sample",
+                position=index,
+            )
+            for index in range(10)
+        )
+        second = repository.observe(
+            GROUP,
+            second_posts,
+            observed_at=T0 + timedelta(hours=2),
+        )
+        boundary = repository.notification_boundary(GROUP)
+
+    assert first.queued == 10
+    assert second.inserted == 1
+    assert second.queued == 1
+    assert [item.post_id for item in second.pending] == ["previously-outside-sample"]
+    assert boundary == "old-boundary"
 
 
 def test_seen_but_unnotified_post_is_queued_after_it_moves_before_boundary(

@@ -179,7 +179,8 @@ exit code. Only transient navigation failures are backed off and retried.
 
 Useful options include:
 
-- `--sample-count`: cap the number of recent posts inspected;
+- `--sample-count`: set the normal number of recent posts checked; the catch-up
+  limit is this number multiplied by the allowed extraction passes;
 - `--timezone`: set the IANA timezone used to render and interpret Facebook
   timestamps; the default is `UTC`;
 - `--notify-initial`: notify for the first visible sample instead of baselining;
@@ -465,12 +466,15 @@ events remain pending and may appear again.
 ### An older post appeared in the feed
 
 Facebook can reorder, pin, or later expose a post that `fbn` has not identified
-before. After the first baseline, `fbn` queues every unnotified post displayed
-before the stored notification boundary and records later items without
-notifying them. The boundary advances to the newest queued post. If the stored
-boundary and every previously queued post have left the bounded sample, `fbn`
-treats the whole visible sample as newer so a long outage does not silently
-drop posts. Publication dates do not control notification eligibility.
+before. After the first check, `fbn` remembers the newest post it has handled.
+On later checks, it notifies you about every unsent post above that remembered
+post. It will scroll farther than the normal sample when needed to find it.
+
+If the remembered post is not found before the scan limit, `fbn` sends every
+visible post it has not sent before, but it does not move the marker. That keeps
+the gap open: posts that appear in a later scan are still sent instead of being
+mistaken for old posts. Publication dates do not decide whether a notification
+is sent.
 
 ## Migrating from fbn 0.1
 

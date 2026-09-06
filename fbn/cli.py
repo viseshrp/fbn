@@ -115,7 +115,10 @@ def _scan_options(function: CommandFunction) -> CommandFunction:
             type=click.IntRange(1, 50),
             default=10,
             show_default=True,
-            help="Maximum visible posts retained from one bounded scan.",
+            help=(
+                "Normal post limit; the catch-up limit is this value times "
+                "the number of allowed extraction passes."
+            ),
         ),
         click.option(
             "--max-scrolls",
