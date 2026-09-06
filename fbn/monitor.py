@@ -43,7 +43,6 @@ class StateRepository(Protocol):
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
-        same_day_only: bool = False,
     ) -> ObservationBatch:
         """Atomically record a scan and return pending delivery records."""
 
@@ -130,7 +129,6 @@ class MonitorService:
             scan.posts,
             notify_initial=notify_initial,
             observed_at=observed_at,
-            same_day_only=True,
         )
         pending = batch.pending
         delivered = 0

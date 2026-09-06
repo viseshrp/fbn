@@ -180,8 +180,8 @@ exit code. Only transient navigation failures are backed off and retried.
 Useful options include:
 
 - `--sample-count`: cap the number of recent posts inspected;
-- `--timezone`: set the IANA timezone used to interpret Facebook timestamps and
-  decide whether a post was published today; the default is `UTC`;
+- `--timezone`: set the IANA timezone used to render and interpret Facebook
+  timestamps; the default is `UTC`;
 - `--notify-initial`: notify for the first visible sample instead of baselining;
 - `--include-errors`: notify a concise, redacted operational error; and
 - `-v` / `--verbose`: emit secret-free lifecycle and browser diagnostics as
@@ -465,11 +465,12 @@ events remain pending and may appear again.
 ### An older post appeared in the feed
 
 Facebook can reorder, pin, or later expose a post that `fbn` has not identified
-before. The post is recorded as seen, but it is notified only when Facebook's
-rendered publication date is today in `--timezone`. This is a calendar-day
-boundary, not a rolling 24-hour window: a post from 11:59 PM yesterday is
-ineligible after midnight, while a post from early this morning remains
-eligible late tonight. Unknown timestamp layouts fail closed.
+before. After the first baseline, `fbn` queues every unnotified post displayed
+before the stored notification boundary and records later items without
+notifying them. The boundary advances to the newest queued post. If the stored
+boundary and every previously queued post have left the bounded sample, `fbn`
+treats the whole visible sample as newer so a long outage does not silently
+drop posts. Publication dates do not control notification eligibility.
 
 ## Migrating from fbn 0.1
 

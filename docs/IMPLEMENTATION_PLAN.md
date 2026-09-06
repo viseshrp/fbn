@@ -156,7 +156,7 @@ Verification:
 - no image or Compose health command invokes `fbn check`, `fbn monitor`, opens
   the profile, or navigates to Facebook.
 
-## Phase 7: calendar-day notification eligibility
+## Phase 7: calendar-day notification eligibility (superseded)
 
 - [x] Compare maintained Python human-date parsers using current GitHub
   repository and release metadata.
@@ -179,6 +179,20 @@ Verification:
   elapsed hours;
 - every unseen post is still recorded for deduplication; and
 - existing pending outbox rows remain retryable after midnight.
+
+Phase 8 below replaces the calendar-day state gate. Timestamp parsing remains
+part of extraction metadata.
+
+## Phase 8: durable notification boundary
+
+- [x] Persist a per-group notification boundary post ID.
+- [x] Queue every unnotified visible post before the newest visible boundary.
+- [x] Advance the boundary in the same transaction as posts and outbox rows.
+- [x] Fall back to a visible outbox post, or the full bounded sample when every
+  prior boundary has left the sample.
+- [x] Migrate version 1 databases from the latest outbox batch.
+- [x] Cover baseline, restart, reordering, missing-boundary, and migration cases
+  with local synthetic tests.
 
 Validation gates:
 
@@ -216,6 +230,7 @@ Raspberry Pi 4 hardware-target run remains deliberately open.
 7. `Add Ubuntu ARM64 and Docker deployment`
 8. `Filter notifications by Facebook post time`
 9. `Use calendar-day post eligibility`
+10. `Notify posts since the last boundary`
 
 The exact split may move a test into the same commit as the code it verifies.
 No commit should knowingly contain an untested state transition or a broken

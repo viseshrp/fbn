@@ -174,8 +174,7 @@ content.
   and consecutive stagnant scrolls.
 - A sample count must be between 1 and 50.
 - `--timezone` accepts an IANA timezone name and defaults to `UTC`. It controls
-  browser rendering, timestamp interpretation, and the same-day notification
-  boundary.
+  browser rendering and timestamp interpretation.
 
 ### FR-3: page-state classification
 
@@ -223,15 +222,19 @@ the same run.
   keeps its current mode. The database and its WAL/SHM sidecars use `0600`.
 - The first non-empty successful scan is a baseline unless `--notify-initial`
   is explicitly supplied.
-- New posts and their outbox entries are inserted atomically.
-- Every unseen supported post is stored for deduplication. An initialized group
-  creates an outbox entry only when the post has a recognized Facebook
-  publication date equal to the current calendar date in `--timezone`.
-- The eligibility rule is a calendar comparison, not an elapsed-age comparison.
-  A post immediately before midnight is ineligible immediately after midnight,
-  while a post from early today remains eligible late today.
-- Missing, malformed, materially future-skewed, or other-day publication
-  timestamps fail closed: the post is marked seen but is not notified.
+- New posts, boundary changes, and outbox entries are committed atomically.
+- The first non-empty baseline stores the top visible post as the notification
+  boundary. `--notify-initial` instead queues the visible sample and stores its
+  top post as the boundary.
+- On later scans, every unnotified post before the most recent visible boundary
+  is queued, regardless of its parsed publication date. Items after the
+  boundary are recorded without notification.
+- If the stored boundary is absent, the newest visible post already present in
+  the outbox is used as a fallback boundary. If no queued post is visible, the
+  bounded sample is treated as newer and all unnotified visible posts are
+  queued.
+- The boundary advances to the newest visible queued post. Existing version 1
+  databases seed it from the top-positioned item in their latest outbox batch.
 - Failed notification entries remain pending across process restarts.
 - Delivery is at-least-once: a process crash after a send but before its commit
   may cause a duplicate, but it must not silently lose a pending post.

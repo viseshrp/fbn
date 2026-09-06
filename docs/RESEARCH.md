@@ -45,8 +45,8 @@ container provides the same runtime for `linux/amd64` and `linux/arm64`.
 
 ## Human-date parsing follow-up
 
-GitHub repository metadata was refreshed on 2026-07-29 for the calendar-day
-notification change:
+GitHub repository metadata was refreshed on 2026-07-29 for the rendered
+timestamp parser change:
 
 | Library | GitHub finding | Fit |
 | --- | --- | --- |
@@ -57,11 +57,11 @@ notification change:
 | [parsedatetime](https://github.com/bear/parsedatetime) | 711 stars and active maintenance. | Viable, but substantially less adopted than `dateparser`. |
 
 `fbn` keeps a narrow allowlist for recognized Facebook timestamp shapes, then
-delegates actual date arithmetic to `dateparser`. This avoids accepting arbitrary
-feed text as a date while removing hand-written month, year-rollover, and
+delegates date arithmetic to `dateparser`. This avoids accepting arbitrary feed
+text as a date while removing hand-written month, year-rollover, and
 relative-duration calculations. `zoneinfo` plus the `tzdata` package validates
-the IANA timezone used consistently by Chromium, parsing, and the calendar-day
-gate.
+the IANA timezone used consistently by Chromium and parsing. Notification
+eligibility uses a durable feed-position boundary instead of timestamp age.
 
 ## Ubuntu ARM64 and Raspberry Pi feasibility
 

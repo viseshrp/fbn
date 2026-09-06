@@ -138,10 +138,7 @@ def _scan_options(function: CommandFunction) -> CommandFunction:
             envvar="FBN_TIMEZONE",
             show_default=True,
             show_envvar=True,
-            help=(
-                "IANA timezone for Facebook timestamps and the same-day "
-                "notification boundary."
-            ),
+            help=("IANA timezone for Facebook timestamp rendering and parsing."),
         ),
         click.option(
             "--navigation-timeout",

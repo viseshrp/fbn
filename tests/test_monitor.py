@@ -117,7 +117,7 @@ def test_baseline_without_pending_does_not_notify() -> None:
     assert summary.new_posts == 0
     assert summary.delivered == 0
     assert sink.sent == []
-    assert state.observe_kwargs["same_day_only"] is True
+    assert "same_day_only" not in state.observe_kwargs
 
 
 def test_pending_is_delivered_then_marked() -> None:
@@ -200,7 +200,7 @@ def test_operational_logs_include_counts_but_not_post_content() -> None:
     assert POST.url not in output
 
 
-def test_inserted_but_other_day_posts_are_not_reported_as_new() -> None:
+def test_inserted_but_ineligible_posts_are_not_reported_as_new() -> None:
     state = FakeState(ObservationBatch(False, 2, 0, ()))
     sink = FakeSink()
 

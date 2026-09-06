@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import TracebackType
 
 from filelock import FileLock
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS groups (
     initialized_at TEXT,
     last_success_at TEXT,
     next_eligible_at TEXT,
+    notification_boundary_post_id TEXT,
     consecutive_failures INTEGER NOT NULL DEFAULT 0
         CHECK (consecutive_failures >= 0)
 );
@@ -55,10 +56,8 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 CREATE INDEX IF NOT EXISTS outbox_pending_order
     ON outbox (group_key, delivered_at, created_at, position, event_id);
-
-PRAGMA user_version = 1;
 """
-_MAX_FUTURE_SKEW = timedelta(minutes=5)
+_SCHEMA_VERSION = 2
 
 
 def _utc_now() -> datetime:
@@ -80,20 +79,6 @@ def _timestamp(value: datetime, field_name: str) -> str:
 def _parse_timestamp(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return _as_utc(parsed, "stored timestamp")
-
-
-def _is_same_calendar_day(
-    post: Post,
-    scan_time: datetime,
-) -> bool:
-    if post.published_at is None:
-        return False
-    published_at = _as_utc(post.published_at, "published_at")
-    age = scan_time - published_at
-    local_scan_time = scan_time.astimezone(post.published_at.tzinfo)
-    return (
-        age >= -_MAX_FUTURE_SKEW and local_scan_time.date() == post.published_at.date()
-    )
 
 
 def _event_id(group_key: str, post_id: str) -> str:
@@ -142,6 +127,7 @@ class SQLiteStateRepository:
             self._connection.execute("PRAGMA busy_timeout = 30000")
             self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.executescript(_SCHEMA)
+            self._migrate_schema(self._connection)
             self._restrict_database_files()
         except ConfigurationError:
             raise
@@ -213,7 +199,6 @@ class SQLiteStateRepository:
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
-        same_day_only: bool = False,
     ) -> ObservationBatch:
         """Atomically store unseen posts and, when appropriate, outbox rows."""
 
@@ -221,8 +206,6 @@ class SQLiteStateRepository:
             raise ValueError("group must be a GroupRef")
         if not isinstance(notify_initial, bool):
             raise ValueError("notify_initial must be a boolean")
-        if not isinstance(same_day_only, bool):
-            raise ValueError("same_day_only must be a boolean")
         scan_time = _as_utc(
             self._clock() if observed_at is None else observed_at,
             "observed_at",
@@ -235,10 +218,15 @@ class SQLiteStateRepository:
         try:
             self._ensure_group(connection, group.key)
             group_row = connection.execute(
-                "SELECT initialized_at FROM groups WHERE group_key = ?",
+                """
+                SELECT initialized_at, notification_boundary_post_id
+                FROM groups
+                WHERE group_key = ?
+                """,
                 (group.key,),
             ).fetchone()
             initialized = bool(group_row["initialized_at"])
+            boundary_post_id = group_row["notification_boundary_post_id"]
             first_non_empty_scan = not initialized and bool(unique_posts)
             baseline = first_non_empty_scan and not notify_initial
             inserted_posts: list[Post] = []
@@ -290,9 +278,34 @@ class SQLiteStateRepository:
                     (scan_timestamp, group.key),
                 )
 
-            if not baseline:
-                for post in inserted_posts:
-                    if same_day_only and not _is_same_calendar_day(post, scan_time):
+            ordered_posts = sorted(unique_posts, key=lambda post: post.position)
+            eligible_posts: tuple[Post, ...] = ()
+            if ordered_posts and not baseline:
+                visible_boundary = self._visible_notification_boundary(
+                    connection,
+                    group.key,
+                    ordered_posts,
+                    boundary_post_id,
+                )
+                if visible_boundary is not None:
+                    boundary_index = next(
+                        index
+                        for index, post in enumerate(ordered_posts)
+                        if post.post_id == visible_boundary.post_id
+                    )
+                    eligible_posts = tuple(ordered_posts[:boundary_index])
+                elif boundary_post_id is not None or (
+                    notify_initial and first_non_empty_scan
+                ):
+                    eligible_posts = tuple(ordered_posts)
+
+                already_queued = self._visible_outbox_post_ids(
+                    connection,
+                    group.key,
+                    eligible_posts,
+                )
+                for post in eligible_posts:
+                    if post.post_id in already_queued:
                         continue
                     connection.execute(
                         """
@@ -318,13 +331,24 @@ class SQLiteStateRepository:
                     )
                     queued += 1
 
+            next_boundary_post_id = self._next_notification_boundary(
+                connection,
+                group.key,
+                ordered_posts,
+                boundary_post_id,
+            )
+            if next_boundary_post_id is None and ordered_posts:
+                next_boundary_post_id = ordered_posts[0].post_id
+
             connection.execute(
                 """
                 UPDATE groups
-                SET last_success_at = ?, consecutive_failures = 0
+                SET last_success_at = ?,
+                    notification_boundary_post_id = ?,
+                    consecutive_failures = 0
                 WHERE group_key = ?
                 """,
-                (scan_timestamp, group.key),
+                (scan_timestamp, next_boundary_post_id, group.key),
             )
             pending = self._pending_rows(connection, group.key)
             connection.commit()
@@ -507,6 +531,116 @@ class SQLiteStateRepository:
         if connection is None:
             raise RuntimeError("state repository is closed")
         return connection
+
+    @staticmethod
+    def _migrate_schema(connection: sqlite3.Connection) -> None:
+        """Upgrade existing state in place without discarding seen posts."""
+
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(groups)").fetchall()
+        }
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            if "notification_boundary_post_id" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE groups
+                    ADD COLUMN notification_boundary_post_id TEXT
+                    """
+                )
+                connection.execute(
+                    """
+                    WITH ranked AS (
+                        SELECT
+                            group_key,
+                            post_id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY group_key
+                                ORDER BY created_at DESC, position, event_id
+                            ) AS rank
+                        FROM outbox
+                    )
+                    UPDATE groups
+                    SET notification_boundary_post_id = (
+                        SELECT ranked.post_id
+                        FROM ranked
+                        WHERE ranked.group_key = groups.group_key
+                          AND ranked.rank = 1
+                    )
+                    """
+                )
+            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+
+    @staticmethod
+    def _visible_notification_boundary(
+        connection: sqlite3.Connection,
+        group_key: str,
+        ordered_posts: Sequence[Post],
+        boundary_post_id: str | None,
+    ) -> Post | None:
+        """Return the newest visible post already used as a notification boundary."""
+
+        if boundary_post_id is not None:
+            for post in ordered_posts:
+                if post.post_id == boundary_post_id:
+                    return post
+
+        notified_ids = SQLiteStateRepository._visible_outbox_post_ids(
+            connection,
+            group_key,
+            ordered_posts,
+        )
+        return next(
+            (post for post in ordered_posts if post.post_id in notified_ids),
+            None,
+        )
+
+    @staticmethod
+    def _next_notification_boundary(
+        connection: sqlite3.Connection,
+        group_key: str,
+        ordered_posts: Sequence[Post],
+        current_boundary_post_id: str | None,
+    ) -> str | None:
+        """Choose the newest visible queued post, retaining the current boundary."""
+
+        if not ordered_posts:
+            return current_boundary_post_id
+        queued_ids = SQLiteStateRepository._visible_outbox_post_ids(
+            connection,
+            group_key,
+            ordered_posts,
+        )
+        return next(
+            (post.post_id for post in ordered_posts if post.post_id in queued_ids),
+            current_boundary_post_id,
+        )
+
+    @staticmethod
+    def _visible_outbox_post_ids(
+        connection: sqlite3.Connection,
+        group_key: str,
+        posts: Sequence[Post],
+    ) -> set[str]:
+        if not posts:
+            return set()
+        placeholders = ", ".join("?" for _ in posts)
+        return {
+            row["post_id"]
+            for row in connection.execute(
+                f"""
+                SELECT post_id
+                FROM outbox
+                WHERE group_key = ? AND post_id IN ({placeholders})
+                """,
+                (group_key, *(post.post_id for post in posts)),
+            ).fetchall()
+        }
 
     @staticmethod
     def _ensure_group(connection: sqlite3.Connection, group_key: str) -> None:

@@ -203,10 +203,10 @@ removes query/fragment tracking data, normalizes Unicode/whitespace, enforces
 text limits, parses the rendered Facebook timestamp with `dateparser`, and
 deduplicates IDs while retaining the first visible position. Parsing uses the
 scan time as an explicit relative base and the configured IANA timezone. The
-Playwright context uses that same timezone so rendering, parsing, and calendar
-comparison share one boundary. The browser reconstructs timestamp text from
-glyphs whose rendered rectangles intersect the timestamp link, excluding
-Facebook's off-rectangle character decoys.
+Playwright context uses that same timezone so rendering and parsing agree. The
+browser reconstructs timestamp text from glyphs whose rendered rectangles
+intersect the timestamp link, excluding Facebook's off-rectangle character
+decoys.
 Facebook can redirect a numeric group URL while rendering its post permalinks
 under a custom group alias. The browser adapter accepts one such alias only
 when it is the sole candidate in the visible group-navigation tablist; related
@@ -224,11 +224,11 @@ pinned/reordered content, and unrecognized layouts.
 SQLite runs in WAL mode with foreign keys enabled.
 
 All supported unseen posts enter `posts`, even when their publication time is
-from another day or unavailable. The outbox gate is separate: after baseline
-initialization, only posts with a confidently parsed publication date equal to
-the scan's calendar date in the configured timezone are queued. This is not a
-rolling 24-hour comparison. Existing pending events remain retryable after the
-calendar day changes.
+unavailable. The first non-empty scan stores the top post as a notification
+boundary. Later scans queue each unnotified post that appears before the newest
+visible boundary and advance the boundary to the newest queued post. If no
+stored or previously queued boundary is visible, the whole bounded sample is
+treated as newer. Existing pending events remain retryable across restarts.
 
 ```sql
 CREATE TABLE groups (
@@ -236,6 +236,7 @@ CREATE TABLE groups (
     initialized_at TEXT,
     last_success_at TEXT,
     next_eligible_at TEXT,
+    notification_boundary_post_id TEXT,
     consecutive_failures INTEGER NOT NULL DEFAULT 0
 );
 

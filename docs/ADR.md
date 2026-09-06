@@ -88,16 +88,19 @@ remains the notification abstraction. A small in-process loop provides the
 legacy long-running mode, while a one-shot command supports cron, systemd timers,
 and n8n orchestration.
 
-Post identity and freshness are separate decisions. Every supported unseen post
-is persisted for deduplication, including photo-only posts identified through a
-Facebook `set=gm.<post-id>` photo link. Notification eligibility additionally
-requires a recognized rendered Facebook publication timestamp whose calendar
-date is today in a configured IANA timezone. The same timezone is applied to the
-Playwright context, timestamp parser, and notification boundary. The browser
+Post identity and notification order are separate decisions. Every supported
+unseen post is persisted for deduplication, including photo-only posts
+identified through a Facebook `set=gm.<post-id>` photo link. The first baseline
+stores the top visible post as a durable boundary. Later scans queue every
+unnotified post before the newest visible boundary, then advance the boundary
+with the outbox transaction. If no stored or previously queued boundary remains
+visible, the whole bounded sample is treated as newer.
+
+Rendered Facebook publication timestamps remain parsed for post metadata, but
+they do not control notification eligibility. The configured IANA timezone is
+applied to both the Playwright context and timestamp parser. The browser
 reconstructs timestamp text from characters actually rendered inside the
-timestamp link; off-rectangle decoy characters are excluded. An unknown
-timestamp or a timestamp from another calendar day is recorded as seen but does
-not enter the notification outbox.
+timestamp link; off-rectangle decoy characters are excluded.
 
 Use `dateparser` for the allowlisted English Facebook timestamp forms, with the
 scan time supplied as its explicit relative base. Arrow and Pendulum are more
@@ -106,7 +109,7 @@ relative strings needed here. Maya has more GitHub stars than `dateparser`, but
 its latest release is substantially older and it is not selected. `dateparser`
 is the most popular actively maintained direct human-date parser evaluated for
 this requirement. Standard-library `zoneinfo`, backed by the `tzdata` package,
-validates IANA timezone names and performs the final calendar comparison.
+validates IANA timezone names.
 
 ## Consequences
 
@@ -120,9 +123,8 @@ validates IANA timezone names and performs the final calendar comparison.
 - The dependency set is smaller and the acquisition path is deterministic.
 - A user can recover a session manually through the optional headed command.
 - Seen posts and pending deliveries survive restarts.
-- Reordered, pinned, or newly extractable historical posts do not create false
-  "new post" alerts when their Facebook publication date is not today in the
-  configured timezone.
+- Reordered or pinned posts after the visible notification boundary are stored
+  without creating a false "new post" alert.
 - The same browser backend and profile work for headless bootstrap, unattended
   operation, and optional headed recovery.
 - Ubuntu ARM64 and Ubuntu-container deployments do not depend on a separately

@@ -59,11 +59,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process restart instead of losing the post.
 - Accepted Facebook's positioned feed-item wrapper around one primary semantic
   article while continuing to reject deeper quoted/shared-post permalinks.
-- Added photo-only group-post identity handling and a rendered publication-time
-  gate so newly discovered historical posts are recorded without being
-  announced as new. `dateparser` interprets Facebook's relative timestamps in a
-  configured IANA timezone, and notifications require the publication date to
-  match the current calendar day.
+- Added photo-only group-post identity handling and parsed rendered publication
+  timestamps with `dateparser` in a configured IANA timezone.
+- Replaced calendar-day notification eligibility with a durable feed boundary.
+  Every unnotified post before the latest queued item is queued atomically,
+  independent of its parsed publication date.
 - Changed `-V` / `--version` to the version flag and reserved `-v` /
   `--verbose` for logging.
 - Scoped this version as an unreleased tool for local academic research.

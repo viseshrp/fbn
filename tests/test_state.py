@@ -6,7 +6,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -19,7 +18,6 @@ GROUP = GroupRef(
     url="https://www.facebook.com/groups/example-group/",
 )
 T0 = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
-NEW_YORK = ZoneInfo("America/New_York")
 
 
 def post(
@@ -64,7 +62,7 @@ def test_first_nonempty_scan_is_baseline_even_after_empty_success(
     assert baseline.pending == ()
 
 
-def test_restart_safe_deduplication_queues_only_unseen_posts(
+def test_restart_safe_deduplication_queues_new_post_before_boundary(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "state.sqlite3"
@@ -76,8 +74,8 @@ def test_restart_safe_deduplication_queues_only_unseen_posts(
         observation = repository.observe(
             GROUP,
             (
-                post("seen", position=0, observed_at=later),
-                post("new", position=1, observed_at=later),
+                post("new", position=0, observed_at=later),
+                post("seen", position=1, observed_at=later),
             ),
         )
 
@@ -138,11 +136,10 @@ def test_notify_initial_populates_outbox_in_position_order(tmp_path: Path) -> No
     assert [item.post_id for item in observation.pending] == ["first", "later"]
 
 
-def test_same_day_gate_records_other_day_and_unknown_posts_without_queueing(
+def test_boundary_queues_every_unnotified_post_before_it_regardless_of_date(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "state.sqlite3"
-    scan_time = datetime(2026, 7, 29, 23, 30, tzinfo=NEW_YORK)
     with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
         repository.observe(GROUP, (post("baseline"),))
         observation = repository.observe(
@@ -151,37 +148,13 @@ def test_same_day_gate_records_other_day_and_unknown_posts_without_queueing(
                 post(
                     "other-day",
                     position=0,
-                    observed_at=scan_time,
-                    published_at=datetime(
-                        2026,
-                        7,
-                        28,
-                        23,
-                        59,
-                        tzinfo=NEW_YORK,
-                    ),
+                    published_at=T0 - timedelta(days=2),
                 ),
-                post(
-                    "unknown",
-                    position=1,
-                    observed_at=scan_time,
-                ),
-                post(
-                    "same-day-old",
-                    position=2,
-                    observed_at=scan_time,
-                    published_at=datetime(
-                        2026,
-                        7,
-                        29,
-                        0,
-                        15,
-                        tzinfo=NEW_YORK,
-                    ),
-                ),
+                post("unknown", position=1),
+                post("baseline", position=2),
+                post("older-unseen", position=3),
             ),
-            observed_at=scan_time,
-            same_day_only=True,
+            observed_at=T0 + timedelta(hours=1),
         )
 
         stored_ids = {
@@ -192,53 +165,184 @@ def test_same_day_gate_records_other_day_and_unknown_posts_without_queueing(
         }
 
     assert observation.inserted == 3
-    assert observation.queued == 1
-    assert [item.post_id for item in observation.pending] == ["same-day-old"]
-    assert stored_ids == {"baseline", "other-day", "unknown", "same-day-old"}
+    assert observation.queued == 2
+    assert [item.post_id for item in observation.pending] == [
+        "other-day",
+        "unknown",
+    ]
+    assert stored_ids == {"baseline", "other-day", "unknown", "older-unseen"}
 
 
-def test_same_day_gate_rejects_recent_post_across_midnight(tmp_path: Path) -> None:
+def test_boundary_advances_and_survives_restart(tmp_path: Path) -> None:
     state_path = tmp_path / "state.sqlite3"
-    scan_time = datetime(2026, 7, 30, 0, 5, tzinfo=NEW_YORK)
     with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
         repository.observe(GROUP, (post("baseline"),))
+        first = repository.observe(
+            GROUP,
+            (
+                post("first-new", position=0),
+                post("baseline", position=1),
+            ),
+            observed_at=T0 + timedelta(hours=1),
+        )
+        repository.mark_delivered((first.pending[0].event_id,))
+
+    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
         observation = repository.observe(
             GROUP,
             (
-                post(
-                    "six-minutes-old-yesterday",
-                    position=0,
-                    observed_at=scan_time,
-                    published_at=datetime(
-                        2026,
-                        7,
-                        29,
-                        23,
-                        59,
-                        tzinfo=NEW_YORK,
-                    ),
-                ),
-                post(
-                    "four-minutes-old-today",
-                    position=1,
-                    observed_at=scan_time,
-                    published_at=datetime(
-                        2026,
-                        7,
-                        30,
-                        0,
-                        1,
-                        tzinfo=NEW_YORK,
-                    ),
-                ),
+                post("newest", position=0),
+                post("next", position=1),
+                post("first-new", position=2),
+                post("older-unseen", position=3),
             ),
-            observed_at=scan_time,
-            same_day_only=True,
+            observed_at=T0 + timedelta(hours=2),
+        )
+        boundary = (
+            repository._require_connection()
+            .execute(
+                """
+                SELECT notification_boundary_post_id
+                FROM groups
+                WHERE group_key = ?
+                """,
+                (GROUP.key,),
+            )
+            .fetchone()[0]
         )
 
-    assert observation.inserted == 2
-    assert observation.queued == 1
-    assert [item.post_id for item in observation.pending] == ["four-minutes-old-today"]
+    assert observation.inserted == 3
+    assert observation.queued == 2
+    assert [item.post_id for item in observation.pending] == ["newest", "next"]
+    assert boundary == "newest"
+
+
+def test_missing_boundary_queues_the_entire_visible_sample(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
+        repository.observe(GROUP, (post("baseline"),))
+        repository._require_connection().execute(
+            """
+            UPDATE groups
+            SET notification_boundary_post_id = 'outside-sample'
+            WHERE group_key = ?
+            """,
+            (GROUP.key,),
+        )
+        observation = repository.observe(
+            GROUP,
+            (post("newest", position=0), post("next", position=1)),
+            observed_at=T0 + timedelta(hours=1),
+        )
+
+    assert observation.queued == 2
+    assert [item.post_id for item in observation.pending] == ["newest", "next"]
+
+
+def test_seen_but_unnotified_post_is_queued_after_it_moves_before_boundary(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
+        repository.observe(GROUP, (post("boundary"),))
+        first = repository.observe(
+            GROUP,
+            (post("boundary", position=0), post("later", position=1)),
+            observed_at=T0 + timedelta(hours=1),
+        )
+        second = repository.observe(
+            GROUP,
+            (post("later", position=0), post("boundary", position=1)),
+            observed_at=T0 + timedelta(hours=2),
+        )
+
+    assert first.inserted == 1
+    assert first.queued == 0
+    assert second.inserted == 0
+    assert second.queued == 1
+    assert [item.post_id for item in second.pending] == ["later"]
+
+
+def test_version_one_state_is_migrated_from_latest_outbox_batch(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    connection = sqlite3.connect(state_path)
+    connection.executescript(
+        """
+        CREATE TABLE groups (
+            group_key TEXT PRIMARY KEY,
+            initialized_at TEXT,
+            last_success_at TEXT,
+            next_eligible_at TEXT,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE posts (
+            group_key TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            canonical_url TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            PRIMARY KEY (group_key, post_id)
+        );
+        CREATE TABLE outbox (
+            event_id TEXT PRIMARY KEY,
+            group_key TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            author TEXT,
+            body TEXT,
+            position INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            delivered_at TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            UNIQUE (group_key, post_id)
+        );
+        INSERT INTO groups (group_key, initialized_at)
+        VALUES ('example-group', '2026-01-01T12:00:00+00:00');
+        INSERT INTO posts VALUES
+            ('example-group', 'older', 'https://example.invalid/older',
+             '2026-01-01T12:00:00+00:00', '2026-01-01T12:00:00+00:00'),
+            ('example-group', 'latest-top', 'https://example.invalid/latest-top',
+             '2026-01-01T13:00:00+00:00', '2026-01-01T13:00:00+00:00'),
+            ('example-group', 'latest-second',
+             'https://example.invalid/latest-second',
+             '2026-01-01T13:00:00+00:00', '2026-01-01T13:00:00+00:00');
+        INSERT INTO outbox (
+            event_id, group_key, post_id, position, created_at, delivered_at
+        ) VALUES
+            ('older-event', 'example-group', 'older', 0,
+             '2026-01-01T12:00:00+00:00', '2026-01-01T12:01:00+00:00'),
+            ('latest-second-event', 'example-group', 'latest-second', 1,
+             '2026-01-01T13:00:00+00:00', '2026-01-01T13:01:00+00:00'),
+            ('latest-top-event', 'example-group', 'latest-top', 0,
+             '2026-01-01T13:00:00+00:00', '2026-01-01T13:01:00+00:00');
+        PRAGMA user_version = 1;
+        """
+    )
+    connection.close()
+
+    with SQLiteStateRepository(state_path) as repository:
+        row = (
+            repository._require_connection()
+            .execute(
+                """
+                SELECT notification_boundary_post_id
+                FROM groups
+                WHERE group_key = ?
+                """,
+                (GROUP.key,),
+            )
+            .fetchone()
+        )
+        version = (
+            repository._require_connection()
+            .execute("PRAGMA user_version")
+            .fetchone()[0]
+        )
+
+    assert row["notification_boundary_post_id"] == "latest-top"
+    assert version == 2
 
 
 def test_posts_and_outbox_entries_are_inserted_atomically(
