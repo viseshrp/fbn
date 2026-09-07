@@ -67,6 +67,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Made catch-up scans look beyond the normal sample for the stored post marker.
   When that marker is still missing, visible unnotified posts are queued without
   moving it, so posts exposed by later scans are not silently skipped.
+- Excluded nested comment and reply content from post authors and bodies, and
+  rejected comment-specific permalinks as post identities.
 - Changed `-V` / `--version` to the version flag and reserved `-v` /
   `--verbose` for logging.
 - Scoped this version as an unreleased tool for local academic research.

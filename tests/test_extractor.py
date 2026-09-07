@@ -119,6 +119,8 @@ def test_parse_post_url_accepts_group_photo_identity_link() -> None:
         "https://www.facebook.com/groups/local/posts/0/",
         "https://www.facebook.com/groups/local/photos/123/",
         "https://www.facebook.com/groups/local/posts/123/comments/",
+        "https://www.facebook.com/groups/local/posts/123/?comment_id=456",
+        "https://www.facebook.com/groups/local/posts/123/?reply_comment_id=789",
         "https://www.facebook.com/photo/?fbid=987&set=gm.123",
         "https://www.facebook.com/photo/?fbid=987&idorvanity=local",
         "https://www.facebook.com/photo/?set=gm.123&idorvanity=local&idorvanity=other",

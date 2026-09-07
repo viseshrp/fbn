@@ -206,6 +206,30 @@ def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None
     assert posts[0].published_at == observed_at - timedelta(minutes=41)
 
 
+def test_headless_browser_excludes_nested_reply_author_and_body(
+    tmp_path: Path,
+) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("comment_reply_feed.html"))
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+
+    posts = extract_posts(payloads, group, observed_at, limit=10)
+
+    assert len(posts) == 1
+    assert posts[0].post_id == "301"
+    assert posts[0].author == "Parent Example"
+    assert posts[0].text == "Primary post body"
+    assert "Reply Example" not in posts[0].text
+    assert "Nested reply body" not in posts[0].text
+
+
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
 def test_headless_browser_rejects_links_outside_direct_feed_items(
     tmp_path: Path,

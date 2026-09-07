@@ -51,12 +51,38 @@ DOM_SCAN_SCRIPT = """
   const positionedItemSelector =
     '[aria-posinset],[data-pagelet*="FeedUnit"]';
   const feedSelector = '[role="feed"],[data-pagelet*="GroupFeed"]';
+  const discussionSelector =
+    '[aria-label^="Comment by "],[aria-label^="Reply by "],' +
+    '[data-ad-rendering-role="comment"],[data-pagelet*="Comment"]';
   const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
     (root) => root.getClientRects().length > 0
   );
   const stripGraphemeJoiners = (value) => value.replace(/\\u034f/g, '');
+  const nestedContentRoots = (container) => Array.from(
+    container.querySelectorAll(`${itemSelector},${discussionSelector}`)
+  ).filter((candidate) => candidate !== container);
+  const isNestedContent = (element, container) => nestedContentRoots(container)
+    .some((candidate) => candidate.contains(element));
   const cleanContainerText = (container, authorElement, timestampElement) => {
-    let text = stripGraphemeJoiners(container.innerText || '').trim();
+    const hidden = nestedContentRoots(container).map((element) => ({
+      element,
+      style: element.getAttribute('style'),
+    }));
+    for (const item of hidden) {
+      item.element.style.setProperty('display', 'none', 'important');
+    }
+    let text = '';
+    try {
+      text = stripGraphemeJoiners(container.innerText || '').trim();
+    } finally {
+      for (const item of hidden) {
+        if (item.style === null) {
+          item.element.removeAttribute('style');
+        } else {
+          item.element.setAttribute('style', item.style);
+        }
+      }
+    }
     text = text.replace(/^(?:Facebook\\s+){2,}/i, '').trim();
 
     const author = authorElement
@@ -145,6 +171,21 @@ DOM_SCAN_SCRIPT = """
   );
   const seenContainers = new Set();
   const payloads = [];
+  const isCommentPermalink = (candidate) => {
+    const href = candidate.getAttribute('href') || candidate.href || '';
+    const queryStart = href.indexOf('?');
+    if (queryStart < 0) {
+      return false;
+    }
+    const fragmentStart = href.indexOf('#', queryStart);
+    const query = href.slice(
+      queryStart + 1,
+      fragmentStart < 0 ? undefined : fragmentStart
+    );
+    const parameters = new URLSearchParams(query);
+    return parameters.has('comment_id')
+      || parameters.has('reply_comment_id');
+  };
 
   for (const anchor of anchors) {
     const feedRoot = anchor.closest(feedSelector);
@@ -172,6 +213,9 @@ DOM_SCAN_SCRIPT = """
 
     const candidates = Array.from(container.querySelectorAll(linkSelector));
     const directCandidates = candidates.filter((candidate) => {
+      if (isCommentPermalink(candidate)) {
+        return false;
+      }
       const positionedItem = candidate.closest(positionedItemSelector);
       if (container.matches(positionedItemSelector)) {
         if (positionedItem !== container) {
@@ -200,13 +244,21 @@ DOM_SCAN_SCRIPT = """
       // identity of its outer feed item.
       continue;
     }
-    const authorElement = container.querySelector(
-      'h2 a, h3 a, h4 a, strong a'
-    );
-    const collapsed = Boolean(
-      container.querySelector('[aria-expanded="false"]')
-    );
-    const timestampLinks = Array.from(container.querySelectorAll('a'));
+    const selectedArticle = selected.closest('[role="article"]');
+    const contentContainer = selectedArticle && container.contains(selectedArticle)
+      ? selectedArticle
+      : container;
+    const authorElements = Array.from(contentContainer.querySelectorAll(
+      '[data-ad-rendering-role="profile_name"] a,'
+      + 'a[data-ad-rendering-role="profile_name"],'
+      + 'h2 a, h3 a, h4 a, strong a'
+    )).filter((candidate) => !isNestedContent(candidate, contentContainer));
+    const authorElement = authorElements[0] || null;
+    const collapsed = Array.from(
+      contentContainer.querySelectorAll('[aria-expanded="false"]')
+    ).some((candidate) => !isNestedContent(candidate, contentContainer));
+    const timestampLinks = Array.from(contentContainer.querySelectorAll('a'))
+      .filter((candidate) => !isNestedContent(candidate, contentContainer));
     const trackedTimestamp = timestampLinks.find((candidate) => (
       (candidate.getAttribute('href') || '').includes('__tn__=%2CO')
       && isTimestampText(visualText(candidate))
@@ -221,7 +273,7 @@ DOM_SCAN_SCRIPT = """
         ? {
             href: selected.href || selected.getAttribute('href') || '',
             text: cleanContainerText(
-              container,
+              contentContainer,
               authorElement,
               timestampElement
             ),

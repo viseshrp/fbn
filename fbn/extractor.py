@@ -118,15 +118,19 @@ def parse_post_url(value: object) -> PostLink | None:
         return None
 
     path = _facebook_path(value)
-    match = _POST_PATH_RE.fullmatch(path) if path is not None else None
+    if path is None:
+        return None
+    parsed = urlsplit(value)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if "comment_id" in query or "reply_comment_id" in query:
+        return None
+    match = _POST_PATH_RE.fullmatch(path)
     if match is not None:
         group_key = match.group("group")
         post_id = match.group("post")
         kind = match.group("kind")
         canonical_url = f"{FACEBOOK_ORIGIN}/groups/{group_key}/{kind}/{post_id}/"
     elif path in {"/photo", "/photo/"}:
-        parsed = urlsplit(value)
-        query = parse_qs(parsed.query, keep_blank_values=True)
         set_values = query.get("set", ())
         group_values = query.get("idorvanity", ())
         photo_match = (
