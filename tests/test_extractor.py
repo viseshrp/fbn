@@ -258,6 +258,59 @@ def test_extract_posts_has_deterministic_position_order_and_post_limit() -> None
     assert len(posts) == 2
 
 
+def test_fallback_post_uses_parent_url_from_comment_context() -> None:
+    posts = extract_posts(
+        [
+            {
+                "href": "https://www.facebook.com/groups/local/",
+                "contextHref": (
+                    "https://www.facebook.com/groups/local/posts/123/"
+                    "?comment_id=456&reply_comment_id=789"
+                ),
+                "fallback": True,
+                "identity": "author\npost body",
+                "text": "post body",
+            }
+        ],
+        parse_group_ref("local"),
+        OBSERVED_AT,
+        limit=1,
+    )
+
+    assert posts[0].post_id.startswith("content-")
+    assert posts[0].url == "https://www.facebook.com/groups/local/posts/123/"
+
+
+@pytest.mark.parametrize(
+    "context_href",
+    [
+        "https://www.facebook.com/groups/other/posts/123/?comment_id=456",
+        "https://evil.example/groups/local/posts/123/?comment_id=456",
+        "https://www.facebook.com/groups/local/posts/123/",
+    ],
+)
+def test_fallback_post_rejects_untrusted_parent_context(
+    context_href: str,
+) -> None:
+    group = parse_group_ref("local")
+    posts = extract_posts(
+        [
+            {
+                "href": group.url,
+                "contextHref": context_href,
+                "fallback": True,
+                "identity": "author\npost body",
+                "text": "post body",
+            }
+        ],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )
+
+    assert posts[0].url == group.url
+
+
 def test_normalize_visible_text_normalizes_unicode_whitespace_and_caps() -> None:
     value = "  \uff28\uff45\uff4c\uff4c\uff4f\tCafe\u0301 \n world  "
 

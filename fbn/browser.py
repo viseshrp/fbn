@@ -210,10 +210,7 @@ DOM_SCAN_SCRIPT = """
     }
 
     const candidates = Array.from(container.querySelectorAll(linkSelector));
-    const directCandidates = candidates.filter((candidate) => {
-      if (isCommentPermalink(candidate)) {
-        return false;
-      }
+    const directlyScopedCandidates = candidates.filter((candidate) => {
       const positionedItem = candidate.closest(positionedItemSelector);
       if (container.matches(positionedItemSelector)) {
         if (positionedItem !== container) {
@@ -236,7 +233,12 @@ DOM_SCAN_SCRIPT = """
 
       return candidate.closest(itemSelector) === container;
     });
-    const selected = directCandidates[0] || null;
+    const selected = directlyScopedCandidates.find(
+      (candidate) => !isCommentPermalink(candidate)
+    ) || null;
+    const commentContext = selected
+      ? null
+      : (directlyScopedCandidates.find(isCommentPermalink) || null);
     const selectedArticle = selected
       ? selected.closest('[role="article"]')
       : null;
@@ -337,6 +339,11 @@ DOM_SCAN_SCRIPT = """
               : null,
             fallback: !selected,
             identity: !selected ? fallbackIdentity : '',
+            contextHref: commentContext
+              ? (commentContext.href
+                || commentContext.getAttribute('href')
+                || '')
+              : '',
             partial: collapsed,
             position: payloads.length,
             timestamp,

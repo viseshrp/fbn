@@ -234,6 +234,7 @@ def _fallback_post_link(
     payload: Mapping[str, Any],
     group: GroupRef,
     text: str,
+    accepted_group_keys: Collection[str],
 ) -> PostLink | None:
     """Derive a local identity when Facebook omits the post permalink."""
 
@@ -246,10 +247,44 @@ def _fallback_post_link(
     if not identity:
         return None
     fingerprint = hashlib.sha256(f"{group.key}\0{identity}".encode()).hexdigest()
+    context_link = _comment_parent_post_link(payload.get("contextHref"))
+    url = group.url
+    if (
+        context_link is not None
+        and context_link.group_key.casefold() in accepted_group_keys
+    ):
+        url = context_link.url
     return PostLink(
         group_key=group.key,
         post_id=f"{FALLBACK_POST_ID_PREFIX}{fingerprint}",
-        url=group.url,
+        url=url,
+    )
+
+
+def _comment_parent_post_link(value: object) -> PostLink | None:
+    """Recover a parent-post URL from a comment or reply permalink."""
+
+    if not isinstance(value, str):
+        return None
+    path = _facebook_path(value)
+    if path is None:
+        return None
+    parsed = urlsplit(value)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if "comment_id" not in query and "reply_comment_id" not in query:
+        return None
+    match = _POST_PATH_RE.fullmatch(path)
+    if match is None:
+        return None
+    post_id = match.group("post")
+    if post_id.isdigit() and post_id.startswith("0"):
+        return None
+    group_key = match.group("group")
+    kind = match.group("kind")
+    return PostLink(
+        group_key=group_key,
+        post_id=post_id,
+        url=f"{FACEBOOK_ORIGIN}/groups/{group_key}/{kind}/{post_id}/",
     )
 
 
@@ -290,7 +325,12 @@ def extract_posts(
         text = normalize_visible_text(payload.get("text"), limit=text_limit)
         link = parse_post_url(payload.get("href"))
         if link is None:
-            link = _fallback_post_link(payload, group, text)
+            link = _fallback_post_link(
+                payload,
+                group,
+                text,
+                accepted_group_keys,
+            )
         if (
             link is None
             or link.group_key.casefold() not in accepted_group_keys

@@ -259,7 +259,7 @@ def test_headless_browser_fingerprints_post_when_permalink_is_omitted(
     assert len(first) == 1
     assert first[0].post_id.startswith("content-")
     assert first[0].post_id == second[0].post_id
-    assert first[0].url == "https://www.facebook.com/groups/test-group/"
+    assert first[0].url == ("https://www.facebook.com/groups/test-group/posts/999/")
     assert first[0].author == "Parent Example"
     assert first[0].text == "Primary post without a permalink"
     assert "Reply Example" not in first[0].text
