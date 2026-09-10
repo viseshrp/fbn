@@ -47,6 +47,21 @@ def test_empty_phrase_inside_a_feed_item_is_not_an_empty_feed() -> None:
         )
 
 
+def test_layout_error_names_missing_structural_signals() -> None:
+    page_signals = signals(
+        has_feed=True,
+        feed_root_count=1,
+        feed_item_count=2,
+        top_level_item_count=1,
+    )
+
+    with pytest.raises(
+        LayoutChangedError,
+        match=r"missing=direct_post_permalink,story_message;.*post_candidates=0",
+    ):
+        classify_page(page_signals)
+
+
 @pytest.mark.parametrize(
     ("page_signals", "error"),
     [

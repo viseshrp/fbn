@@ -250,6 +250,12 @@ def test_headless_browser_fingerprints_post_when_permalink_is_omitted(
     second = extract_posts(second_payloads, group, observed_at, limit=10)
 
     assert classify_page(signals) is PageState.FEED
+    assert signals.feed_root_count == 1
+    assert signals.top_level_item_count == 1
+    assert signals.direct_permalink_count == 0
+    assert signals.story_message_count == 1
+    assert signals.fallback_post_count == 1
+    assert signals.author_count == 1
     assert len(first) == 1
     assert first[0].post_id.startswith("content-")
     assert first[0].post_id == second[0].post_id

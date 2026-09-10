@@ -184,6 +184,10 @@ DOM_SCAN_SCRIPT = """
     }
   }
   const payloads = [];
+  let directPermalinkCount = 0;
+  let storyMessageCount = 0;
+  let fallbackPostCount = 0;
+  let authorCount = 0;
   const isCommentPermalink = (candidate) => {
     const href = candidate.getAttribute('href') || candidate.href || '';
     const queryStart = href.indexOf('?');
@@ -262,6 +266,15 @@ DOM_SCAN_SCRIPT = """
       '[data-ad-rendering-role="story_message"]'
     )).filter((candidate) => !isNestedContent(candidate, contentContainer));
     const storyElement = storyElements[0] || null;
+    if (selected) {
+      directPermalinkCount += 1;
+    }
+    if (storyElement) {
+      storyMessageCount += 1;
+    }
+    if (authorElement) {
+      authorCount += 1;
+    }
     if (!selected && !storyElement) {
       // A nested permalink or discussion alone is not a top-level post.
       continue;
@@ -282,6 +295,12 @@ DOM_SCAN_SCRIPT = """
     const fallbackText = storyElement
       ? cleanContainerText(storyElement, null, null)
       : '';
+    if (!selected && !fallbackText) {
+      continue;
+    }
+    if (!selected) {
+      fallbackPostCount += 1;
+    }
     let authorIdentity = authorElement
       ? (authorElement.innerText || '').trim()
       : '';
@@ -328,7 +347,13 @@ DOM_SCAN_SCRIPT = """
 
   return {
     hasFeed: feedRoots.length > 0,
+    feedRootCount: feedRoots.length,
     itemCount: new Set(semanticItems).size,
+    containerCount: containers.length,
+    directPermalinkCount,
+    storyMessageCount,
+    fallbackPostCount,
+    authorCount,
     postCount: payloads.length,
     payloads: includeContent ? payloads : [],
   };
@@ -349,7 +374,13 @@ class PageSignals:
 
     url: str
     status: int | None = None
+    feed_root_count: int = 0
     feed_item_count: int = 0
+    top_level_item_count: int = 0
+    direct_permalink_count: int = 0
+    story_message_count: int = 0
+    fallback_post_count: int = 0
+    author_count: int = 0
     post_count: int = 0
     has_feed: bool = False
     has_login: bool = False
@@ -357,6 +388,41 @@ class PageSignals:
     has_access_denied: bool = False
     has_rate_limit: bool = False
     has_explicit_empty: bool = False
+
+
+def _missing_layout_components(signals: PageSignals) -> tuple[str, ...]:
+    """Name absent safe structural signals without inspecting page content."""
+
+    missing: list[str] = []
+    if not signals.has_feed or signals.feed_root_count == 0:
+        missing.append("feed_root")
+    if signals.has_feed and signals.feed_item_count == 0:
+        missing.append("semantic_feed_item")
+    if signals.feed_item_count > 0 and signals.top_level_item_count == 0:
+        missing.append("top_level_feed_item")
+    if signals.top_level_item_count > 0 and signals.post_count == 0:
+        if signals.direct_permalink_count == 0:
+            missing.append("direct_post_permalink")
+        if signals.story_message_count == 0:
+            missing.append("story_message")
+        elif signals.fallback_post_count == 0:
+            missing.append("visible_story_body")
+    return tuple(missing or ("recognized_terminal_state",))
+
+
+def _layout_error_message(signals: PageSignals) -> str:
+    missing = ",".join(_missing_layout_components(signals))
+    return (
+        f"Unrecognized group feed layout: missing={missing}; "
+        f"feed_roots={signals.feed_root_count}; "
+        f"feed_items={signals.feed_item_count}; "
+        f"top_level_items={signals.top_level_item_count}; "
+        f"direct_permalinks={signals.direct_permalink_count}; "
+        f"story_messages={signals.story_message_count}; "
+        f"fallback_posts={signals.fallback_post_count}; "
+        f"authors={signals.author_count}; "
+        f"post_candidates={signals.post_count}."
+    )
 
 
 def classify_page(signals: PageSignals) -> PageState:
@@ -402,9 +468,7 @@ def classify_page(signals: PageSignals) -> PageState:
         raise TransientNavigationError(
             "Facebook asked this profile to slow down; no retry was attempted."
         )
-    raise LayoutChangedError(
-        "The page loaded without a recognized group feed or explicit empty state."
-    )
+    raise LayoutChangedError(_layout_error_message(signals))
 
 
 def _is_visible(page: Page, selector: str) -> bool:
@@ -487,7 +551,13 @@ def read_page_signals(page: Page, *, status: int | None = None) -> PageSignals:
     return PageSignals(
         url=page.url,
         status=status,
+        feed_root_count=int(feed_signals.get("feedRootCount", 0)),
         feed_item_count=int(feed_signals.get("itemCount", 0)),
+        top_level_item_count=int(feed_signals.get("containerCount", 0)),
+        direct_permalink_count=int(feed_signals.get("directPermalinkCount", 0)),
+        story_message_count=int(feed_signals.get("storyMessageCount", 0)),
+        fallback_post_count=int(feed_signals.get("fallbackPostCount", 0)),
+        author_count=int(feed_signals.get("authorCount", 0)),
         post_count=int(feed_signals.get("postCount", 0)),
         has_feed=feed_signals.get("hasFeed") is True,
         has_login=login_path
@@ -526,6 +596,18 @@ def wait_for_terminal_page(
                 ) from None
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                LOGGER.warning(
+                    "Group feed layout unrecognized",
+                    missing_components=",".join(_missing_layout_components(signals)),
+                    feed_root_count=signals.feed_root_count,
+                    feed_item_count=signals.feed_item_count,
+                    top_level_item_count=signals.top_level_item_count,
+                    direct_permalink_count=signals.direct_permalink_count,
+                    story_message_count=signals.story_message_count,
+                    fallback_post_count=signals.fallback_post_count,
+                    author_count=signals.author_count,
+                    post_candidate_count=signals.post_count,
+                )
                 raise
             page.wait_for_timeout(min(0.25, remaining) * 1_000)
             continue
@@ -907,9 +989,13 @@ class PlaywrightPostSource:
                     boundary_post_id=boundary_post_id,
                 )
                 if not posts:
+                    LOGGER.warning(
+                        "Feed post validation failed",
+                        missing_components="valid_post_identity_for_group",
+                    )
                     raise LayoutChangedError(
-                        "A feed was present, but no supported top-level posts "
-                        "were found."
+                        "A feed was present, but no top-level post had a valid "
+                        "identity for this group."
                     )
                 return posts
             except PlaywrightTimeoutError as exc:
