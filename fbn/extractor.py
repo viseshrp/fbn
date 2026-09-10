@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping
@@ -20,6 +21,8 @@ FACEBOOK_ORIGIN = "https://www.facebook.com"
 FACEBOOK_HOSTS = frozenset({"facebook.com", "www.facebook.com"})
 DEFAULT_TEXT_LIMIT = 4_000
 MAX_AUTHOR_LENGTH = 256
+MAX_FALLBACK_IDENTITY_LENGTH = 8_192
+FALLBACK_POST_ID_PREFIX = "content-"
 
 _GROUP_KEY_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 _POST_ID_PATTERN = r"[A-Za-z0-9]{1,200}"
@@ -227,6 +230,29 @@ def _payload_position(payload: Mapping[str, Any], fallback: int) -> int:
     return fallback
 
 
+def _fallback_post_link(
+    payload: Mapping[str, Any],
+    group: GroupRef,
+    text: str,
+) -> PostLink | None:
+    """Derive a local identity when Facebook omits the post permalink."""
+
+    if payload.get("fallback") is not True or not text:
+        return None
+    identity = normalize_visible_text(
+        payload.get("identity"),
+        limit=MAX_FALLBACK_IDENTITY_LENGTH,
+    )
+    if not identity:
+        return None
+    fingerprint = hashlib.sha256(f"{group.key}\0{identity}".encode()).hexdigest()
+    return PostLink(
+        group_key=group.key,
+        post_id=f"{FALLBACK_POST_ID_PREFIX}{fingerprint}",
+        url=group.url,
+    )
+
+
 def extract_posts(
     payloads: Iterable[Mapping[str, Any]],
     group: GroupRef,
@@ -261,7 +287,10 @@ def extract_posts(
         if not isinstance(payload, Mapping):
             continue
 
+        text = normalize_visible_text(payload.get("text"), limit=text_limit)
         link = parse_post_url(payload.get("href"))
+        if link is None:
+            link = _fallback_post_link(payload, group, text)
         if (
             link is None
             or link.group_key.casefold() not in accepted_group_keys
@@ -270,7 +299,6 @@ def extract_posts(
             continue
 
         position = _payload_position(payload, source_index)
-        text = normalize_visible_text(payload.get("text"), limit=text_limit)
         author = normalize_visible_text(
             payload.get("author"),
             limit=MAX_AUTHOR_LENGTH,

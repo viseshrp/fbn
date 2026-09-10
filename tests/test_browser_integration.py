@@ -230,6 +230,37 @@ def test_headless_browser_excludes_nested_reply_author_and_body(
     assert "Nested reply body" not in posts[0].text
 
 
+def test_headless_browser_fingerprints_post_when_permalink_is_omitted(
+    tmp_path: Path,
+) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 9, 9, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("no_permalink_feed.html"))
+            first_payloads = collect_dom_payloads(page)
+            second_payloads = collect_dom_payloads(page)
+            signals = read_page_signals(page)
+        finally:
+            page.close()
+
+    first = extract_posts(first_payloads, group, observed_at, limit=10)
+    second = extract_posts(second_payloads, group, observed_at, limit=10)
+
+    assert classify_page(signals) is PageState.FEED
+    assert len(first) == 1
+    assert first[0].post_id.startswith("content-")
+    assert first[0].post_id == second[0].post_id
+    assert first[0].url == "https://www.facebook.com/groups/test-group/"
+    assert first[0].author == "Parent Example"
+    assert first[0].text == "Primary post without a permalink"
+    assert "Reply Example" not in first[0].text
+    assert "Nested reply body" not in first[0].text
+    assert first[0].published_at is None
+
+
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
 def test_headless_browser_rejects_links_outside_direct_feed_items(
     tmp_path: Path,

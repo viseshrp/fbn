@@ -166,10 +166,23 @@ DOM_SCAN_SCRIPT = """
   const semanticItems = feedRoots.flatMap(
     (root) => Array.from(root.querySelectorAll(itemSelector))
   ).filter((item) => item.getClientRects().length > 0);
-  const anchors = feedRoots.flatMap(
-    (root) => Array.from(root.querySelectorAll(linkSelector))
-  );
   const seenContainers = new Set();
+  const containers = [];
+  for (const item of semanticItems) {
+    const feedRoot = item.closest(feedSelector);
+    let container = item;
+    let cursor = item.parentElement;
+    while (cursor && cursor !== feedRoot) {
+      if (cursor.matches && cursor.matches(itemSelector)) {
+        container = cursor;
+      }
+      cursor = cursor.parentElement;
+    }
+    if (feedRoot && !seenContainers.has(container)) {
+      seenContainers.add(container);
+      containers.push(container);
+    }
+  }
   const payloads = [];
   const isCommentPermalink = (candidate) => {
     const href = candidate.getAttribute('href') || candidate.href || '';
@@ -187,29 +200,10 @@ DOM_SCAN_SCRIPT = """
       || parameters.has('reply_comment_id');
   };
 
-  for (const anchor of anchors) {
-    const feedRoot = anchor.closest(feedSelector);
-    let container = null;
-    let cursor = anchor;
-    while (cursor && cursor !== feedRoot) {
-      if (cursor.matches && cursor.matches(itemSelector)) {
-        // Select the outer feed item. A quoted/shared post can contain its own
-        // nested article and permalink.
-        container = cursor;
-      }
-      cursor = cursor.parentElement;
-    }
-    if (!container) {
-      continue;
-    }
-
+  for (const container of containers) {
     if (container.getClientRects().length === 0) {
       continue;
     }
-    if (seenContainers.has(container)) {
-      continue;
-    }
-    seenContainers.add(container);
 
     const candidates = Array.from(container.querySelectorAll(linkSelector));
     const directCandidates = candidates.filter((candidate) => {
@@ -238,22 +232,40 @@ DOM_SCAN_SCRIPT = """
 
       return candidate.closest(itemSelector) === container;
     });
-    const selected = directCandidates[0];
-    if (!selected) {
-      // Never promote the permalink from a nested quoted/shared post to the
-      // identity of its outer feed item.
-      continue;
-    }
-    const selectedArticle = selected.closest('[role="article"]');
+    const selected = directCandidates[0] || null;
+    const selectedArticle = selected
+      ? selected.closest('[role="article"]')
+      : null;
+    const directArticle = container.matches('[role="article"]')
+      ? container
+      : Array.from(container.querySelectorAll('[role="article"]')).find(
+          (candidate) => {
+            const parentArticle = candidate.parentElement
+              ? candidate.parentElement.closest('[role="article"]')
+              : null;
+            const positionedItem = candidate.closest(positionedItemSelector);
+            return !parentArticle
+              && (!container.matches(positionedItemSelector)
+                || positionedItem === container);
+          }
+        );
     const contentContainer = selectedArticle && container.contains(selectedArticle)
       ? selectedArticle
-      : container;
+      : (directArticle || container);
     const authorElements = Array.from(contentContainer.querySelectorAll(
       '[data-ad-rendering-role="profile_name"] a,'
       + 'a[data-ad-rendering-role="profile_name"],'
       + 'h2 a, h3 a, h4 a, strong a'
     )).filter((candidate) => !isNestedContent(candidate, contentContainer));
     const authorElement = authorElements[0] || null;
+    const storyElements = Array.from(contentContainer.querySelectorAll(
+      '[data-ad-rendering-role="story_message"]'
+    )).filter((candidate) => !isNestedContent(candidate, contentContainer));
+    const storyElement = storyElements[0] || null;
+    if (!selected && !storyElement) {
+      // A nested permalink or discussion alone is not a top-level post.
+      continue;
+    }
     const collapsed = Array.from(
       contentContainer.querySelectorAll('[aria-expanded="false"]')
     ).some((candidate) => !isNestedContent(candidate, contentContainer));
@@ -263,23 +275,49 @@ DOM_SCAN_SCRIPT = """
       (candidate.getAttribute('href') || '').includes('__tn__=%2CO')
       && isTimestampText(visualText(candidate))
     ));
-    const selectedText = visualText(selected);
+    const selectedText = selected ? visualText(selected) : '';
     const timestampElement = trackedTimestamp
       || (isTimestampText(selectedText) ? selected : null);
     const timestamp = timestampElement ? visualText(timestampElement) : '';
+    const fallbackText = storyElement
+      ? cleanContainerText(storyElement, null, null)
+      : '';
+    let authorIdentity = authorElement
+      ? (authorElement.innerText || '').trim()
+      : '';
+    if (authorElement) {
+      try {
+        const authorUrl = new URL(
+          authorElement.getAttribute('href') || authorElement.href || '',
+          window.location.href
+        );
+        authorIdentity = `${authorUrl.hostname}${authorUrl.pathname}`;
+      } catch (error) {
+        // The visible author remains a bounded fallback identity component.
+      }
+    }
+    const pageUrl = new URL(window.location.href);
+    const fallbackHref = `${pageUrl.origin}${pageUrl.pathname}`;
+    const fallbackIdentity = `${authorIdentity}\n${fallbackText}`;
 
     payloads.push(
       includeContent
         ? {
-            href: selected.href || selected.getAttribute('href') || '',
-            text: cleanContainerText(
-              contentContainer,
-              authorElement,
-              timestampElement
-            ),
+            href: selected
+              ? (selected.href || selected.getAttribute('href') || '')
+              : fallbackHref,
+            text: selected
+              ? cleanContainerText(
+                  contentContainer,
+                  authorElement,
+                  timestampElement
+                )
+              : fallbackText,
             author: authorElement
               ? (authorElement.innerText || '').trim()
               : null,
+            fallback: !selected,
+            identity: !selected ? fallbackIdentity : '',
             partial: collapsed,
             position: payloads.length,
             timestamp,
@@ -870,7 +908,7 @@ class PlaywrightPostSource:
                 )
                 if not posts:
                     raise LayoutChangedError(
-                        "A feed was present, but no supported post permalinks "
+                        "A feed was present, but no supported top-level posts "
                         "were found."
                     )
                 return posts
