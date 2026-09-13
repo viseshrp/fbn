@@ -57,6 +57,7 @@ class Post:
     position: int
     partial: bool = False
     published_at: datetime | None = None
+    fallback_key: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.group_key, "group_key")
@@ -79,6 +80,8 @@ class Post:
                 or self.published_at.utcoffset() is None
             ):
                 raise ValueError("published_at must be timezone-aware")
+        if self.fallback_key is not None:
+            _require_non_empty(self.fallback_key, "fallback_key")
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,12 +188,14 @@ class ObservationBatch:
     inserted: int
     queued: int
     pending: tuple[PendingNotification, ...]
+    reconciled: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.baseline, bool):
             raise ValueError("baseline must be a boolean")
         _require_non_negative(self.inserted, "inserted")
         _require_non_negative(self.queued, "queued")
+        _require_non_negative(self.reconciled, "reconciled")
         if not isinstance(self.pending, tuple) or not all(
             isinstance(item, PendingNotification) for item in self.pending
         ):

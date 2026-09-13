@@ -279,6 +279,68 @@ def test_fallback_post_uses_parent_url_from_comment_context() -> None:
 
     assert posts[0].post_id.startswith("content-")
     assert posts[0].url == "https://www.facebook.com/groups/local/posts/123/"
+    assert posts[0].fallback_key is not None
+
+
+def test_fallback_visible_content_key_ignores_volatile_profile_identity() -> None:
+    group = parse_group_ref("local")
+    common = {
+        "href": group.url,
+        "fallback": True,
+        "author": "Same visible author",
+        "text": "Same visible post body",
+    }
+
+    first = extract_posts(
+        [{**common, "identity": "facebook.com/first-profile\nSame visible post body"}],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )[0]
+    second = extract_posts(
+        [{**common, "identity": "facebook.com/second-profile\nSame visible post body"}],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )[0]
+
+    assert first.post_id != second.post_id
+    assert first.fallback_key == second.fallback_key
+
+
+def test_fallback_visible_content_key_changes_with_visible_content() -> None:
+    group = parse_group_ref("local")
+
+    first = extract_posts(
+        [
+            {
+                "href": group.url,
+                "fallback": True,
+                "identity": "volatile profile\nfirst body",
+                "author": "Visible author",
+                "text": "first body",
+            }
+        ],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )[0]
+    second = extract_posts(
+        [
+            {
+                "href": group.url,
+                "fallback": True,
+                "identity": "volatile profile\nsecond body",
+                "author": "Visible author",
+                "text": "second body",
+            }
+        ],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )[0]
+
+    assert first.fallback_key != second.fallback_key
 
 
 def test_fallback_post_uses_group_photo_set_as_parent_url() -> None:

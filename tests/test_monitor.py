@@ -229,6 +229,13 @@ def test_operational_logs_include_counts_but_not_post_content() -> None:
         and record["extra"]["group_key"] == "group"  # type: ignore[index]
         and record["extra"]["page_state"] == "feed"  # type: ignore[index]
         and record["extra"]["post_count"] == 1  # type: ignore[index]
+        and record["extra"]["fallback_identity_count"] == 0  # type: ignore[index]
+        and record["extra"]["group_fallback_link_count"] == 0  # type: ignore[index]
+        for record in records
+    )
+    assert any(
+        record["message"] == "Observation recorded"
+        and record["extra"]["reconciled_count"] == 0  # type: ignore[index]
         for record in records
     )
     assert any(

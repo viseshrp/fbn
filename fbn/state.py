@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import TracebackType
 
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS posts (
     canonical_url TEXT NOT NULL,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
+    fallback_key TEXT,
     PRIMARY KEY (group_key, post_id),
     FOREIGN KEY (group_key) REFERENCES groups(group_key)
 );
@@ -57,7 +59,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS outbox_pending_order
     ON outbox (group_key, delivered_at, created_at, position, event_id);
 """
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _utc_now() -> datetime:
@@ -252,9 +254,25 @@ class SQLiteStateRepository:
             first_non_empty_scan = not initialized and bool(unique_posts)
             baseline = first_non_empty_scan and not notify_initial
             inserted_posts: list[Post] = []
+            resolved_posts: list[Post] = []
+            resolved_post_ids: set[str] = set()
+            reconciled = 0
             queued = 0
 
             for post in unique_posts:
+                observed_post_id = post.post_id
+                post = self._resolve_fallback_identity(
+                    connection,
+                    group,
+                    post,
+                )
+                if post.post_id != observed_post_id:
+                    reconciled += 1
+                    if boundary_post_id == observed_post_id:
+                        boundary_post_id = post.post_id
+                if post.post_id not in resolved_post_ids:
+                    resolved_post_ids.add(post.post_id)
+                    resolved_posts.append(post)
                 cursor = connection.execute(
                     """
                     INSERT OR IGNORE INTO posts (
@@ -262,8 +280,9 @@ class SQLiteStateRepository:
                         post_id,
                         canonical_url,
                         first_seen_at,
-                        last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        last_seen_at,
+                        fallback_key
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         group.key,
@@ -271,6 +290,7 @@ class SQLiteStateRepository:
                         post.url,
                         scan_timestamp,
                         scan_timestamp,
+                        post.fallback_key,
                     ),
                 )
                 if cursor.rowcount:
@@ -279,12 +299,20 @@ class SQLiteStateRepository:
                     connection.execute(
                         """
                         UPDATE posts
-                        SET canonical_url = ?, last_seen_at = ?
+                        SET canonical_url = CASE
+                                WHEN ? = ? THEN canonical_url
+                                ELSE ?
+                            END,
+                            last_seen_at = ?,
+                            fallback_key = COALESCE(fallback_key, ?)
                         WHERE group_key = ? AND post_id = ?
                         """,
                         (
                             post.url,
+                            group.url,
+                            post.url,
                             scan_timestamp,
+                            post.fallback_key,
                             group.key,
                             post.post_id,
                         ),
@@ -300,7 +328,7 @@ class SQLiteStateRepository:
                     (scan_timestamp, group.key),
                 )
 
-            ordered_posts = sorted(unique_posts, key=lambda post: post.position)
+            ordered_posts = sorted(resolved_posts, key=lambda post: post.position)
             eligible_posts: tuple[Post, ...] = ()
             if ordered_posts and not baseline:
                 visible_boundary = self._visible_notification_boundary(
@@ -383,6 +411,7 @@ class SQLiteStateRepository:
             inserted=len(inserted_posts),
             queued=queued,
             pending=pending,
+            reconciled=reconciled,
         )
 
     def pending(self, group: GroupRef) -> tuple[PendingNotification, ...]:
@@ -558,13 +587,17 @@ class SQLiteStateRepository:
     def _migrate_schema(connection: sqlite3.Connection) -> None:
         """Upgrade existing state in place without discarding seen posts."""
 
-        columns = {
+        group_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(groups)").fetchall()
         }
+        post_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(posts)").fetchall()
+        }
         connection.execute("BEGIN IMMEDIATE")
         try:
-            if "notification_boundary_post_id" not in columns:
+            if "notification_boundary_post_id" not in group_columns:
                 connection.execute(
                     """
                     ALTER TABLE groups
@@ -592,6 +625,14 @@ class SQLiteStateRepository:
                     )
                     """
                 )
+            if "fallback_key" not in post_columns:
+                connection.execute("ALTER TABLE posts ADD COLUMN fallback_key TEXT")
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS posts_fallback_key_lookup
+                ON posts (group_key, fallback_key, first_seen_at)
+                """
+            )
             connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
             connection.commit()
         except BaseException:
@@ -675,6 +716,36 @@ class SQLiteStateRepository:
             "INSERT OR IGNORE INTO groups (group_key) VALUES (?)",
             (group_key,),
         )
+
+    @staticmethod
+    def _resolve_fallback_identity(
+        connection: sqlite3.Connection,
+        group: GroupRef,
+        post: Post,
+    ) -> Post:
+        """Map a volatile fallback ID to its first stable visible-content match."""
+
+        if post.fallback_key is None:
+            return post
+        rows = connection.execute(
+            """
+            SELECT post_id, canonical_url
+            FROM posts
+            WHERE group_key = ? AND fallback_key = ?
+            ORDER BY first_seen_at, post_id
+            """,
+            (group.key, post.fallback_key),
+        ).fetchall()
+        if any(row["post_id"] == post.post_id for row in rows):
+            return post
+        for row in rows:
+            if (
+                post.url == group.url
+                or row["canonical_url"] == group.url
+                or row["canonical_url"] == post.url
+            ):
+                return replace(post, post_id=str(row["post_id"]))
+        return post
 
     @staticmethod
     def _unique_posts(group: GroupRef, posts: Sequence[Post]) -> tuple[Post, ...]:

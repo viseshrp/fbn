@@ -23,6 +23,7 @@ DEFAULT_TEXT_LIMIT = 4_000
 MAX_AUTHOR_LENGTH = 256
 MAX_FALLBACK_IDENTITY_LENGTH = 8_192
 FALLBACK_POST_ID_PREFIX = "content-"
+FALLBACK_KEY_PREFIX = "visible-"
 
 _GROUP_KEY_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 _POST_ID_PATTERN = r"[A-Za-z0-9]{1,200}"
@@ -264,6 +265,20 @@ def _fallback_post_link(
     )
 
 
+def _fallback_deduplication_key(
+    group: GroupRef,
+    author: str | None,
+    text: str,
+) -> str:
+    """Fingerprint stable visible content without volatile profile URLs."""
+
+    visible_identity = f"{author or ''}\0{text}"
+    fingerprint = hashlib.sha256(
+        f"{group.key}\0{visible_identity}".encode()
+    ).hexdigest()
+    return f"{FALLBACK_KEY_PREFIX}{fingerprint}"
+
+
 def _comment_parent_post_link(value: object) -> PostLink | None:
     """Recover a parent-post URL from a comment or reply permalink."""
 
@@ -368,6 +383,10 @@ def extract_posts(
             continue
 
         text = normalize_visible_text(payload.get("text"), limit=text_limit)
+        author = normalize_visible_text(
+            payload.get("author"),
+            limit=MAX_AUTHOR_LENGTH,
+        )
         link = parse_post_url(payload.get("href"))
         if link is None:
             link = _fallback_post_link(
@@ -384,10 +403,6 @@ def extract_posts(
             continue
 
         position = _payload_position(payload, source_index)
-        author = normalize_visible_text(
-            payload.get("author"),
-            limit=MAX_AUTHOR_LENGTH,
-        )
         post = Post(
             group_key=group.key,
             post_id=link.post_id,
@@ -401,6 +416,11 @@ def extract_posts(
                 payload.get("timestamp"),
                 observed_at,
                 timezone_name=timezone_name,
+            ),
+            fallback_key=(
+                _fallback_deduplication_key(group, author or None, text)
+                if payload.get("fallback") is True
+                else None
             ),
         )
         extracted.append((position, source_index, post))

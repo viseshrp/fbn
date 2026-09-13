@@ -134,6 +134,13 @@ class MonitorService:
             group_key=group.key,
             page_state=scan.page_state,
             post_count=len(scan.posts),
+            fallback_identity_count=sum(
+                post.fallback_key is not None for post in scan.posts
+            ),
+            group_fallback_link_count=sum(
+                post.fallback_key is not None and post.url == group.url
+                for post in scan.posts
+            ),
             scroll_count=scan.scrolls,
             bounded=scan.bounded,
         )
@@ -153,6 +160,7 @@ class MonitorService:
             inserted_count=batch.inserted,
             queued_count=batch.queued,
             pending_count=len(pending),
+            reconciled_count=batch.reconciled,
         )
 
         if pending:
