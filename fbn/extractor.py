@@ -247,7 +247,10 @@ def _fallback_post_link(
     if not identity:
         return None
     fingerprint = hashlib.sha256(f"{group.key}\0{identity}".encode()).hexdigest()
-    context_link = _comment_parent_post_link(payload.get("contextHref"))
+    context_link = _fallback_context_post_link(
+        payload.get("contextHref"),
+        group,
+    )
     url = group.url
     if (
         context_link is not None
@@ -285,6 +288,48 @@ def _comment_parent_post_link(value: object) -> PostLink | None:
         group_key=group_key,
         post_id=post_id,
         url=f"{FACEBOOK_ORIGIN}/groups/{group_key}/{kind}/{post_id}/",
+    )
+
+
+def _fallback_context_post_link(
+    value: object,
+    group: GroupRef,
+) -> PostLink | None:
+    """Recover a post URL from a trusted link inside its feed item."""
+
+    comment_link = _comment_parent_post_link(value)
+    if comment_link is not None:
+        return comment_link
+    if not isinstance(value, str):
+        return None
+    path = _facebook_path(value)
+    if path not in {"/photo", "/photo/"}:
+        return None
+    parsed = urlsplit(value)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    set_values = query.get("set", ())
+    photo_match = (
+        _PHOTO_SET_RE.fullmatch(set_values[0]) if len(set_values) == 1 else None
+    )
+    if photo_match is None:
+        return None
+    group_values = query.get("idorvanity", ())
+    if group_values:
+        if (
+            len(group_values) != 1
+            or _SIMPLE_GROUP_RE.fullmatch(group_values[0]) is None
+        ):
+            return None
+        group_key = group_values[0]
+    else:
+        group_key = group.key
+    post_id = photo_match.group("post")
+    if post_id.isdigit() and post_id.startswith("0"):
+        return None
+    return PostLink(
+        group_key=group_key,
+        post_id=post_id,
+        url=f"{FACEBOOK_ORIGIN}/groups/{group_key}/posts/{post_id}/",
     )
 
 

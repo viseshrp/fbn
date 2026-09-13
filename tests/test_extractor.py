@@ -281,12 +281,44 @@ def test_fallback_post_uses_parent_url_from_comment_context() -> None:
     assert posts[0].url == "https://www.facebook.com/groups/local/posts/123/"
 
 
+def test_fallback_post_uses_group_photo_set_as_parent_url() -> None:
+    group = parse_group_ref("local")
+    payload = {
+        "href": group.url,
+        "contextHref": (
+            "https://www.facebook.com/photo/?fbid=987&set=gm.123&__cft__[0]=tracking"
+        ),
+        "fallback": True,
+        "identity": "author\nphoto post body",
+        "text": "photo post body",
+    }
+    posts = extract_posts(
+        [payload],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )
+    previous = extract_posts(
+        [{**payload, "contextHref": ""}],
+        group,
+        OBSERVED_AT,
+        limit=1,
+    )
+
+    assert posts[0].post_id.startswith("content-")
+    assert posts[0].post_id == previous[0].post_id
+    assert posts[0].url == "https://www.facebook.com/groups/local/posts/123/"
+
+
 @pytest.mark.parametrize(
     "context_href",
     [
         "https://www.facebook.com/groups/other/posts/123/?comment_id=456",
         "https://evil.example/groups/local/posts/123/?comment_id=456",
         "https://www.facebook.com/groups/local/posts/123/",
+        "https://evil.example/photo/?fbid=987&set=gm.123",
+        "https://www.facebook.com/photo/?fbid=987&set=other.123",
+        "https://www.facebook.com/photo/?fbid=987&set=gm.123&idorvanity=other",
     ],
 )
 def test_fallback_post_rejects_untrusted_parent_context(

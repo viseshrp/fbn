@@ -45,7 +45,7 @@ DOM_SCAN_SCRIPT = """
   const linkSelector =
     'a[href*="/groups/"][href*="/posts/"],' +
     'a[href*="/groups/"][href*="/permalink/"],' +
-    'a[href*="/photo/"][href*="set=gm."][href*="idorvanity="]';
+    'a[href*="/photo/"][href*="set=gm."]';
   const itemSelector =
     '[role="article"],[aria-posinset],[data-pagelet*="FeedUnit"]';
   const positionedItemSelector =
@@ -203,6 +203,19 @@ DOM_SCAN_SCRIPT = """
     return parameters.has('comment_id')
       || parameters.has('reply_comment_id');
   };
+  const isGroupPhotoWithoutGroup = (candidate) => {
+    try {
+      const url = new URL(
+        candidate.getAttribute('href') || candidate.href || '',
+        window.location.href
+      );
+      return /^\\/photo\\/?$/.test(url.pathname)
+        && (url.searchParams.get('set') || '').startsWith('gm.')
+        && !url.searchParams.has('idorvanity');
+    } catch (error) {
+      return false;
+    }
+  };
 
   for (const container of containers) {
     if (container.getClientRects().length === 0) {
@@ -234,11 +247,18 @@ DOM_SCAN_SCRIPT = """
       return candidate.closest(itemSelector) === container;
     });
     const selected = directlyScopedCandidates.find(
-      (candidate) => !isCommentPermalink(candidate)
+      (candidate) => (
+        !isCommentPermalink(candidate)
+        && !isGroupPhotoWithoutGroup(candidate)
+      )
     ) || null;
     const commentContext = selected
       ? null
       : (directlyScopedCandidates.find(isCommentPermalink) || null);
+    const photoContext = selected || commentContext
+      ? null
+      : (directlyScopedCandidates.find(isGroupPhotoWithoutGroup) || null);
+    const postContext = commentContext || photoContext;
     const selectedArticle = selected
       ? selected.closest('[role="article"]')
       : null;
@@ -339,9 +359,9 @@ DOM_SCAN_SCRIPT = """
               : null,
             fallback: !selected,
             identity: !selected ? fallbackIdentity : '',
-            contextHref: commentContext
-              ? (commentContext.href
-                || commentContext.getAttribute('href')
+            contextHref: postContext
+              ? (postContext.href
+                || postContext.getAttribute('href')
                 || '')
               : '',
             partial: collapsed,

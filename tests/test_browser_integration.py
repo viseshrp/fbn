@@ -267,6 +267,29 @@ def test_headless_browser_fingerprints_post_when_permalink_is_omitted(
     assert first[0].published_at is None
 
 
+def test_headless_browser_recovers_fallback_url_from_group_photo_set(
+    tmp_path: Path,
+) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 9, 13, 12, tzinfo=timezone.utc)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("photo_without_group_feed.html"))
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+
+    posts = extract_posts(payloads, group, observed_at, limit=10)
+
+    assert len(posts) == 1
+    assert posts[0].post_id.startswith("content-")
+    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
+    assert posts[0].author == "Photo Author"
+    assert posts[0].text == "Photo post without an idorvanity parameter"
+
+
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
 def test_headless_browser_rejects_links_outside_direct_feed_items(
     tmp_path: Path,
