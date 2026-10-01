@@ -31,13 +31,20 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never receives that source file.
 - Native amd64 and arm64 image CI covering package startup, Chromium
   diagnostics, and sanitized offline DOM extraction.
-- A container-local package-import health check that never launches a browser,
+- A passive scheduler/process health check that never launches a browser,
   opens the authenticated profile, or contacts Facebook.
+- A foreground Compose systemd unit that propagates monitor exits, bounds
+  unexpected restarts, and leaves recognized hard failures stopped.
 - Separate research, specification, architecture, ADR, and implementation-plan
   documents.
 
 ### Changed
 
+- Recognized stories owned by a feed wrapper whose article descendants are
+  comments or quoted posts. Those descendants cannot replace the main story's
+  body or author; an attached comment can supply a trusted parent-post link.
+- Enabled secret-free hard-failure notifications in Compose, with recovery
+  guidance for layout, authentication, account-action, and delivery failures.
 - Migrated secret-free operational logging to human-readable Loguru records
   with monitor lifecycle, browser, scheduling, delivery, and failure-category
   context. The Compose monitor enables verbose logging so those records are

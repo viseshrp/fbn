@@ -154,7 +154,7 @@ jobs:
         run: |
           docker compose config --quiet
           docker compose config --format json |
-            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert "--verbose" in monitor["command"]; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert monitor["depends_on"]["bootstrap"]["condition"] == "service_completed_successfully"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"; assert config["volumes"]["fbn-data"]["external"] is True'
+            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert "--verbose" in monitor["command"]; assert "--include-errors" in monitor["command"]; assert bootstrap["healthcheck"]["disable"] is True; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert monitor["depends_on"]["bootstrap"]["condition"] == "service_completed_successfully"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"; assert config["volumes"]["fbn-data"]["external"] is True'
 
       - name: Build the native-architecture image
         run: >-
@@ -180,7 +180,7 @@ jobs:
       - name: Verify non-root and image secret boundaries
         run: |
           docker image inspect fbn:ci |
-            python -c 'import json, sys; image = json.load(sys.stdin)[0]; config = image["Config"]; assert config["User"] == "fbn:fbn"; assert config["Healthcheck"]["Test"] == ["CMD", "python", "-c", "import fbn"]; values = "\n".join(config.get("Env", []) + [str(config.get("Labels", {}))]); assert "FBN_APPRISE_URL" not in values; assert "FBN_AUTH_FILE" not in values'
+            python -c 'import json, sys; image = json.load(sys.stdin)[0]; config = image["Config"]; assert config["User"] == "fbn:fbn"; assert config["Healthcheck"]["Test"] == ["CMD", "python", "-m", "fbn.health"]; values = "\n".join(config.get("Env", []) + [str(config.get("Labels", {}))]); assert "FBN_APPRISE_URL" not in values; assert "FBN_AUTH_FILE" not in values'
           python -c 'import subprocess; history = subprocess.check_output(["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", "fbn:ci"], text=True); assert "FBN_APPRISE_URL" not in history; assert "facebook-auth.json" not in history'
           docker run --rm --network none --entrypoint sh fbn:ci -c 'test "$(id -u)" -ne 0; test -w /home/fbn/.local/share/fbn; test ! -e /run/secrets/facebook_auth'
 
@@ -192,6 +192,21 @@ jobs:
           fbn:ci
           doctor
           --browser chromium
+
+      - name: Verify foreground Compose propagates monitor failures
+        env:
+          FBN_TEST_IMAGE: fbn:ci
+        run: |
+          project="fbn-ci-exit-${{ github.run_id }}"
+          trap 'docker compose --project-name "$project" -f tests/fixtures/compose_exit.yaml down --volumes --remove-orphans' EXIT
+          for expected in 8 5 1; do
+            export FBN_TEST_EXIT="$expected"
+            set +e
+            docker compose --project-name "$project" -f tests/fixtures/compose_exit.yaml up --no-build --pull never --no-deps --exit-code-from fbn --no-color fbn
+            actual="$?"
+            set -e
+            test "$actual" -eq "$expected"
+          done
 
       - name: Exercise a sanitized local DOM fixture
         run: |

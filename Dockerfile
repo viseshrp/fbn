@@ -43,6 +43,7 @@ ENV HOME=/home/fbn \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    FBN_HEALTH_FILE=/tmp/fbn-monitor-health.json \
     XDG_DATA_HOME=/home/fbn/.local/share
 
 LABEL org.opencontainers.image.source="https://github.com/viseshrp/fbn" \
@@ -104,8 +105,8 @@ WORKDIR /home/fbn
 
 STOPSIGNAL SIGTERM
 
-HEALTHCHECK --interval=5m --timeout=10s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import fbn"]
+HEALTHCHECK --interval=1m --timeout=10s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "fbn.health"]
 
 ENTRYPOINT ["fbn"]
 CMD ["--help"]

@@ -13,6 +13,8 @@ services:
     restart: "no"
     stop_grace_period: 2m
     shm_size: "1gb"
+    mem_limit: "1g"
+    memswap_limit: "1g"
     environment:
       FBN_APPRISE_URL: "${FBN_APPRISE_URL:?Set FBN_APPRISE_URL to an Apprise URL}"
       FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
@@ -31,6 +33,7 @@ services:
       - chromium
       - --headless
       - --verbose
+      - --include-errors
       - --every
       - "${FBN_EVERY:-50m}"
       - --to
@@ -41,8 +44,12 @@ services:
     build: *fbn-build
     init: true
     restart: "no"
+    healthcheck:
+      disable: true
     stop_grace_period: 2m
     shm_size: "1gb"
+    mem_limit: "1g"
+    memswap_limit: "1g"
     environment:
       FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
     volumes:

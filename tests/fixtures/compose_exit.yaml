@@ -1,0 +1,13 @@
+services:
+  fbn:
+    image: "${FBN_TEST_IMAGE:?Set the test image}"
+    init: true
+    restart: "no"
+    network_mode: none
+    healthcheck:
+      disable: true
+    entrypoint: [python, -c]
+    command:
+      - "import os; raise SystemExit(int(os.environ['FBN_TEST_EXIT']))"
+    environment:
+      FBN_TEST_EXIT: "${FBN_TEST_EXIT:-8}"

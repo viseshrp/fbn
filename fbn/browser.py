@@ -222,6 +222,15 @@ DOM_SCAN_SCRIPT = """
       continue;
     }
 
+    // Some feeds put the primary story directly in the positioned wrapper;
+    // its only article descendants are comments or quoted posts. In that
+    // layout an article descendant must not become the primary post scope.
+    const wrapperStoryElement = Array.from(container.querySelectorAll(
+      '[data-ad-rendering-role="story_message"]'
+    )).find((candidate) => !isNestedContent(candidate, container)) || null;
+    const wrapperOwnsStory = Boolean(
+      wrapperStoryElement && !container.matches('[role="article"]')
+    );
     const candidates = Array.from(container.querySelectorAll(linkSelector));
     const directlyScopedCandidates = candidates.filter((candidate) => {
       const positionedItem = candidate.closest(positionedItemSelector);
@@ -241,7 +250,8 @@ DOM_SCAN_SCRIPT = """
           }
           cursor = cursor.parentElement;
         }
-        return cursor === container && articleDepth <= 1;
+        return cursor === container
+          && articleDepth <= (wrapperOwnsStory ? 0 : 1);
       }
 
       return candidate.closest(itemSelector) === container;
@@ -250,14 +260,43 @@ DOM_SCAN_SCRIPT = """
       (candidate) => (
         !isCommentPermalink(candidate)
         && !isGroupPhotoWithoutGroup(candidate)
+        && !candidate.closest(discussionSelector)
       )
     ) || null;
+    const discussionCandidates = wrapperOwnsStory
+      ? candidates.filter((candidate) => {
+          if (!isCommentPermalink(candidate)
+              || candidate.closest(positionedItemSelector) !== container) {
+            return false;
+          }
+          // An explicitly marked comment attached to this wrapper can expose
+          // its parent-post link. A quoted article or nested reply cannot.
+          const discussion = candidate.closest(discussionSelector);
+          if (!discussion) {
+            return false;
+          }
+          let articleDepth = 0;
+          let cursor = candidate.parentElement;
+          while (cursor && cursor !== container) {
+            if (cursor.matches('[role="article"]')) {
+              if (!cursor.matches(discussionSelector)) return false;
+              articleDepth += 1;
+            }
+            cursor = cursor.parentElement;
+          }
+          return cursor === container && articleDepth <= 1;
+        })
+      : [];
     const commentContext = selected
       ? null
-      : (directlyScopedCandidates.find(isCommentPermalink) || null);
+      : (directlyScopedCandidates.find(isCommentPermalink)
+        || discussionCandidates[0] || null);
     const photoContext = selected || commentContext
       ? null
-      : (directlyScopedCandidates.find(isGroupPhotoWithoutGroup) || null);
+      : (directlyScopedCandidates.find((candidate) => (
+          isGroupPhotoWithoutGroup(candidate)
+          && !candidate.closest(discussionSelector)
+        )) || null);
     const postContext = commentContext || photoContext;
     const selectedArticle = selected
       ? selected.closest('[role="article"]')
@@ -275,7 +314,9 @@ DOM_SCAN_SCRIPT = """
                 || positionedItem === container);
           }
         );
-    const contentContainer = selectedArticle && container.contains(selectedArticle)
+    const contentContainer = wrapperStoryElement
+      ? container
+      : selectedArticle && container.contains(selectedArticle)
       ? selectedArticle
       : (directArticle || container);
     const authorElements = Array.from(contentContainer.querySelectorAll(

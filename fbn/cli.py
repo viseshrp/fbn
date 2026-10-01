@@ -24,6 +24,7 @@ from .exceptions import (
     FbnError,
 )
 from .extractor import parse_group_ref
+from .health import MonitorHealth
 from .logging import configure_logging, get_logger
 from .models import GroupRef, RunSummary, ScanPolicy
 from .monitor import MonitorService
@@ -292,6 +293,21 @@ def _safe_error_notification(
     if apprise_url is None or not apprise_url.strip():
         return
     category = type(error).__name__
+    recovery = {
+        "AuthenticationRequiredError": (
+            "Export fresh authentication and run `fbn bootstrap`."
+        ),
+        "AccountActionRequiredError": (
+            "Complete the requested account action in your browser before restarting."
+        ),
+        "LayoutChangedError": (
+            "The feed has no supported post structure. Inspect the missing layout "
+            "signals in the monitor log before restarting."
+        ),
+        "DeliveryError": (
+            "Check the notification service. Undelivered posts remain queued."
+        ),
+    }.get(category, "Inspect the monitor log and run `fbn doctor` before restarting.")
     LOGGER.info(
         "Error notification started",
         group_key=group.key,
@@ -299,11 +315,7 @@ def _safe_error_notification(
     )
     notification = Notification(
         title=f"fbn monitor stopped for {group.key}",
-        body=(
-            f"Failure category: {category}\n"
-            "Run `fbn doctor` and refresh the `fbn bootstrap` authentication "
-            "file when authentication is no longer valid."
-        ),
+        body=f"Failure category: {category}\n{recovery}",
     )
     try:
         AppriseSink(apprise_url).send(notification)
@@ -691,9 +703,18 @@ def monitor_command(
         previous_handlers[signum] = signal.signal(signum, stop_monitor)
 
     try:
-        with SQLiteStateRepository(state_file) as state:
+        with (
+            SQLiteStateRepository(state_file) as state,
+            MonitorHealth.from_environment() as health,
+        ):
             service = MonitorService(PlaywrightPostSource(settings), state, sink)
-            loop = MonitorLoop(service, state, schedule, on_success=_run_summary)
+            loop = MonitorLoop(
+                service,
+                state,
+                schedule,
+                on_success=_run_summary,
+                on_activity=health.update,
+            )
             try:
                 loop.run(
                     group,

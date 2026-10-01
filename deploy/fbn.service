@@ -1,0 +1,21 @@
+[Unit]
+Description=FBN Docker Compose monitor
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fbn-compose
+ExecStart=/usr/bin/docker compose up --no-build --pull never --no-deps --exit-code-from fbn --no-color fbn
+ExecStop=/usr/bin/docker compose stop --timeout 120 fbn
+Restart=on-failure
+RestartSec=15min
+RestartPreventExitStatus=2 3 4 5 6 8 9 10 11 12
+TimeoutStopSec=180
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

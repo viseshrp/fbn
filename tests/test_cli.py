@@ -16,7 +16,7 @@ from loguru import logger
 import fbn.cli as cli
 import fbn.scheduling as scheduling
 from fbn.config import BrowserSettings, ScheduleSettings
-from fbn.exceptions import AuthenticationRequiredError
+from fbn.exceptions import AuthenticationRequiredError, LayoutChangedError
 from fbn.models import GroupRef, RunSummary, ScanPolicy
 
 
@@ -372,11 +372,13 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
             schedule: ScheduleSettings,
             *,
             on_success: object | None = None,
+            on_activity: object | None = None,
         ) -> None:
             captured["loop_service"] = service
             captured["loop_state"] = state
             captured["schedule"] = schedule
             captured["on_success"] = on_success
+            captured["on_activity"] = on_activity
 
         def run(
             self,
@@ -434,6 +436,7 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
         to=timedelta(minutes=30),
     )
     assert captured["on_success"] is cli._run_summary
+    assert callable(captured["on_activity"])
     assert captured["group"] == GroupRef(
         "pi-group",
         "https://www.facebook.com/groups/pi-group/",
@@ -445,6 +448,52 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
     assert isinstance(run_kwargs["stop_event"], threading.Event)
     assert len(captured_signals) == 4
     assert "monitor stopped" in result.output
+
+
+def test_monitor_alerts_on_layout_failure_and_clears_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[cli.Notification] = []
+
+    class FakeLoop:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def run(self, *args: object, **kwargs: object) -> None:
+            raise LayoutChangedError("synthetic unsupported layout")
+
+    class FakeSink:
+        def __init__(self, url: str) -> None:
+            pass
+
+        def send(self, notification: cli.Notification) -> None:
+            sent.append(notification)
+
+    monkeypatch.setattr(scheduling, "MonitorLoop", FakeLoop)
+    monkeypatch.setattr(cli, "AppriseSink", FakeSink)
+    path = tmp_path / "health.json"
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "monitor",
+            "--id",
+            "example",
+            "--state-file",
+            str(tmp_path / "state.sqlite3"),
+            "--include-errors",
+        ],
+        env={
+            "FBN_APPRISE_URL": "json://127.0.0.1:9",
+            "FBN_HEALTH_FILE": str(path),
+        },
+    )
+    assert result.exit_code == LayoutChangedError.exit_code
+    assert len(sent) == 1
+    assert "LayoutChangedError" in sent[0].body
+    assert "missing layout" in sent[0].body
+    assert "bootstrap" not in sent[0].body
+    assert not path.exists()
 
 
 def test_typed_failure_uses_stable_nonzero_exit_and_does_not_echo_secret(

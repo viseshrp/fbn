@@ -153,6 +153,7 @@ def test_honors_persisted_eligibility_then_persists_guard_and_success_jitter() -
     event = FakeEvent(clock, [False, True])
     uniform_calls: list[tuple[float, float]] = []
     summaries: list[RunSummary] = []
+    activity: list[float] = []
 
     def midpoint(lower: float, upper: float) -> float:
         uniform_calls.append((lower, upper))
@@ -165,6 +166,7 @@ def test_honors_persisted_eligibility_then_persists_guard_and_success_jitter() -
         clock=clock,
         uniform=midpoint,
         on_success=summaries.append,
+        on_activity=activity.append,
     ).run(
         GROUP,
         POLICY,
@@ -184,6 +186,7 @@ def test_honors_persisted_eligibility_then_persists_guard_and_success_jitter() -
     assert uniform_calls == [(60 * 60, 3 * 60 * 60)]
     assert service.options == [(True, False)]
     assert summaries == [SUMMARY]
+    assert activity == [7200, 784, 7200]
 
 
 def test_long_persisted_wait_is_split_into_interruptible_day_chunks() -> None:

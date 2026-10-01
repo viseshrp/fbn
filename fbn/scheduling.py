@@ -118,6 +118,7 @@ class MonitorLoop:
         clock: Callable[[], datetime] = _utc_now,
         uniform: Callable[[float, float], float] = random.uniform,
         on_success: Callable[[RunSummary], None] | None = None,
+        on_activity: Callable[[float], None] | None = None,
     ) -> None:
         self._service = service
         self._state = state
@@ -125,6 +126,7 @@ class MonitorLoop:
         self._clock = clock
         self._uniform = uniform
         self._on_success = on_success
+        self._on_activity = on_activity
 
     def run(
         self,
@@ -150,6 +152,11 @@ class MonitorLoop:
                 return
 
             attempt_started = self._now()
+            self._activity(
+                (policy.max_scrolls + 2) * policy.navigation_timeout_seconds
+                + policy.max_scrolls * policy.settle_seconds
+                + 600
+            )
             LOGGER.info("Scheduled check started", group_key=group.key)
             self._state.set_next_eligible(
                 group,
@@ -170,6 +177,7 @@ class MonitorLoop:
                     group_key=group.key,
                     delay_seconds=int(next_interval.total_seconds()),
                 )
+                self._activity(next_interval.total_seconds())
                 if stopper.wait(next_interval.total_seconds()):
                     return
                 continue
@@ -237,9 +245,15 @@ class MonitorLoop:
                 group_key=group.key,
                 delay_seconds=math.ceil(delay),
             )
-            if stopper.wait(min(delay, MAX_WAIT_SECONDS)):
+            wait_seconds = min(delay, MAX_WAIT_SECONDS)
+            self._activity(wait_seconds)
+            if stopper.wait(wait_seconds):
                 return False
         return False
+
+    def _activity(self, seconds: float) -> None:
+        if self._on_activity is not None:
+            self._on_activity(seconds)
 
     def _success_interval(self) -> timedelta:
         lower = self._schedule.every.total_seconds()

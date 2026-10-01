@@ -293,6 +293,51 @@ def test_headless_browser_recovers_fallback_url_from_group_photo_set(
     assert posts[0].text == "Photo post without an idorvanity parameter"
 
 
+def test_headless_browser_owns_story_outside_comment_articles(tmp_path: Path) -> None:
+    group = parse_group_ref("test-group")
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("wrapper_story_feed.html"))
+            payloads = collect_dom_payloads(page)
+            signals = read_page_signals(page)
+        finally:
+            page.close()
+    posts = extract_posts(
+        payloads, group, datetime(2026, 10, 1, tzinfo=timezone.utc), limit=10
+    )
+    assert classify_page(signals) is PageState.FEED
+    assert signals.author_count == signals.story_message_count == 1
+    assert signals.direct_permalink_count == 0
+    assert len(posts) == 1
+    assert posts[0].author == "Primary Example"
+    assert posts[0].text == "Primary wrapper story"
+    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/501/"
+    assert posts[0].post_id.startswith("content-")
+
+
+def test_wrapper_story_does_not_use_quoted_or_nested_reply_links(
+    tmp_path: Path,
+) -> None:
+    group = parse_group_ref("test-group")
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        try:
+            page.set_content(_fixture("wrapper_story_feed.html"))
+            page.locator('a[href*="comment_id=42"]').evaluate(
+                "element => element.remove()"
+            )
+            payloads = collect_dom_payloads(page)
+        finally:
+            page.close()
+    posts = extract_posts(
+        payloads, group, datetime(2026, 10, 1, tzinfo=timezone.utc), limit=10
+    )
+    assert len(posts) == 1
+    assert posts[0].text == "Primary wrapper story"
+    assert posts[0].url == group.url
+
+
 @pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
 def test_headless_browser_rejects_links_outside_direct_feed_items(
     tmp_path: Path,

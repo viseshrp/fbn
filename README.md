@@ -274,8 +274,12 @@ into the monitor service. Bootstrap requires no display, X11, VNC, or browser
 debugging port.
 
 The Compose command is explicitly
-`fbn monitor --browser chromium --headless --verbose ...`. Chromium uses a 1
-GiB shared memory allocation, and `init: true` forwards termination cleanly.
+`fbn monitor --browser chromium --headless --verbose --include-errors ...`.
+Hard failures send one secret-free notification with the failure category and
+the appropriate recovery step. Each service has a 1 GiB memory limit with
+container swap disabled, and Chromium has a 1 GiB shared memory allocation.
+Bootstrap finishes before the monitor starts, so only one browser session is
+active. `init: true` forwards termination cleanly.
 The monitor writes human-readable Loguru records to standard output, so the
 `docker compose logs --follow` shows bootstrap, startup, waits, scan
 counts, delivery counts, and retry categories as they happen. Each line has a
@@ -300,11 +304,40 @@ docker compose down
 ```
 
 Do not add `--volumes` unless permanently deleting the authenticated profile and
-deduplication history is intentional. The image `HEALTHCHECK` runs only
-`python -c 'import fbn'`. It does not launch a browser, open the profile, or
-navigate to Facebook. This proves only that the installed package remains
-importable inside the container; it does not prove session, account, group, or
-monitor health.
+deduplication history is intentional. The image `HEALTHCHECK` runs
+`python -m fbn.health`. The scheduler publishes a private, container-local lease
+before each bounded check and scheduled wait. Health becomes false when the
+monitor process dies or its work deadline expires. A normal scheduled wait,
+including transient backoff, remains healthy. This check never opens a browser,
+reads the profile, sends a notification, or contacts Facebook. Bootstrap has no
+healthcheck because it is a one-shot command.
+
+### Supervise Compose with systemd
+
+After a successful bootstrap, `deploy/fbn.service` supervises the monitor in a
+checkout at `/opt/fbn-compose`:
+
+```console
+sudo install -m 644 deploy/fbn.service /etc/systemd/system/fbn.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now fbn.service
+systemctl status fbn.service
+```
+
+The unit runs [Compose in the foreground](https://docs.docker.com/reference/cli/docker/compose/up/)
+and returns the monitor's exit status, so a hard failure appears as `failed`
+instead of a one-shot unit remaining `active (exited)`. Unexpected process
+failures restart after 15 minutes, with a limit of three starts per hour.
+Known configuration, browser, authentication, account-action, access, layout,
+delivery, and profile errors remain stopped using
+[`RestartPreventExitStatus`](https://man7.org/linux/man-pages/man5/systemd.service.5.html).
+Resolve the reported condition before `sudo systemctl restart fbn.service`.
+
+The unit deliberately starts only the monitor with `--no-deps`. It reuses the
+authenticated profile and does not reimport a potentially old cookie export
+after every reboot. Run bootstrap explicitly when fresh authentication is
+needed. Stop a running detached Compose monitor before enabling this unit;
+afterward, use systemd to start and stop the application.
 
 ## Run checks with a systemd user timer
 
