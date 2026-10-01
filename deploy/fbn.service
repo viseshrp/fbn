@@ -9,8 +9,8 @@ StartLimitBurst=3
 [Service]
 Type=simple
 WorkingDirectory=/opt/fbn-compose
-ExecStart=/usr/bin/docker compose up --no-build --pull never --no-deps --exit-code-from fbn --no-color fbn
-ExecStop=/usr/bin/docker compose stop --timeout 120 fbn
+ExecStart=/usr/bin/docker compose --file compose.yaml up --no-build --pull never --no-deps --exit-code-from fbn --no-color fbn
+ExecStop=/usr/bin/docker compose --file compose.yaml stop --timeout 120 fbn
 Restart=on-failure
 RestartSec=15min
 RestartPreventExitStatus=2 3 4 5 6 8 9 10 11 12

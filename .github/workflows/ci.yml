@@ -152,9 +152,14 @@ jobs:
           FBN_AUTH_FILE: /dev/null
           FBN_GROUP: test-group
         run: |
+          test -L docker-compose.yml
+          test "$(readlink docker-compose.yml)" = compose.yaml
+          grep -F 'ExecStart=/usr/bin/docker compose --file compose.yaml up ' deploy/fbn.service
+          grep -F 'ExecStop=/usr/bin/docker compose --file compose.yaml stop ' deploy/fbn.service
+          cmp <(COMPOSE_FILE=docker-compose.yml docker compose --env-file /dev/null config --format json) <(docker compose --file compose.yaml --env-file /dev/null config --format json)
           docker compose config --quiet
           docker compose config --format json |
-            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert "--verbose" in monitor["command"]; assert "--include-errors" in monitor["command"]; assert bootstrap["healthcheck"]["disable"] is True; assert bootstrap["restart"] == monitor["restart"] == "no"; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert monitor["depends_on"]["bootstrap"]["condition"] == "service_completed_successfully"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"; assert config["volumes"]["fbn-data"]["external"] is True'
+            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert "--verbose" in monitor["command"]; assert "--include-errors" in monitor["command"]; assert bootstrap["healthcheck"]["disable"] is True; assert bootstrap["restart"] == monitor["restart"] == "no"; assert int(bootstrap["mem_limit"]) == int(monitor["mem_limit"]) == 1073741824; assert int(bootstrap["memswap_limit"]) == int(monitor["memswap_limit"]) == 1073741824; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert monitor["depends_on"]["bootstrap"]["condition"] == "service_completed_successfully"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"; assert config["volumes"]["fbn-data"]["external"] is True'
 
       - name: Build the native-architecture image
         run: >-

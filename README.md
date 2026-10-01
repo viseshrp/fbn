@@ -338,6 +338,9 @@ authenticated profile and does not reimport a potentially old cookie export
 after every reboot. Run bootstrap explicitly when fresh authentication is
 needed. Stop a running detached Compose monitor before enabling this unit;
 afterward, use systemd to start and stop the application.
+The unit explicitly selects `compose.yaml`. The legacy `docker-compose.yml`
+filename links to that same file, so an existing
+`COMPOSE_FILE=docker-compose.yml` override uses the current monitor settings.
 
 ## Run checks with a systemd user timer
 
