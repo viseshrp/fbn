@@ -34,12 +34,14 @@ from .exceptions import (
     ProfileInUseError,
     TransientNavigationError,
 )
-from .extractor import chronological_group_url, extract_posts
+from .extractor import chronological_group_url, extract_posts, parse_post_url
 from .logging import get_logger
 from .models import GroupRef, Post, ScanPolicy, ScanResult
 
 FACEBOOK_HOME_URL = "https://www.facebook.com/"
 LOGGER = get_logger("browser")
+PERMALINK_HYDRATION_SECONDS = 2.0
+MAX_PERMALINK_HOVERS = 10
 DOM_SCAN_SCRIPT = """
 (includeContent) => {
   const linkSelector =
@@ -184,6 +186,7 @@ DOM_SCAN_SCRIPT = """
     }
   }
   const payloads = [];
+  const timestampsToHydrate = [];
   let directPermalinkCount = 0;
   let storyMessageCount = 0;
   let fallbackPostCount = 0;
@@ -361,6 +364,20 @@ DOM_SCAN_SCRIPT = """
     if (!selected && !fallbackText) {
       continue;
     }
+    if (!selected && timestampElement) {
+      try {
+        const url = new URL(timestampElement.href, window.location.href);
+        if (url.protocol === 'https:'
+            && ['facebook.com', 'www.facebook.com'].includes(url.hostname)
+            && !url.username && !url.password && !url.port
+            && (url.pathname === '/'
+              || /^\\/groups\\/[^/]+\\/?$/.test(url.pathname))) {
+          timestampsToHydrate.push(timestampElement);
+        }
+      } catch (error) {
+        // A malformed timestamp link remains an explicitly labelled fallback.
+      }
+    }
     if (!selected) {
       fallbackPostCount += 1;
     }
@@ -388,7 +405,9 @@ DOM_SCAN_SCRIPT = """
             href: selected
               ? (selected.href || selected.getAttribute('href') || '')
               : fallbackHref,
-            text: selected
+            text: storyElement
+              ? fallbackText
+              : selected
               ? cleanContainerText(
                   contentContainer,
                   authorElement,
@@ -399,6 +418,7 @@ DOM_SCAN_SCRIPT = """
               ? (authorElement.innerText || '').trim()
               : null,
             fallback: !selected,
+            stableContent: Boolean(storyElement),
             identity: !selected ? fallbackIdentity : '',
             contextHref: postContext
               ? (postContext.href
@@ -413,6 +433,9 @@ DOM_SCAN_SCRIPT = """
     );
   }
 
+  if (includeContent === 'timestamps') {
+    return timestampsToHydrate;
+  }
   return {
     hasFeed: feedRoots.length > 0,
     feedRootCount: feedRoots.length,
@@ -718,6 +741,78 @@ def collect_dom_payloads(page: Page) -> list[dict[str, object]]:
         return []
     payloads = result.get("payloads")
     return payloads if isinstance(payloads, list) else []
+
+
+def hydrate_post_permalinks(
+    page: Page,
+    *,
+    max_candidates: int = MAX_PERMALINK_HOVERS,
+    timeout_seconds: float = PERMALINK_HYDRATION_SECONDS,
+) -> None:
+    """Hover unresolved primary timestamps, without clicking or navigating.
+
+    The DOM scanner supplies only the post's own rendered header timestamps,
+    excluding comment, reply, shared-story, and off-site links. Facebook may
+    populate their permalinks only on hover. Both attempts and total time are
+    bounded; unchanged links retain the normal fallback identity.
+    """
+
+    if max_candidates <= 0 or timeout_seconds <= 0:
+        return
+    deadline = time.monotonic() + timeout_seconds
+    timestamps = None
+    properties = {}
+    attempted = 0
+    resolved = 0
+    try:
+        timestamps = page.evaluate_handle(DOM_SCAN_SCRIPT, "timestamps")
+        properties = timestamps.get_properties()
+        for handle in properties.values():
+            if attempted >= max_candidates or time.monotonic() >= deadline:
+                break
+            element = handle.as_element()
+            if element is None:
+                continue
+            attempted += 1
+            try:
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1_000))
+                element.hover(timeout=min(500, remaining_ms))
+                if time.monotonic() >= deadline:
+                    break
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1_000))
+                result = page.wait_for_function(
+                    r"""(node) => {
+                      try {
+                        return /^\/groups\/[^/]+\/(posts|permalink)\//.test(
+                          new URL(node.href).pathname
+                        );
+                      } catch (error) { return false; }
+                    }""",
+                    arg=element,
+                    timeout=min(500, remaining_ms),
+                )
+                result.dispose()
+                if parse_post_url(element.get_attribute("href")) is not None:
+                    resolved += 1
+            except PlaywrightError:
+                # Detached or unhydrated timestamps must not lose the post.
+                continue
+    except PlaywrightError:
+        # The normal scan still classifies navigation and acquisition errors.
+        pass
+    finally:
+        for handle in properties.values():
+            with suppress(PlaywrightError):
+                handle.dispose()
+        if timestamps is not None:
+            with suppress(PlaywrightError):
+                timestamps.dispose()
+    if attempted:
+        LOGGER.debug(
+            "Post permalink hydration completed",
+            attempted_count=attempted,
+            resolved_count=resolved,
+        )
 
 
 def collect_group_aliases(page: Page, group: GroupRef) -> frozenset[str]:
@@ -1110,6 +1205,13 @@ class PlaywrightPostSource:
                 break
             allowed_group_keys = allowed_group_keys.union(
                 collect_group_aliases(page, group)
+            )
+            hydrate_post_permalinks(
+                page,
+                max_candidates=min(policy.sample_count, MAX_PERMALINK_HOVERS),
+                timeout_seconds=min(
+                    policy.navigation_timeout_seconds, PERMALINK_HYDRATION_SECONDS
+                ),
             )
             before = len(accumulated)
             extracted = extract_posts(

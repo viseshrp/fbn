@@ -150,6 +150,14 @@ Keeping `FBN_APPRISE_URL` out of shell history is safer than passing
 from `fbn` errors. A notification includes visible post text and links, so that
 content is sent to the notification service selected in the Apprise URL.
 
+Some Facebook timestamps expose their post permalink only on hover. FBN
+hovers unresolved primary-story timestamps without clicking or navigating,
+with at most ten attempts and a two-second budget per extraction pass. Comment,
+reply, quoted-story, and off-site timestamps are excluded. Recovering a link
+preserves the story's visible-content identity to avoid sending it again.
+If no direct link is available, the notification explicitly labels its group
+feed link as a fallback rather than a link to that post.
+
 State is committed before notification delivery and pending deliveries survive
 restarts. Delivery is at least once: a crash after a successful send but before
 the state commit may produce a duplicate, but notifier failure does not silently

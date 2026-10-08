@@ -52,6 +52,9 @@ def source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PlaywrightPostSou
         lambda *args, **kwargs: frozenset(),
     )
     monkeypatch.setattr(browser_module, "collect_dom_payloads", payloads)
+    monkeypatch.setattr(
+        browser_module, "hydrate_post_permalinks", lambda *args, **kwargs: None
+    )
     return PlaywrightPostSource(
         BrowserSettings(profile_dir=tmp_path / "profile"),
     )

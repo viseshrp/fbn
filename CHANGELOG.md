@@ -40,6 +40,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Resolved hover-only primary post timestamp links within a bounded time
+  budget, without clicking or following comment/shared-story links.
+- Kept primary story text and its deduplication key stable when a group-feed
+  fallback becomes a direct link, preventing duplicate delivery.
+- Explicitly labelled group-feed links when no direct post permalink is
+  available instead of presenting them as post links.
 - Recognized stories owned by a feed wrapper whose article descendants are
   comments or quoted posts. Those descendants cannot replace the main story's
   body or author; an attached comment can supply a trusted parent-post link.

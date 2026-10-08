@@ -17,6 +17,7 @@ from fbn.browser import (
     classify_page,
     collect_dom_payloads,
     collect_group_aliases,
+    hydrate_post_permalinks,
     read_page_signals,
     wait_for_terminal_page,
 )
@@ -30,8 +31,94 @@ from fbn.exceptions import (
     TransientNavigationError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
+from fbn.models import ScanPolicy
+from fbn.state import SQLiteStateRepository
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_scan_recovers_hover_only_primary_post_permalink(tmp_path: Path) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
+    source = PlaywrightPostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=_fixture("hover_permalink_feed.html"),
+            ),
+        )
+        page.goto(group.url)
+        before = extract_posts(collect_dom_payloads(page), group, observed_at, 10)
+        result = source._scan_feed(page, group, ScanPolicy(max_scrolls=0), observed_at)
+        assert page.locator("#timestamp").get_attribute("data-hovered") == "yes"
+        assert page.locator("#comment-timestamp").get_attribute("data-hovered") is None
+        assert page.locator("#quoted-timestamp").get_attribute("data-hovered") is None
+
+    assert len(before) == len(result.posts) == 1
+    assert before[0].url == group.url
+    recovered = result.posts[0]
+    assert recovered.url == "https://www.facebook.com/groups/test-group/posts/502/"
+    assert recovered.author == before[0].author == "Primary Example"
+    assert recovered.text == before[0].text == "Primary story with photos"
+    assert recovered.fallback_key == before[0].fallback_key
+    assert recovered.fallback_key is not None
+
+    with SQLiteStateRepository(tmp_path / "state.sqlite3") as state:
+        first = state.observe(group, before, notify_initial=True)
+        state.mark_delivered([item.event_id for item in first.pending])
+        next_observation = state.observe(group, result.posts)
+        assert next_observation.inserted == next_observation.queued == 0
+        assert next_observation.reconciled == 1
+        assert not next_observation.pending
+        row = (
+            state._require_connection()
+            .execute("SELECT canonical_url FROM posts")
+            .fetchone()
+        )
+        assert row["canonical_url"] == recovered.url
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "https://www.facebook.com/groups/test-group/posts/502/",
+        "https://example.invalid/?__tn__=%2CO",
+    ],
+)
+def test_hydration_skips_direct_and_offsite_timestamps(
+    tmp_path: Path, href: str
+) -> None:
+    group = parse_group_ref("test-group")
+    observed_at = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
+    fixture = _fixture("hover_permalink_feed.html").replace(
+        'id="timestamp" href="https://www.facebook.com/groups/test-group/?__tn__=%2CO"',
+        f'id="timestamp" href="{href}"',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=fixture
+            ),
+        )
+        page.goto(group.url)
+        before = extract_posts(collect_dom_payloads(page), group, observed_at, 10)
+        hydrate_post_permalinks(page)
+        after = extract_posts(collect_dom_payloads(page), group, observed_at, 10)
+        assert page.locator("#timestamp").get_attribute("data-hovered") is None
+        assert page.locator("#comment-timestamp").get_attribute("data-hovered") is None
+        assert page.locator("#quoted-timestamp").get_attribute("data-hovered") is None
+
+    assert before == after
+    assert len(after) == 1
+    assert after[0].text == "Primary story with photos"
+    assert after[0].fallback_key is not None
 
 
 def _fixture(name: str) -> str:

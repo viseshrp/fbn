@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from .exceptions import DeliveryError
+from .extractor import FALLBACK_POST_ID_PREFIX
 from .logging import get_logger
 from .models import (
     GroupRef,
@@ -135,7 +136,7 @@ class MonitorService:
             page_state=scan.page_state,
             post_count=len(scan.posts),
             fallback_identity_count=sum(
-                post.fallback_key is not None for post in scan.posts
+                post.post_id.startswith(FALLBACK_POST_ID_PREFIX) for post in scan.posts
             ),
             group_fallback_link_count=sum(
                 post.fallback_key is not None and post.url == group.url

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -201,7 +202,11 @@ def test_run_lock_encloses_fetch_and_delivery() -> None:
     ]
 
 
-def test_operational_logs_include_counts_but_not_post_content() -> None:
+def test_operational_logs_include_counts_but_not_post_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A recovered permalink retains a content key without being a fallback ID.
+    monkeypatch.setitem(globals(), "POST", replace(POST, fallback_key="key"))
     state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
     sink = FakeSink()
     records: list[dict[str, object]] = []

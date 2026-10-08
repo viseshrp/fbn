@@ -420,6 +420,7 @@ def extract_posts(
             fallback_key=(
                 _fallback_deduplication_key(group, author or None, text)
                 if payload.get("fallback") is True
+                or payload.get("stableContent") is True
                 else None
             ),
         )

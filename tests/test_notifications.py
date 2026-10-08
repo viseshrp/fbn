@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import apprise
@@ -54,6 +55,18 @@ def test_render_digest_is_deterministic_and_plain_text() -> None:
     assert "Unknown author" in notification.body
     assert "(Visible text unavailable)" in notification.body
     assert "<html" not in notification.body.lower()
+
+
+def test_render_digest_labels_group_feed_fallback() -> None:
+    item = replace(
+        pending("content-example", position=0),
+        url="https://www.facebook.com/groups/group/",
+    )
+
+    notification = render_digest("group", [item])
+
+    assert "Direct post link unavailable." in notification.body
+    assert f"Group feed (not a direct post link): {item.url}" in notification.body
 
 
 def test_render_digest_keeps_older_batches_before_new_feed_positions() -> None:
