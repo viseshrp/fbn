@@ -337,9 +337,11 @@ def test_check_requires_apprise_unless_dry_run(tmp_path: Path) -> None:
     assert "required unless --dry-run is used" in result.output
 
 
+@pytest.mark.parametrize("view", ["desktop", "mobile"])
 def test_monitor_propagates_headless_chromium_and_dry_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    view: str,
 ) -> None:
     captured: dict[str, object] = {}
     captured_signals: list[tuple[signal.Signals, object]] = []
@@ -394,7 +396,11 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
         captured_signals.append((signum, handler))
         return signal.SIG_DFL
 
-    monkeypatch.setattr(cli, "PlaywrightPostSource", FakePostSource)
+    monkeypatch.setattr(
+        cli,
+        "MobilePostSource" if view == "mobile" else "PlaywrightPostSource",
+        FakePostSource,
+    )
     monkeypatch.setattr(cli, "SQLiteStateRepository", FakeState)
     monkeypatch.setattr(cli, "MonitorService", FakeService)
     monkeypatch.setattr(scheduling, "MonitorLoop", FakeLoop)
@@ -406,6 +412,8 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
         cli.main,
         [
             "monitor",
+            "--view",
+            view,
             "--id",
             "pi-group",
             "--browser",
@@ -448,6 +456,45 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
     assert isinstance(run_kwargs["stop_event"], threading.Event)
     assert len(captured_signals) == 4
     assert "monitor stopped" in result.output
+
+
+@pytest.mark.parametrize(
+    ("arguments", "environment", "expected"),
+    [
+        ([], {}, "desktop"),
+        (["--view", "mobile"], {}, "mobile"),
+        ([], {"FBN_VIEW": "mobile"}, "mobile"),
+        (["--view", "desktop"], {"FBN_VIEW": "mobile"}, "desktop"),
+    ],
+)
+def test_check_selects_reader_from_flag_or_environment(
+    monkeypatch, arguments, environment, expected
+):
+    def fake_run_once(**kwargs):
+        assert kwargs["view"] == expected
+        return RunSummary("test-group", 0, 0, 0, 0, True)
+
+    monkeypatch.setattr(cli, "_run_once", fake_run_once)
+    result = CliRunner().invoke(
+        cli.main,
+        ["check", "--id", "test-group", "--dry-run", *arguments],
+        env={"FBN_APPRISE_URL": "", **environment},
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_reader_factory_retains_desktop_and_adds_mobile(tmp_path):
+    settings = BrowserSettings(profile_dir=tmp_path / "unused")
+    assert type(cli._post_source(settings, "desktop")) is cli.PlaywrightPostSource
+    assert type(cli._post_source(settings, "mobile")) is cli.MobilePostSource
+
+
+def test_unsupported_reader_is_rejected():
+    result = CliRunner().invoke(
+        cli.main, ["check", "--id", "test-group", "--view", "unsupported"]
+    )
+    assert result.exit_code == 2
+    assert "Invalid value for '--view'" in result.output
 
 
 def test_monitor_alerts_on_layout_failure_and_clears_health(

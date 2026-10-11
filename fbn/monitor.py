@@ -53,6 +53,7 @@ class StateRepository(Protocol):
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
+        preserve_boundary: bool = False,
     ) -> ObservationBatch:
         """Atomically record a scan and return pending delivery records."""
 
@@ -146,11 +147,13 @@ class MonitorService:
             bounded=scan.bounded,
         )
         observed_at = datetime.now(timezone.utc)
+        coverage_options = {"preserve_boundary": True} if scan.bounded else {}
         batch = self.state.observe(
             group,
             scan.posts,
             notify_initial=notify_initial,
             observed_at=observed_at,
+            **coverage_options,
         )
         pending = batch.pending
         delivered = 0

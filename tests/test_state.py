@@ -92,6 +92,28 @@ def test_restart_safe_deduplication_queues_new_post_before_boundary(
     assert [item.post_id for item in observation.pending] == ["new"]
 
 
+def test_bounded_scan_does_not_advance_an_existing_marker(tmp_path: Path) -> None:
+    with SQLiteStateRepository(tmp_path / "state.sqlite3", clock=lambda: T0) as state:
+        state.observe(GROUP, (post("marker"),))
+        batch = state.observe(
+            GROUP,
+            (post("new", position=0), post("marker", position=1)),
+            preserve_boundary=True,
+        )
+        assert [item.post_id for item in batch.pending] == ["new"]
+        assert state.notification_boundary(GROUP) == "marker"
+        state.mark_delivered([item.event_id for item in batch.pending])
+        complete = state.observe(
+            GROUP,
+            (
+                post("new", position=0),
+                post("late", position=1),
+                post("marker", position=2),
+            ),
+        )
+        assert [item.post_id for item in complete.pending] == ["late"]
+
+
 def test_run_lock_rejects_a_competing_process(tmp_path: Path) -> None:
     state_path = tmp_path / "state.sqlite3"
     script = """

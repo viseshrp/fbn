@@ -592,7 +592,12 @@ def _has_explicit_empty_state(page: Page) -> bool:
     return False
 
 
-def read_page_signals(page: Page, *, status: int | None = None) -> PageSignals:
+def read_page_signals(
+    page: Page,
+    *,
+    status: int | None = None,
+    dom_scan_script: str = DOM_SCAN_SCRIPT,
+) -> PageSignals:
     """Read only coarse page-state signals; never return page content."""
 
     parsed = urlparse(page.url)
@@ -635,7 +640,7 @@ def read_page_signals(page: Page, *, status: int | None = None) -> PageSignals:
     )
     has_explicit_empty = _has_explicit_empty_state(page)
 
-    feed_signals = page.evaluate(DOM_SCAN_SCRIPT, False)
+    feed_signals = page.evaluate(dom_scan_script, False)
     if not isinstance(feed_signals, dict):
         feed_signals = {}
 

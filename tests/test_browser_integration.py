@@ -7,6 +7,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 
 import pytest
@@ -31,10 +32,409 @@ from fbn.exceptions import (
     TransientNavigationError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
+from fbn.mobile import (
+    MobilePostSource,
+    copy_post_link,
+    mobile_records,
+    resolve_post_link,
+    select_new_posts,
+    wait_for_mobile_page,
+)
 from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
+from tests.mobile_fixtures import mobile_fixture
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+# These assertions describe reader behavior, not desktop selectors. Register
+# the mobile adapter here only after this contract passes against desktop.
+@pytest.fixture(params=["desktop", "mobile"])
+def reader_contract(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[object]:
+    view = request.param
+    group = parse_group_ref("contract-group")
+    observed_at = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+
+        def read(stories: list[tuple[str, str, str]]) -> tuple:
+            if view == "mobile":
+                by_id = {story[0]: story for story in stories}
+
+                def route_mobile(route):
+                    path = route.request.url.split("?")[0].rstrip("/").split("/")
+                    is_post = "share" in path or "posts" in path
+                    chosen = [by_id[path[-1]]] if is_post else stories
+                    html = mobile_fixture(chosen)
+                    if "share" in path:
+                        # Playwright routes only the first request of an HTTP
+                        # redirect chain. Simulate its final URL locally so the
+                        # fixture never attempts the redirected network request.
+                        html += (
+                            "<script>history.replaceState(null,'','/groups/"
+                            f"{group.key}/posts/{path[-1]}/')</script>"
+                        )
+                    route.fulfill(status=200, content_type="text/html", body=html)
+
+                context.route("**/*", route_mobile)
+                page.goto(f"https://m.facebook.com/groups/{group.key}/")
+                target = context.new_page()
+                payloads = []
+                try:
+                    with mobile_records(page) as records:
+                        for menu, payload in records:
+                            copied = copy_post_link(page, menu, timeout_seconds=1)
+                            href = resolve_post_link(
+                                target,
+                                copied,
+                                payload,
+                                frozenset({group.key}),
+                                timeout_seconds=1,
+                            )
+                            payloads.append({**payload, "href": href})
+                    return extract_posts(payloads, group, observed_at, limit=50)
+                finally:
+                    target.close()
+                    context.unroute("**/*", route_mobile)
+            assert view == "desktop"
+            cards = []
+            for position, (post_id, author, body) in enumerate(stories, start=1):
+                cards.append(
+                    f'<article role="article" aria-posinset="{position}">'
+                    f'<h2><a href="https://www.facebook.com/author">'
+                    f"{escape(author)}</a></h2>"
+                    '<div data-ad-rendering-role="story_message">'
+                    f"{escape(body)}</div>"
+                    f'<a href="{group.url}posts/{post_id}/?ref=share">2h</a>'
+                    '<article role="article" aria-label="Shared post">'
+                    '<h2><a href="https://www.facebook.com/quoted">Quoted</a></h2>'
+                    f'<a href="{group.url}posts/999/">Quoted body</a></article>'
+                    '<div aria-label="Comment by Reply Example">'
+                    '<a href="https://www.facebook.com/reply">Reply Example</a>'
+                    f'<a href="{group.url}posts/998/?comment_id=7">'
+                    "Nested reply body</a></div></article>"
+                )
+            page.set_content(
+                '<main><div role="feed">' + "".join(cards) + "</div></main>"
+            )
+            return extract_posts(
+                collect_dom_payloads(page), group, observed_at, limit=50
+            )
+
+        try:
+            yield read
+        finally:
+            page.close()
+
+
+def test_reader_contract_main_post_content_and_link_stay_together(reader_contract):
+    posts = reader_contract(
+        [("301", "First Author", "First body"), ("302", "Second Author", "Second body")]
+    )
+    assert [(post.post_id, post.author, post.text) for post in posts] == [
+        ("301", "First Author", "First body"),
+        ("302", "Second Author", "Second body"),
+    ]
+    for post in posts:
+        assert post.url.endswith(f"/posts/{post.post_id}/")
+        assert post.fallback_key is not None
+        assert "Reply" not in post.text
+        assert "Quoted" not in post.text
+
+
+def test_reader_contract_duplicate_cards_do_not_duplicate_posts(reader_contract):
+    posts = reader_contract(
+        [("301", "First Author", "First body"), ("301", "First Author", "First body")]
+    )
+    assert [post.post_id for post in posts] == ["301"]
+
+
+def test_reader_contract_catches_every_post_since_marker(reader_contract, tmp_path):
+    group = parse_group_ref("contract-group")
+    with SQLiteStateRepository(tmp_path / "contract.sqlite3") as state:
+        baseline = state.observe(
+            group, reader_contract([("300", "Author", "Previous scan")])
+        )
+        assert baseline.baseline and not baseline.pending
+        batch = state.observe(
+            group,
+            reader_contract(
+                [
+                    ("302", "Author", "Newest post"),
+                    ("301", "Author", "Post missed between checks"),
+                    ("300", "Author", "Previous scan"),
+                ]
+            ),
+        )
+        assert {item.post_id for item in batch.pending} == {"301", "302"}
+
+
+def test_reader_contract_missing_marker_keeps_gap_open(reader_contract, tmp_path):
+    group = parse_group_ref("contract-group")
+    with SQLiteStateRepository(tmp_path / "contract.sqlite3") as state:
+        state.observe(group, reader_contract([("300", "Author", "Previous scan")]))
+        first = state.observe(group, reader_contract([("302", "Author", "Newest")]))
+        state.mark_delivered([item.event_id for item in first.pending])
+        assert state.notification_boundary(group) == "300"
+        later = state.observe(
+            group,
+            reader_contract(
+                [
+                    ("303", "Author", "Newer"),
+                    ("302", "Author", "Newest"),
+                    ("301", "Author", "Only exposed on a later check"),
+                ]
+            ),
+        )
+        assert {item.post_id for item in later.pending} == {"301", "303"}
+        assert state.notification_boundary(group) == "300"
+
+
+def test_reader_contract_restart_does_not_repeat_delivered_posts(
+    reader_contract, tmp_path
+):
+    group = parse_group_ref("contract-group")
+    path = tmp_path / "contract.sqlite3"
+    stories = [("301", "Author", "Already delivered")]
+    with SQLiteStateRepository(path) as state:
+        batch = state.observe(group, reader_contract(stories), notify_initial=True)
+        state.mark_delivered([item.event_id for item in batch.pending])
+    with SQLiteStateRepository(path) as state:
+        repeated = state.observe(group, reader_contract(stories))
+        assert repeated.inserted == repeated.queued == 0
+        assert not repeated.pending
+
+
+def test_reader_contract_identical_content_can_belong_to_distinct_posts(
+    reader_contract,
+):
+    posts = reader_contract(
+        [
+            ("301", "Author", "Repeated announcement"),
+            ("302", "Author", "Repeated announcement"),
+        ]
+    )
+    assert [post.post_id for post in posts] == ["301", "302"]
+
+
+def test_mobile_selects_new_posts_instead_of_trusting_the_url(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_fixture([("301", "Author", "Body")], sorted_feed=False))
+        select_new_posts(page, timeout_seconds=1)
+        assert page.locator("#sort-label").inner_text() == "New posts"
+        assert not page.locator("#sort-menu").is_visible()
+        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+
+
+def test_mobile_excludes_discussion_nested_inside_the_body_text_component(tmp_path):
+    html = mobile_fixture([("301", "Author", "Primary body")]).replace(
+        ">Primary body</div>",
+        '>Primary body<span aria-label="Comment by Another">Hidden reply</span></div>',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert records[0][1]["text"] == "Primary body"
+
+
+@pytest.mark.parametrize("hydrated", [False, True])
+@pytest.mark.parametrize("comment_label", ["\U000f0379 2comments", "\U000f0379comment"])
+def test_mobile_reads_hydrated_text_and_icon_prefixed_actions(
+    tmp_path, hydrated, comment_label
+):
+    html = mobile_fixture([("301", "Author", "Primary body")], sorted_feed=False)
+    if hydrated:
+        html = html.replace("ServerTextArea", "TextArea").replace(
+            "ServerImageArea", "ImageArea"
+        )
+    html = html.replace(
+        "Like, press and hold for more reactions",
+        "2like, double-tap and hold for more reactions",
+    ).replace("Make a comment", comment_label)
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        select_new_posts(page, timeout_seconds=1)
+        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert records[0][1]["author"] == "Author"
+            assert records[0][1]["text"] == "Primary body"
+
+
+def test_mobile_reply_actions_cannot_replace_the_primary_footer(tmp_path):
+    html = mobile_fixture([("301", "Author", "Primary body")]).replace(
+        'aria-label="Make a comment"', 'aria-label="Reply"'
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="primary_action_footer"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_mobile_waits_for_all_primary_cards_to_finish_loading(tmp_path):
+    html = mobile_fixture([("301", "Author", "Body"), ("302", "Other", "Body")])
+    html = html.replace(
+        'aria-label="More options for Other"',
+        'aria-label="More options for Other" id="loading-menu"',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        page.evaluate("""() => {
+            const timestamp = document.getElementById('loading-menu').parentElement
+                .querySelector('[data-mcomponent=ServerTextArea][aria-label]');
+            const label = timestamp.getAttribute('aria-label');
+            timestamp.removeAttribute('aria-label');
+            setTimeout(() => timestamp.setAttribute('aria-label', label), 100);
+        }""")
+        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+
+
+def test_mobile_does_not_accept_sort_text_inside_a_post(tmp_path):
+    html = mobile_fixture([("301", "Author", "New posts")], sorted_feed=False)
+    html = html.replace('id="sort-label"', 'id="sort-label" style="display:none"')
+    html = html.replace(">\u200bSort\u200b<", ">Unavailable<")
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="group_sort_control"):
+            select_new_posts(page, timeout_seconds=0.1)
+
+
+def test_mobile_failed_copy_cleans_up_and_cannot_reuse_a_previous_link(tmp_path):
+    html = mobile_fixture([("301", "Author", "Body")]).replace(
+        "function copyPost() {navigator.clipboard.writeText(",
+        "function copyPost() {return; navigator.clipboard.writeText(",
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        page.evaluate(
+            "window.__fbnPreviousCopiedLink='https://m.facebook.com/share/p/999/'"
+        )
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            with pytest.raises(Exception, match="Timeout"):
+                copy_post_link(page, records[0][0], timeout_seconds=0.1)
+        assert not page.locator("#post-menu").is_visible()
+        assert page.evaluate("!window.__fbnCopyCapture")
+        assert page.evaluate("!Object.hasOwn(navigator,'clipboard')")
+
+
+@pytest.mark.parametrize("missing", ["author", "footer", "timestamp"])
+def test_mobile_incomplete_primary_card_fails_closed(tmp_path, missing):
+    html = mobile_fixture([("301", "Author", "Body")])
+    replacements = {
+        "author": ('<span role="link">Author</span>', "<span>Author</span>"),
+        "footer": ('aria-label="Make a comment"', 'aria-label="Other action"'),
+        "timestamp": ('aria-label="Sunday, October 11, 2026 at 10:00 AM"', ""),
+    }
+    html = html.replace(*replacements[missing])
+    if missing == "footer":
+        html = html.replace(
+            'aria-label="Like, press and hold for more reactions"',
+            'aria-label="Other action"',
+        )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="missing="):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize(
+    "wrong", ["body", "author", "group", "comment_only", "offsite", "timestamp"]
+)
+def test_mobile_rejects_wrong_copied_link_destinations(tmp_path, wrong):
+    source_payload = {
+        "author": "Author",
+        "text": "Expected body",
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+        "mediaCount": 0,
+    }
+    stories = [("999", "Author", "Expected body")]
+    if wrong in {"body", "comment_only"}:
+        stories = [("999", "Author", "Different primary body")]
+    if wrong == "author":
+        stories = [("999", "Different Author", "Expected body")]
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        html = mobile_fixture(stories)
+        if wrong == "comment_only":
+            html = html.replace("Nested reply body", "Expected body")
+        if wrong == "timestamp":
+            html = html.replace("at 10:00 AM", "at 9:00 AM")
+        group_key = "wrong-group" if wrong == "group" else "contract-group"
+
+        def route_target(route):
+            body = (
+                html
+                + "<script>history.replaceState(null,'','/groups/"
+                + f"{group_key}/posts/999/')</script>"
+            )
+            route.fulfill(status=200, content_type="text/html", body=body)
+
+        context.route("**/*", route_target)
+        copied = (
+            "https://example.invalid/share/p/999/"
+            if wrong == "offsite"
+            else "https://m.facebook.com/share/p/999/"
+        )
+        with pytest.raises(LayoutChangedError):
+            resolve_post_link(
+                page,
+                copied,
+                source_payload,
+                frozenset({"contract-group"}),
+                timeout_seconds=0.2,
+            )
+
+
+def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(tmp_path):
+    group = parse_group_ref("contract-group")
+    stories = [("302", "Author", "Newer"), ("301", "Author", "Marker")]
+    with _local_context(tmp_path) as context:
+        original_pages = tuple(context.pages)
+
+        def routes(route):
+            url = route.request.url
+            key = url.split("?")[0].rstrip("/").split("/")[-1]
+            is_post = "/share/" in url or "/posts/" in url
+            chosen = (
+                [next(story for story in stories if story[0] == key)]
+                if is_post
+                else stories
+            )
+            html = mobile_fixture(chosen, sorted_feed=is_post)
+            if "/share/" in url:
+                html += (
+                    "<script>history.replaceState(null,'','/groups/"
+                    f"{group.key}/posts/{key}/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", routes)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        result = source.fetch_recent(
+            group,
+            ScanPolicy(sample_count=1, max_scrolls=2, settle_seconds=0),
+            boundary_post_id="301",
+        )
+        assert [post.post_id for post in result.posts] == ["302", "301"]
+        assert result.scrolls >= 1
+        assert not result.bounded
+        assert tuple(context.pages) == original_pages
 
 
 def test_scan_recovers_hover_only_primary_post_permalink(tmp_path: Path) -> None:

@@ -18,7 +18,7 @@ from .exceptions import ConfigurationError
 from .models import GroupRef, Post
 
 FACEBOOK_ORIGIN = "https://www.facebook.com"
-FACEBOOK_HOSTS = frozenset({"facebook.com", "www.facebook.com"})
+FACEBOOK_HOSTS = frozenset({"facebook.com", "www.facebook.com", "m.facebook.com"})
 DEFAULT_TEXT_LIMIT = 4_000
 MAX_AUTHOR_LENGTH = 256
 MAX_FALLBACK_IDENTITY_LENGTH = 8_192
@@ -43,6 +43,10 @@ _FACEBOOK_TIMESTAMP_RE = re.compile(
     r"|[0-9]+\s+(?:seconds?|minutes?|hours?|days?|weeks?)\s+ago"
     rf"|(?:today|yesterday)\s+at\s+{_CLOCK_PATTERN}"
     rf"|[0-9]{{1,2}}\s+[A-Za-z]+\s+at\s+{_CLOCK_PATTERN}"
+    r"|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+"
+    r"(?:January|February|March|April|May|June|July|August|September|October|"
+    r"November|December)\s+[0-9]{1,2},\s+[0-9]{4}\s+at\s+"
+    r"(?:0?[1-9]|1[0-2]):[0-5][0-9]\s+(?:AM|PM)"
     r")$",
     re.IGNORECASE,
 )

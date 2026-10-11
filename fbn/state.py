@@ -223,6 +223,7 @@ class SQLiteStateRepository:
         *,
         notify_initial: bool = False,
         observed_at: datetime | None = None,
+        preserve_boundary: bool = False,
     ) -> ObservationBatch:
         """Atomically store unseen posts and, when appropriate, outbox rows."""
 
@@ -230,6 +231,8 @@ class SQLiteStateRepository:
             raise ValueError("group must be a GroupRef")
         if not isinstance(notify_initial, bool):
             raise ValueError("notify_initial must be a boolean")
+        if not isinstance(preserve_boundary, bool):
+            raise ValueError("preserve_boundary must be a boolean")
         scan_time = _as_utc(
             self._clock() if observed_at is None else observed_at,
             "observed_at",
@@ -387,6 +390,8 @@ class SQLiteStateRepository:
                 ordered_posts,
                 boundary_post_id,
             )
+            if preserve_boundary and boundary_post_id is not None:
+                next_boundary_post_id = boundary_post_id
             if next_boundary_post_id is None and ordered_posts:
                 next_boundary_post_id = ordered_posts[0].post_id
 

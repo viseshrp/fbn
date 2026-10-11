@@ -150,13 +150,45 @@ Keeping `FBN_APPRISE_URL` out of shell history is safer than passing
 from `fbn` errors. A notification includes visible post text and links, so that
 content is sent to the notification service selected in the Apprise URL.
 
-Some Facebook timestamps expose their post permalink only on hover. FBN
+The default desktop reader finds some post permalinks only on hover. FBN
 hovers unresolved primary-story timestamps without clicking or navigating,
 with at most ten attempts and a two-second budget per extraction pass. Comment,
 reply, quoted-story, and off-site timestamps are excluded. Recovering a link
 preserves the story's visible-content identity to avoid sending it again.
 If no direct link is available, the notification explicitly labels its group
 feed link as a fallback rather than a link to that post.
+
+### Experimental mobile reader
+
+`check` and `monitor` accept `--view mobile` or `FBN_VIEW=mobile`. Desktop
+remains the default and can be selected explicitly with `--view desktop`.
+Compose passes `FBN_VIEW` from `.env`, defaulting to `desktop`. Authentication,
+the SQLite database, delivery history, and notification configuration are shared;
+changing the reader does not require another bootstrap or a new database.
+
+The mobile reader is a separate parser for the rendered English-language Bloks
+layout at `m.facebook.com`, using Playwright's standard Pixel 7 emulation. It
+explicitly selects and verifies **New posts**. It reads each main post's body
+and ignores quoted posts, comments, replies, and comment previews. Each link
+comes from that main post's own **Copy link** menu. The resolved page must have
+the same author, body, and timestamp and a canonical post URL for the verified
+group. A missing or mismatched link stops the check; mobile never substitutes
+the group feed or a previous clipboard value.
+
+Later checks scroll toward the saved notification marker and read at least one
+additional pass after finding it. Known publication times correct visible
+reordering; posts tied with the marker's coarse relative time are included
+conservatively. A missing marker, unknown time, or exhausted scan limit leaves
+the old marker in place so a later check can keep catching up. Scrolling is
+bounded by `--max-scrolls`, the catch-up sample limit, and a 90-second scan
+budget. None of this guarantees recovery of a post Facebook never displays.
+
+Keep desktop in production until mobile passes both the offline regression
+suite and a bounded live check. Numeric group IDs redirected to slugs are
+accepted only when their HTTP redirect chain proves the mapping. The tested
+live layout currently changes that URL through JavaScript instead, without
+this proof, so the mobile reader deliberately stops. Do not weaken group
+verification or change the default to work around that failure.
 
 State is committed before notification delivery and pending deliveries survive
 restarts. Delivery is at least once: a crash after a successful send but before

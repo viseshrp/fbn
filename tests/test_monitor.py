@@ -165,6 +165,17 @@ def test_source_looks_for_the_stored_notification_boundary() -> None:
     assert source.boundary_post_id == "remembered-post"
 
 
+@pytest.mark.parametrize("bounded", [False, True])
+def test_only_complete_scans_may_advance_the_notification_boundary(bounded):
+    class CoverageSource(FakeSource):
+        def fetch_recent(self, group, policy, *, boundary_post_id=None):
+            return ScanResult((POST,), "feed", 1, bounded)
+
+    state = FakeState(ObservationBatch(False, 1, 0, ()))
+    MonitorService(CoverageSource(), state, FakeSink()).run_once(GROUP, ScanPolicy())
+    assert state.observe_kwargs.get("preserve_boundary", False) is bounded
+
+
 def test_run_lock_encloses_fetch_and_delivery() -> None:
     state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
 

@@ -26,6 +26,7 @@ from .exceptions import (
 from .extractor import parse_group_ref
 from .health import MonitorHealth
 from .logging import configure_logging, get_logger
+from .mobile import MobilePostSource
 from .models import GroupRef, RunSummary, ScanPolicy
 from .monitor import MonitorService
 from .notifications import AppriseSink, ConsoleSink, Notification
@@ -166,6 +167,15 @@ def _scan_options(function: CommandFunction) -> CommandFunction:
 
 def _run_options(function: CommandFunction) -> CommandFunction:
     options = [
+        click.option(
+            "--view",
+            type=click.Choice(["desktop", "mobile"]),
+            default="desktop",
+            envvar="FBN_VIEW",
+            show_default=True,
+            show_envvar=True,
+            help="Facebook reader; desktop remains available for rollback.",
+        ),
         click.option(
             "-i",
             "--id",
@@ -349,8 +359,9 @@ def _run_once(
     apprise_url: str | None,
     dry_run: bool,
     notify_initial: bool,
+    view: str = "desktop",
 ) -> RunSummary:
-    source = PlaywrightPostSource(settings)
+    source = _post_source(settings, view)
     sink = _notification_sink(apprise_url=apprise_url, dry_run=dry_run)
     with SQLiteStateRepository(state_file) as state:
         service = MonitorService(source, state, sink)
@@ -360,6 +371,14 @@ def _run_once(
             notify_initial=notify_initial,
             commit_delivery=not dry_run,
         )
+
+
+def _post_source(settings: BrowserSettings, view: str):
+    return (
+        MobilePostSource(settings)
+        if view == "mobile"
+        else PlaywrightPostSource(settings)
+    )
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -553,6 +572,7 @@ def doctor_command(
 @_domain_errors
 def check_command(
     *,
+    view: str,
     browser: str,
     profile_dir: Path | None,
     executable_path: Path | None,
@@ -600,6 +620,7 @@ def check_command(
     )
     try:
         summary = _run_once(
+            view=view,
             group=group,
             settings=settings,
             policy=policy,
@@ -636,6 +657,7 @@ def check_command(
 @_domain_errors
 def monitor_command(
     *,
+    view: str,
     browser: str,
     profile_dir: Path | None,
     executable_path: Path | None,
@@ -707,7 +729,7 @@ def monitor_command(
             SQLiteStateRepository(state_file) as state,
             MonitorHealth.from_environment() as health,
         ):
-            service = MonitorService(PlaywrightPostSource(settings), state, sink)
+            service = MonitorService(_post_source(settings, view), state, sink)
             loop = MonitorLoop(
                 service,
                 state,
