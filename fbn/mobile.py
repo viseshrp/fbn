@@ -63,8 +63,6 @@ MOBILE_SCAN_SCRIPT = r"""
   const textSelector = '[data-mcomponent="ServerTextArea"],'
     + '[data-mcomponent="TextArea"]';
   const timestampPattern = new RegExp(__FBN_TIMESTAMP_PATTERN__, 'i');
-  const contributorBadges = ['All-star contributor', 'Top contributor',
-    'Rising contributor'];
   const actionLabel = node => clean(node.getAttribute('aria-label'))
     .replace(/\p{Co}/gu, '').trim().replace(/^\d+\s*/, '').toLowerCase();
   const excludedSelector = '[role="article"],[aria-label^="Comment by "],'
@@ -126,17 +124,30 @@ MOBILE_SCAN_SCRIPT = r"""
         if (label.startsWith(owner + ',')) {
           label = label.slice(owner.length + 1).replace(/^[,\s]+/, '');
         }
-        const badge = contributorBadges.find(value => label.startsWith(value + ',')
-          && Array.from(node.querySelectorAll(textSelector)).some(
-            child => visible(child) && clean(child.innerText) === value
-          ));
-        if (badge) label = label.slice(badge.length + 1).replace(/^[,\s]+/, '');
+        // Metadata prefixes must also exist as rendered, non-link text within
+        // this exact wrapper. Do not maintain a growing list of badge names or
+        // strip an unverified author's name merely because it precedes a date.
+        for (let pass = 0; pass < 3; pass++) {
+          const date = label.replace(/, (?:Private|Public) group$/, '');
+          if (timestampPattern.test(date)) break;
+          const prefix = Array.from(node.querySelectorAll(textSelector))
+            .filter(child => visible(child) && !child.closest('[role="link"],a')
+              && !child.querySelector('[role="link"],a')
+              && !child.querySelector(menuSelector))
+            .map(child => clean(child.innerText))
+            .find(value => value && value.length <= 80
+              && label.startsWith(value + ','));
+          if (!prefix) break;
+          label = label.slice(prefix.length + 1).replace(/^[,\s]+/, '');
+        }
         return label;
       };
       const timestamps = Array.from(header.querySelectorAll(textSelector)).filter(
         node => visible(node) && clean(node.getAttribute('aria-label'))
           && !authors[0].contains(node)
-      ).map(node => ({node, label: timestampLabel(node)}));
+      ).map(node => ({node, label: timestampLabel(node)})).filter(item =>
+        timestampPattern.test(item.label.replace(/, (?:Private|Public) group$/, ''))
+      );
       // Metadata wrappers may contain the verified author and contributor badge
       // as well as the date. Only a recognized date label can qualify, and no
       // wrapper containing a post menu can become a timestamp.

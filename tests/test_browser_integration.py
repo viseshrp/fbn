@@ -359,7 +359,8 @@ def test_mobile_verifies_permalink_with_author_inside_timestamp_component(
 
 
 @pytest.mark.parametrize(
-    "badge", ["All-star contributor", "Top contributor", "Rising contributor"]
+    "badge",
+    ["All-star contributor", "Top contributor", "Rising contributor", "Group expert"],
 )
 @pytest.mark.parametrize("permalink", [False, True])
 def test_mobile_reads_timestamp_from_contributor_metadata_wrapper(
@@ -421,6 +422,58 @@ def test_mobile_reads_primary_date_from_metadata_container(
             )
 
 
+@pytest.mark.parametrize("wrapper", [False, True])
+def test_mobile_verifies_older_post_with_date_only_publication(tmp_path, wrapper):
+    html = mobile_fixture([("301", "Author", "Body")]).replace(
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h',
+        'aria-label="26 Sep, Private group">26 Sep',
+    )
+    if wrapper:
+        html = html.replace(
+            '<div data-mcomponent="ServerTextArea" '
+            'aria-label="26 Sep, Private group">26 Sep</div>',
+            '<div data-mcomponent="MContainer" '
+            'aria-label="Group expert, , 26 Sep, Private group">'
+            '<div data-mcomponent="TextArea">Group expert</div>'
+            '<div data-mcomponent="TextArea">26 Sep</div></div>',
+        )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        assert wait_for_mobile_page(page, timeout_seconds=0.1) is PageState.FEED
+        with mobile_records(page) as records:
+            payload = records[0][1]
+        target = context.new_page()
+        target.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=html
+            ),
+        )
+        assert resolve_post_link(
+            target,
+            "https://m.facebook.com/groups/contract-group/posts/301/",
+            payload,
+            frozenset({"contract-group"}),
+            timeout_seconds=1,
+        ).endswith("/posts/301/")
+
+
+def test_mobile_ignores_non_date_accessibility_labels_in_primary_header(tmp_path):
+    html = mobile_fixture([("301", "Author", "Body")]).replace(
+        '<span role="link">Author</span>',
+        '<span role="link">Author</span>'
+        '<div data-mcomponent="TextArea" aria-label="Group expert">Group expert</div>'
+        '<div data-mcomponent="TextArea" aria-label="Follow">Follow</div>',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        assert wait_for_mobile_page(page, timeout_seconds=0.1) is PageState.FEED
+        with mobile_records(page) as records:
+            assert len(records) == 1
+
+
 def test_mobile_waits_for_short_link_client_side_canonical_navigation(tmp_path):
     html = mobile_fixture([("301", "Author", "Body")])
     target_html = (
@@ -453,7 +506,8 @@ def test_mobile_waits_for_short_link_client_side_canonical_navigation(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "invalid", ["badge_only", "unrelated_badge", "two_dates", "menu_container"]
+    "invalid",
+    ["badge_only", "unrelated_badge", "two_dates", "menu_container", "foreign_author"],
 )
 def test_mobile_contributor_wrapper_cannot_hide_missing_or_ambiguous_timestamp(
     tmp_path, invalid
@@ -472,6 +526,10 @@ def test_mobile_contributor_wrapper_cannot_hide_missing_or_ambiguous_timestamp(
         replacement += (
             '<div data-mcomponent="TextArea" aria-label="3 hours ago">3h</div>'
         )
+    elif invalid == "foreign_author":
+        replacement = replacement.replace(
+            "All-star contributor, ,", "Another,"
+        ).replace(">All-star contributor<", '><a role="link">Another</a><')
     else:
         replacement = replacement.replace(
             ">2h</div>",

@@ -226,6 +226,25 @@ def test_parse_facebook_timestamp_rejects_unknown_values(value: object) -> None:
     assert parse_facebook_timestamp(value, OBSERVED_AT) is None
 
 
+@pytest.mark.parametrize("value", ["26 Sep", "26 September", "26 Sep, 2025"])
+def test_parse_facebook_timestamp_accepts_mobile_date_without_clock(value: str) -> None:
+    observed_at = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
+    parsed = parse_facebook_timestamp(value, observed_at)
+    assert parsed is not None
+    assert (parsed.year, parsed.month, parsed.day) == (
+        2025 if "2025" in value else 2026,
+        9,
+        26,
+    )
+
+
+@pytest.mark.parametrize("value", ["26 comments", "26 bananas", "32 Sep"])
+def test_mobile_date_without_clock_cannot_parse_counts_or_invalid_dates(
+    value: str,
+) -> None:
+    assert parse_facebook_timestamp(value, OBSERVED_AT) is None
+
+
 def test_parse_facebook_timestamp_rejects_invalid_timezone() -> None:
     with pytest.raises(ValueError, match="IANA timezone"):
         parse_facebook_timestamp(
