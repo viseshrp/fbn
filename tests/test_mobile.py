@@ -336,6 +336,43 @@ def test_scan_restores_feed_focus_and_uses_configured_render_timeout(monkeypatch
     assert events == ["front", 30]
 
 
+@pytest.mark.parametrize("failure", ["route", "validation", None])
+def test_post_target_always_closes_its_tab_and_guards_navigation(failure):
+    from fbn import mobile
+
+    events = []
+
+    def install_route(pattern, guard):
+        assert pattern == "**/*"
+        guard(
+            SimpleNamespace(
+                request=SimpleNamespace(
+                    url="https://evil.invalid/", is_navigation_request=lambda: True
+                ),
+                abort=lambda: events.append("abort"),
+                fallback=lambda: events.append("fallback"),
+            )
+        )
+        if failure == "route":
+            raise mobile.PlaywrightError("Synthetic failure")
+
+    page = SimpleNamespace(route=install_route, close=lambda: events.append("close"))
+    context = SimpleNamespace(new_page=lambda: page)
+
+    def run():
+        with mobile._post_target(context) as target:
+            assert target is page
+            if failure == "validation":
+                raise mobile.LayoutChangedError("Synthetic mismatch")
+
+    if failure:
+        with pytest.raises((mobile.PlaywrightError, mobile.LayoutChangedError)):
+            run()
+    else:
+        run()
+    assert events == ["abort", "close"]
+
+
 @pytest.mark.parametrize("author_prefix", ["", "Author, "])
 def test_publication_label_removes_only_verified_author_and_privacy(author_prefix):
     from fbn.mobile import _publication_label

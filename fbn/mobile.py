@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from playwright.sync_api import BrowserContext, ElementHandle, Page, Response
+from playwright.sync_api import BrowserContext, ElementHandle, Page, Response, Route
 from playwright.sync_api import Error as PlaywrightError
 
 from .browser import PageState, PlaywrightPostSource, classify_page, read_page_signals
@@ -699,6 +699,25 @@ def resolve_post_link(
     return resolved.url
 
 
+@contextmanager
+def _post_target(context: BrowserContext) -> Iterator[Page]:
+    target = context.new_page()
+
+    def guard(route: Route) -> None:
+        request = route.request
+        if request.is_navigation_request() and not _trusted_url(request.url):
+            route.abort()
+        else:
+            route.fallback()
+
+    try:
+        target.route("**/*", guard)
+        yield target
+    finally:
+        with suppress(PlaywrightError):
+            target.close()
+
+
 class MobilePostSource(PlaywrightPostSource):
     """A separately implemented mobile reader sharing only browser ownership."""
 
@@ -734,7 +753,6 @@ class MobilePostSource(PlaywrightPostSource):
             headless=self.settings.headless, timezone_id=policy.timezone_name
         ) as context:
             page = context.new_page()
-            target = context.new_page()
 
             # Reject direct off-site navigations. Final redirect destinations
             # are independently checked before any post is accepted.
@@ -746,7 +764,6 @@ class MobilePostSource(PlaywrightPostSource):
                     route.fallback()
 
             page.route("**/*", guard)
-            target.route("**/*", guard)
             try:
                 with initial_group_navigation(page) as navigation:
                     response = page.goto(
@@ -771,7 +788,7 @@ class MobilePostSource(PlaywrightPostSource):
                 if _group_key(page.url) not in aliases:
                     raise AccessDeniedError("Sorting left the verified mobile group.")
                 return self._scan_mobile(
-                    page, target, group, policy, aliases, boundary_post_id
+                    page, context, group, policy, aliases, boundary_post_id
                 )
             except PlaywrightError as exc:
                 raise TransientNavigationError(
@@ -779,14 +796,12 @@ class MobilePostSource(PlaywrightPostSource):
                 ) from exc
             finally:
                 with suppress(PlaywrightError):
-                    target.close()
-                with suppress(PlaywrightError):
                     page.close()
 
     def _scan_mobile(
         self,
         page: Page,
-        target: Page,
+        context: BrowserContext,
         group: GroupRef,
         policy: ScanPolicy,
         aliases: frozenset[str],
@@ -832,15 +847,18 @@ class MobilePostSource(PlaywrightPostSource):
                     copied = copy_post_link(
                         page, menu, timeout_seconds=COPY_TIMEOUT_SECONDS
                     )
-                    href = resolve_post_link(
-                        target,
-                        copied,
-                        payload,
-                        aliases,
-                        timeout_seconds=min(
-                            MAX_LINK_SECONDS, policy.navigation_timeout_seconds
-                        ),
-                    )
+                    # Close each destination promptly so navigation history,
+                    # decoded media and document heaps cannot grow across posts.
+                    with _post_target(context) as target:
+                        href = resolve_post_link(
+                            target,
+                            copied,
+                            payload,
+                            aliases,
+                            timeout_seconds=min(
+                                MAX_LINK_SECONDS, policy.navigation_timeout_seconds
+                            ),
+                        )
                     posts = extract_posts(
                         [{**payload, "href": href}],
                         group,

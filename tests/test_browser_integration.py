@@ -752,6 +752,8 @@ def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(
     stories = [("302", "Author", "Newer"), ("301", "Author", "Marker")]
     with _local_context(tmp_path) as context:
         original_pages = tuple(context.pages)
+        opened = []
+        context.on("page", lambda page: opened.append(page))
 
         def routes(route):
             url = route.request.url
@@ -794,6 +796,9 @@ def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(
         assert result.scrolls >= 1
         assert not result.bounded
         assert tuple(context.pages) == original_pages
+        # The feed and each verified post own a separate, promptly closed tab.
+        assert len(opened) == 3
+        assert all(page.is_closed() for page in opened)
 
 
 def test_scan_recovers_hover_only_primary_post_permalink(tmp_path: Path) -> None:
