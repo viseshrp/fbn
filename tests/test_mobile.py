@@ -373,6 +373,52 @@ def test_post_target_always_closes_its_tab_and_guards_navigation(failure):
     assert events == ["abort", "close"]
 
 
+def test_copy_actions_share_budget_but_cleanup_has_its_own_budget(monkeypatch):
+    from fbn import mobile
+
+    clock = [0.0]
+    actions = []
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+
+    def action(name, seconds, **kwargs):
+        actions.append((name, kwargs["timeout"]))
+        clock[0] += seconds
+
+    copy = SimpleNamespace(
+        count=lambda: 0,
+        wait_for=lambda **kw: action(
+            kw["state"], 6 if kw["state"] == "visible" else 1, **kw
+        ),
+        click=lambda **kw: action("copy", 2, **kw),
+    )
+    close = SimpleNamespace(click=lambda **kw: action("close", 1, **kw))
+    restored = []
+
+    def evaluate(script):
+        if script == mobile._CAPTURE_RESTORE_SCRIPT:
+            restored.append(True)
+        if script == "window.__fbnCopyCapture.values":
+            return ["https://m.facebook.com/share/p/example/"]
+
+    page = SimpleNamespace(
+        bring_to_front=lambda: None,
+        get_by_role=lambda role, **kw: copy if kw["name"] == "Copy link" else close,
+        evaluate=evaluate,
+        wait_for_function=lambda script, **kw: action("clipboard", 3, **kw),
+    )
+    menu = SimpleNamespace(click=lambda **kw: action("open", 8, **kw))
+    mobile.copy_post_link(page, menu, timeout_seconds=30)
+    assert actions == [
+        ("open", 30_000),
+        ("visible", 22_000),
+        ("copy", 16_000),
+        ("clipboard", 14_000),
+        ("close", 5_000),
+        ("hidden", 4_000),
+    ]
+    assert restored == [True]
+
+
 @pytest.mark.parametrize("author_prefix", ["", "Author, "])
 def test_publication_label_removes_only_verified_author_and_privacy(author_prefix):
     from fbn.mobile import _publication_label

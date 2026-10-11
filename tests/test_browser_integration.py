@@ -513,7 +513,7 @@ def test_mobile_verifies_metadata_with_badges_before_or_after_author(
             "https://m.facebook.com/groups/contract-group/posts/301/",
             payload,
             frozenset({"contract-group"}),
-            timeout_seconds=0.1,
+            timeout_seconds=2,
         ).endswith("/posts/301/")
 
 
@@ -739,7 +739,7 @@ def test_mobile_rejects_wrong_copied_link_destinations(tmp_path, wrong):
                 copied,
                 source_payload,
                 frozenset({"contract-group"}),
-                timeout_seconds=0.2,
+                timeout_seconds=2,
             )
 
 
@@ -799,6 +799,41 @@ def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(
         # The feed and each verified post own a separate, promptly closed tab.
         assert len(opened) == 3
         assert all(page.is_closed() for page in opened)
+
+
+def test_mobile_fetch_allows_post_menu_to_load_beyond_old_three_second_cap(tmp_path):
+    with _local_context(tmp_path) as context:
+        original_pages = tuple(context.pages)
+
+        def routes(route):
+            html = mobile_fixture([("301", "Author", "Body")])
+            if "/share/" in route.request.url:
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            else:
+                html = html.replace(
+                    'document.getElementById("post-menu").hidden=false;',
+                    'setTimeout(() => document.getElementById("post-menu")'
+                    ".hidden=false, 3200);",
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", routes)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        result = source.fetch_recent(
+            parse_group_ref("contract-group"),
+            ScanPolicy(sample_count=1, max_scrolls=0, navigation_timeout_seconds=5),
+        )
+        assert [post.post_id for post in result.posts] == ["301"]
+        assert tuple(context.pages) == original_pages
 
 
 def test_scan_recovers_hover_only_primary_post_permalink(tmp_path: Path) -> None:

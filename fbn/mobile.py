@@ -42,7 +42,7 @@ from .models import GroupRef, Post, ScanPolicy, ScanResult
 
 LOGGER = get_logger("mobile")
 MAX_SCAN_SECONDS = 90.0
-COPY_TIMEOUT_SECONDS = 3.0
+COPY_TIMEOUT_SECONDS = 30.0
 MAX_LINK_SECONDS = 30.0
 
 # Bloks cards are direct children of a vscroller. The contextual menu belongs
@@ -587,6 +587,7 @@ def mobile_records(
 def copy_post_link(page: Page, menu: ElementHandle, *, timeout_seconds: float) -> str:
     """Capture one fresh clipboard write while the identified card owns the menu."""
 
+    deadline = time.monotonic() + timeout_seconds
     page.bring_to_front()
     copy = page.get_by_role("button", name="Copy link", exact=True)
     if any(copy.nth(index).is_visible() for index in range(copy.count())):
@@ -594,13 +595,20 @@ def copy_post_link(page: Page, menu: ElementHandle, *, timeout_seconds: float) -
     opened = False
     page.evaluate(_CAPTURE_INSTALL_SCRIPT)
     try:
-        menu.click(timeout=timeout_seconds * 1_000)
+        with _action_phase("open_post_menu"):
+            menu.click(timeout=_remaining_seconds(deadline, "open_post_menu") * 1_000)
         opened = True
-        copy.wait_for(state="visible", timeout=timeout_seconds * 1_000)
-        copy.click(timeout=timeout_seconds * 1_000)
-        page.wait_for_function(
-            "window.__fbnCopyCapture.values.length > 0", timeout=timeout_seconds * 1_000
-        )
+        with _action_phase("wait_copy_link"):
+            copy.wait_for(
+                state="visible",
+                timeout=_remaining_seconds(deadline, "wait_copy_link") * 1_000,
+            )
+        with _action_phase("copy_post_link"):
+            copy.click(timeout=_remaining_seconds(deadline, "copy_post_link") * 1_000)
+            page.wait_for_function(
+                "window.__fbnCopyCapture.values.length > 0",
+                timeout=_remaining_seconds(deadline, "fresh_clipboard_write") * 1_000,
+            )
         values = page.evaluate("window.__fbnCopyCapture.values")
         if len(values) != 1 or not isinstance(values[0], str):
             raise _layout_failure("single_fresh_clipboard_link")
@@ -610,8 +618,19 @@ def copy_post_link(page: Page, menu: ElementHandle, *, timeout_seconds: float) -
         try:
             if opened:
                 close = page.get_by_role("button", name="Close", exact=True)
-                close.click(timeout=timeout_seconds * 1_000)
-                copy.wait_for(state="hidden", timeout=timeout_seconds * 1_000)
+                # Cleanup gets its own small budget even after the action timed
+                # out. Never leave clipboard interception installed on failure.
+                cleanup_deadline = time.monotonic() + min(5, timeout_seconds)
+                with _action_phase("close_post_menu"):
+                    close.click(
+                        timeout=_remaining_seconds(cleanup_deadline, "close_post_menu")
+                        * 1_000
+                    )
+                    copy.wait_for(
+                        state="hidden",
+                        timeout=_remaining_seconds(cleanup_deadline, "closed_post_menu")
+                        * 1_000,
+                    )
         finally:
             page.evaluate(_CAPTURE_RESTORE_SCRIPT)
 
@@ -845,7 +864,11 @@ class MobilePostSource(PlaywrightPostSource):
                             accumulated, scrolls, True, boundary_post_id
                         )
                     copied = copy_post_link(
-                        page, menu, timeout_seconds=COPY_TIMEOUT_SECONDS
+                        page,
+                        menu,
+                        timeout_seconds=min(
+                            COPY_TIMEOUT_SECONDS, policy.navigation_timeout_seconds
+                        ),
                     )
                     # Close each destination promptly so navigation history,
                     # decoded media and document heaps cannot grow across posts.

@@ -200,6 +200,9 @@ screens, total/visible scrollers, post menus, loading indicators, and dialogs),
 never page text, links, or account data. A timeout does not trigger a reload.
 Each destination opens in a fresh tab that closes immediately after verification,
 including on failure, to limit retained browser memory between posts.
+Opening a post menu and copying its link share the configured timeout, capped
+at 30 seconds. Closing the menu has a separate cleanup budget of at most five
+seconds; clipboard interception is always removed, including after a timeout.
 
 The mobile switch passed a bounded read-only Pi check of three real posts using
 the existing session. Each Copy link destination matched its own post, with no
