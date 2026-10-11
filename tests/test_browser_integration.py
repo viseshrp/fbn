@@ -387,6 +387,71 @@ def test_mobile_reads_timestamp_from_contributor_metadata_wrapper(
             )
 
 
+@pytest.mark.parametrize("badge", [None, "All-star contributor"])
+@pytest.mark.parametrize("include_author", [False, True])
+def test_mobile_reads_primary_date_from_metadata_container(
+    tmp_path, badge, include_author
+):
+    prefix = "Author, " if include_author else ""
+    prefix += f"{badge}, , " if badge else ""
+    contents = '<span role="link">Author</span>' if include_author else ""
+    contents += f'<div data-mcomponent="TextArea">{badge}</div>' if badge else ""
+    html = mobile_fixture([("301", "Author", "Body")])
+    if include_author:
+        html = html.replace('<span role="link">Author</span>', "Group title")
+    html = html.replace(
+        '<div data-mcomponent="ServerTextArea" '
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h</div>',
+        '<div data-mcomponent="MContainer" '
+        f'aria-label="{prefix}Sunday, October 11, 2026 at 10:00 AM, Private group">'
+        + contents
+        + '<div data-mcomponent="TextArea">2h</div></div>',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=0.1, permalink=True)
+            is PageState.FEED
+        )
+        with mobile_records(page, permalink=True) as records:
+            assert len(records) == 1
+            assert records[0][1]["timestampLabel"] == (
+                "Sunday, October 11, 2026 at 10:00 AM, Private group"
+            )
+
+
+def test_mobile_waits_for_short_link_client_side_canonical_navigation(tmp_path):
+    html = mobile_fixture([("301", "Author", "Body")])
+    target_html = (
+        html
+        + """<script>
+      setTimeout(() => {
+        history.replaceState(null, '', '/groups/contract-group/posts/301/');
+      }, 100);
+    </script>"""
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            payload = records[0][1]
+        target = context.new_page()
+        target.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=target_html
+            ),
+        )
+        assert resolve_post_link(
+            target,
+            "https://m.facebook.com/share/p/example/",
+            payload,
+            frozenset({"contract-group"}),
+            timeout_seconds=1,
+        ).endswith("/posts/301/")
+
+
 @pytest.mark.parametrize(
     "invalid", ["badge_only", "unrelated_badge", "two_dates", "menu_container"]
 )

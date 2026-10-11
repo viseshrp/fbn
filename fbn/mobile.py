@@ -121,25 +121,31 @@ MOBILE_SCAN_SCRIPT = r"""
       if (!owner || authors.length !== 1) {
         missing.add('matching_primary_author'); continue;
       }
-      const timestamps = Array.from(header.querySelectorAll(textSelector)).filter(
-        node => visible(node) && clean(node.getAttribute('aria-label'))
-          && !authors[0].contains(node)
-      ).map(node => ({node, label: clean(node.getAttribute('aria-label'))}));
-      // Contributor headers put badge and date in one labelled wrapper, while
-      // the date's TextArea itself has no label. Require the same rendered badge
-      // and a recognized date; arbitrary author/menu containers cannot qualify.
-      for (const node of header.querySelectorAll(
-        '[data-mcomponent="MContainer"][aria-label]'
-      )) {
-        if (!visible(node) || node.contains(menu) || node.contains(authors[0])
-          || authors[0].contains(node)) continue;
-        const raw = clean(node.getAttribute('aria-label'));
-        const badge = contributorBadges.find(value => raw.startsWith(value + ',')
+      const timestampLabel = node => {
+        let label = clean(node.getAttribute('aria-label')).replace(/^[,\s]+/, '');
+        if (label.startsWith(owner + ',')) {
+          label = label.slice(owner.length + 1).replace(/^[,\s]+/, '');
+        }
+        const badge = contributorBadges.find(value => label.startsWith(value + ',')
           && Array.from(node.querySelectorAll(textSelector)).some(
             child => visible(child) && clean(child.innerText) === value
           ));
-        if (!badge) continue;
-        const label = raw.slice(badge.length + 1).replace(/^[,\s]+/, '');
+        if (badge) label = label.slice(badge.length + 1).replace(/^[,\s]+/, '');
+        return label;
+      };
+      const timestamps = Array.from(header.querySelectorAll(textSelector)).filter(
+        node => visible(node) && clean(node.getAttribute('aria-label'))
+          && !authors[0].contains(node)
+      ).map(node => ({node, label: timestampLabel(node)}));
+      // Metadata wrappers may contain the verified author and contributor badge
+      // as well as the date. Only a recognized date label can qualify, and no
+      // wrapper containing a post menu can become a timestamp.
+      for (const node of header.querySelectorAll(
+        '[data-mcomponent="MContainer"][aria-label]'
+      )) {
+        if (!visible(node) || node.contains(menu) || node.querySelector(menuSelector)
+          || authors[0].contains(node)) continue;
+        const label = timestampLabel(node);
         const date = label.replace(/, (?:Private|Public) group$/, '');
         if (timestampPattern.test(date)) timestamps.push({node, label});
       }
@@ -561,6 +567,7 @@ def resolve_post_link(
 ) -> str:
     """Resolve a Facebook-owned share link and match only primary target content."""
 
+    deadline = time.monotonic() + timeout_seconds
     if not _trusted_url(copied):
         raise _layout_failure("trusted_copied_post_link")
     direct = parse_post_url(copied)
@@ -584,6 +591,18 @@ def resolve_post_link(
         permalink=True,
     )
     resolved = parse_post_url(target.url)
+    # The post can render before its short URL is replaced by the client router.
+    # Wait only on that same trusted short-link path, within the existing budget;
+    # an unrelated/off-site/direct destination is still rejected immediately.
+    while (
+        resolved is None
+        and direct is None
+        and _trusted_url(target.url)
+        and urlsplit(target.url).path == parsed.path
+        and time.monotonic() < deadline
+    ):
+        target.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
+        resolved = parse_post_url(target.url)
     if resolved is None or resolved.group_key not in allowed_group_keys:
         raise _layout_failure("resolved_link_for_verified_group")
     if direct is not None and direct.post_id != resolved.post_id:
