@@ -43,7 +43,7 @@ from .models import GroupRef, Post, ScanPolicy, ScanResult
 LOGGER = get_logger("mobile")
 MAX_SCAN_SECONDS = 90.0
 COPY_TIMEOUT_SECONDS = 3.0
-MAX_LINK_SECONDS = 10.0
+MAX_LINK_SECONDS = 30.0
 
 # Bloks cards are direct children of a vscroller. The contextual menu belongs
 # to the primary header; its author must agree with that header's visible link.
@@ -418,6 +418,59 @@ def _layout_failure(*missing: str) -> LayoutChangedError:
     return LayoutChangedError(f"Mobile layout incomplete: missing={components}.")
 
 
+def _remaining_seconds(deadline: float, phase: str) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        LOGGER.warning("Mobile action timed out", phase=phase)
+        raise TransientNavigationError(
+            f"Mobile action timed out: phase={phase}; no immediate retry was attempted."
+        )
+    return remaining
+
+
+@contextmanager
+def _action_phase(phase: str) -> Iterator[None]:
+    started = time.monotonic()
+    try:
+        yield
+    except PlaywrightError:
+        LOGGER.warning(
+            "Mobile browser action failed",
+            phase=phase,
+            elapsed_seconds=round(time.monotonic() - started, 2),
+        )
+        raise
+
+
+def _log_layout_snapshot(
+    page: Page, result: dict[str, Any], *, permalink: bool
+) -> None:
+    # Fixed structural counters only. Never log text, labels, URLs, or IDs.
+    structure = page.evaluate(
+        """() => ({
+          document_ready: document.readyState,
+          document_visible: document.visibilityState === 'visible',
+          mobile_screens: document.querySelectorAll(
+            '[data-mcomponent="MScreen"]'
+          ).length,
+          total_scrollers: document.querySelectorAll('[data-type="vscroller"]').length,
+          primary_menus: document.querySelectorAll(
+            '[role="button"][aria-label^="More options for "]'
+          ).length,
+          loading_indicators: document.querySelectorAll('[role="progressbar"]').length,
+          dialogs: document.querySelectorAll('[role="dialog"]').length,
+        })"""
+    )
+    LOGGER.warning(
+        "Mobile layout snapshot",
+        page_kind="permalink" if permalink else "feed",
+        visible_scrollers=result.get("feedRootCount", 0),
+        primary_candidates=result.get("itemCount", 0),
+        valid_posts=result.get("postCount", 0),
+        **structure,
+    )
+
+
 def wait_for_mobile_page(
     page: Page,
     *,
@@ -435,12 +488,14 @@ def wait_for_mobile_page(
             if time.monotonic() >= deadline:
                 result = page.evaluate(script, False)
                 missing = result.get("missing", [])
+                _log_layout_snapshot(page, result, permalink=permalink)
                 raise _layout_failure(*(missing or ["primary_mobile_card"])) from None
             page.wait_for_timeout(100)
             continue
         result = page.evaluate(script, False)
         if result.get("missing"):
             if time.monotonic() >= deadline:
+                _log_layout_snapshot(page, result, permalink=permalink)
                 raise _layout_failure(*result["missing"])
             page.wait_for_timeout(100)
             continue
@@ -462,6 +517,7 @@ def _control(
 def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
     """Select and verify the visible sort, even if the URL asks for chronology."""
 
+    deadline = time.monotonic() + timeout_seconds
     page.bring_to_front()
     handle = _control(page, "New posts", feed_only=True)
     if handle is not None:
@@ -471,10 +527,10 @@ def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
     if sort is None:
         raise _layout_failure("group_sort_control")
     try:
-        sort.click(timeout=timeout_seconds * 1_000)
+        with _action_phase("open_sort"):
+            sort.click(timeout=_remaining_seconds(deadline, "open_sort") * 1_000)
     finally:
         sort.dispose()
-    deadline = time.monotonic() + timeout_seconds
     new_posts = None
     while new_posts is None and time.monotonic() < deadline:
         new_posts = _control(page, "New posts")
@@ -483,14 +539,18 @@ def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
     if new_posts is None:
         raise _layout_failure("new_posts_sort_choice")
     try:
-        new_posts.click(timeout=max(1, deadline - time.monotonic()) * 1_000)
+        with _action_phase("select_new_posts"):
+            new_posts.click(
+                timeout=_remaining_seconds(deadline, "select_new_posts") * 1_000
+            )
     finally:
         new_posts.dispose()
-    page.wait_for_function(
-        f"() => ({_SORT_CONTROL_SCRIPT})"
-        "({label: 'New posts', feedOnly: true}) !== null",
-        timeout=timeout_seconds * 1_000,
-    )
+    with _action_phase("verify_new_posts"):
+        page.wait_for_function(
+            f"() => ({_SORT_CONTROL_SCRIPT})"
+            "({label: 'New posts', feedOnly: true}) !== null",
+            timeout=_remaining_seconds(deadline, "verify_new_posts") * 1_000,
+        )
     LOGGER.debug("Mobile feed sort verified", sort="new_posts")
 
 
@@ -594,12 +654,15 @@ def resolve_post_link(
     if direct is not None and direct.group_key not in allowed_group_keys:
         raise _layout_failure("copied_link_for_verified_group")
     target.bring_to_front()
-    response = target.goto(
-        copied, wait_until="domcontentloaded", timeout=timeout_seconds * 1_000
-    )
+    with _action_phase("post_navigation"):
+        response = target.goto(
+            copied,
+            wait_until="domcontentloaded",
+            timeout=_remaining_seconds(deadline, "post_navigation") * 1_000,
+        )
     wait_for_mobile_page(
         target,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=_remaining_seconds(deadline, "post_render"),
         status=response.status if response is not None else None,
         permalink=True,
     )
@@ -700,7 +763,7 @@ class MobilePostSource(PlaywrightPostSource):
                         response, group, page.url, navigation=navigation
                     )
                 select_new_posts(
-                    page, timeout_seconds=min(5, policy.navigation_timeout_seconds)
+                    page, timeout_seconds=policy.navigation_timeout_seconds
                 )
                 wait_for_mobile_page(
                     page, timeout_seconds=policy.navigation_timeout_seconds
@@ -743,8 +806,9 @@ class MobilePostSource(PlaywrightPostSource):
             else policy.sample_count
         )
         for scan_index in range(policy.max_scrolls + 1):
+            page.bring_to_front()
             wait_for_mobile_page(
-                page, timeout_seconds=min(5, policy.navigation_timeout_seconds)
+                page, timeout_seconds=policy.navigation_timeout_seconds
             )
             if _group_key(page.url) not in aliases:
                 raise AccessDeniedError("The mobile scan left the verified group.")
@@ -809,6 +873,7 @@ class MobilePostSource(PlaywrightPostSource):
                 return self._scan_result(accumulated, scrolls, False, boundary_post_id)
             if stagnant >= policy.stagnant_scrolls or scan_index == policy.max_scrolls:
                 break
+            page.bring_to_front()
             page.evaluate(
                 "() => window.scrollBy(0, Math.max(window.innerHeight * 0.8, 600))"
             )

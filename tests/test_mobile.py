@@ -212,6 +212,130 @@ def test_sort_activates_feed_tab_before_reading_controls(monkeypatch):
     mobile.select_new_posts(page, timeout_seconds=1)
 
 
+def test_sort_actions_share_one_timeout_budget(monkeypatch):
+    from fbn import mobile
+
+    clock = [0.0]
+    waits = []
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+
+    def button(seconds):
+        def click(**kwargs):
+            clock[0] += seconds
+
+        return SimpleNamespace(click=click, dispose=lambda: None)
+
+    sort, choice = button(2), button(3)
+    monkeypatch.setattr(
+        mobile,
+        "_control",
+        lambda page, label, **kwargs: (
+            None if kwargs.get("feed_only") else sort if label == "Sort" else choice
+        ),
+    )
+    page = SimpleNamespace(
+        bring_to_front=lambda: None,
+        wait_for_function=lambda script, **kwargs: waits.append(kwargs["timeout"]),
+    )
+    mobile.select_new_posts(page, timeout_seconds=10)
+    assert waits == [5_000]
+
+
+def test_link_navigation_and_render_share_one_timeout_budget(monkeypatch):
+    from contextlib import contextmanager
+
+    from fbn import mobile
+
+    clock = [0.0]
+    waits = []
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+    payload = {"author": "Author", "text": "Body", "timestampLabel": "2 hours ago"}
+    canonical = "https://m.facebook.com/groups/test-group/posts/301/"
+
+    def navigate(*args, **kwargs):
+        clock[0] += 8
+        return SimpleNamespace(status=200)
+
+    @contextmanager
+    def records(*args, **kwargs):
+        yield [(None, payload)]
+
+    monkeypatch.setattr(mobile, "mobile_records", records)
+    monkeypatch.setattr(
+        mobile, "wait_for_mobile_page", lambda page, **kw: waits.append(kw)
+    )
+    page = SimpleNamespace(bring_to_front=lambda: None, goto=navigate, url=canonical)
+    assert mobile.resolve_post_link(
+        page,
+        "https://m.facebook.com/share/p/example/",
+        payload,
+        frozenset({"test-group"}),
+        timeout_seconds=30,
+    ) == canonical.replace("m.facebook.com", "www.facebook.com")
+    assert waits[0]["timeout_seconds"] == 22
+
+
+def test_expired_mobile_budget_fails_without_starting_another_action(monkeypatch):
+    from fbn import mobile
+    from fbn.exceptions import TransientNavigationError
+
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: 31)
+    with pytest.raises(TransientNavigationError, match="phase=post_render"):
+        mobile._remaining_seconds(30, "post_render")
+
+
+def test_browser_action_failure_logs_phase_without_exception_content(monkeypatch):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        SimpleNamespace(warning=lambda message, **kw: logged.append((message, kw))),
+    )
+    with (
+        pytest.raises(mobile.PlaywrightError),
+        mobile._action_phase("post_navigation"),
+    ):
+        raise mobile.PlaywrightError("Synthetic private URL and account content")
+    assert logged[0][1]["phase"] == "post_navigation"
+    assert "Synthetic private" not in str(logged)
+
+
+def test_scan_restores_feed_focus_and_uses_configured_render_timeout(monkeypatch):
+    from contextlib import contextmanager
+
+    from fbn import mobile
+    from fbn.models import ScanPolicy
+
+    events = []
+    page = SimpleNamespace(
+        bring_to_front=lambda: events.append("front"),
+        url="https://m.facebook.com/groups/test-group/",
+    )
+
+    def wait(page, **kwargs):
+        assert events[-1] == "front"
+        events.append(kwargs["timeout_seconds"])
+
+    @contextmanager
+    def records(*args, **kwargs):
+        yield []
+
+    monkeypatch.setattr(mobile, "wait_for_mobile_page", wait)
+    monkeypatch.setattr(mobile, "mobile_records", records)
+    source = MobilePostSource(SimpleNamespace())
+    source._scan_mobile(
+        page,
+        None,
+        parse_group_ref("test-group"),
+        ScanPolicy(max_scrolls=0, navigation_timeout_seconds=30),
+        frozenset({"test-group"}),
+        None,
+    )
+    assert events == ["front", 30]
+
+
 @pytest.mark.parametrize("author_prefix", ["", "Author, "])
 def test_publication_label_removes_only_verified_author_and_privacy(author_prefix):
     from fbn.mobile import _publication_label

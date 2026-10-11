@@ -295,6 +295,49 @@ def test_mobile_waits_for_all_primary_cards_to_finish_loading(tmp_path):
         assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
 
 
+def test_mobile_waits_for_scroller_hydration_without_reloading(tmp_path):
+    html = mobile_fixture([("301", "Author", "Body")]).replace(
+        'data-type="vscroller"', 'data-type="loading" id="loading-scroller"'
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        page.evaluate("""() => {
+            setTimeout(() => document.getElementById('loading-scroller')
+                .setAttribute('data-type', 'vscroller'), 350);
+        }""")
+        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        with mobile_records(page) as records:
+            assert len(records) == 1
+
+
+def test_missing_mobile_scroller_logs_structure_without_page_content(
+    tmp_path, monkeypatch
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type("Log", (), {"warning": lambda self, message, **kw: logged.append(kw)})(),
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            '<div data-mcomponent="MScreen"><div role="progressbar"></div>'
+            "Synthetic private body must not appear in diagnostics</div>"
+        )
+        with pytest.raises(LayoutChangedError, match="unique_mobile_scroller"):
+            wait_for_mobile_page(page, timeout_seconds=0.05, permalink=True)
+    snapshot = logged[0]
+    assert snapshot["page_kind"] == "permalink"
+    assert snapshot["mobile_screens"] == snapshot["loading_indicators"] == 1
+    assert snapshot["total_scrollers"] == snapshot["visible_scrollers"] == 0
+    assert "Synthetic private body" not in str(logged)
+    assert "facebook.com" not in str(logged)
+
+
 def test_mobile_defers_unrendered_cards_until_scrolling_makes_them_readable(tmp_path):
     with _local_context(tmp_path) as context:
         page = context.new_page()

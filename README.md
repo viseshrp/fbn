@@ -193,6 +193,11 @@ Off-screen cards whose rendering Facebook defers are read after scrolling makes
 them available. A visible but incomplete card still stops the check and logs the
 missing component names. The permalink reader supports both wrapped cards and
 separate header/body/action sections, stopping before comments in either layout.
+Feed hydration and sorting use the configured navigation timeout instead of a
+five-second cap. Each post link has one shared navigation/rendering budget of
+at most 30 seconds. A missing scroller logs fixed structural counts (mobile
+screens, total/visible scrollers, post menus, loading indicators, and dialogs),
+never page text, links, or account data. A timeout does not trigger a reload.
 
 The mobile switch passed a bounded read-only Pi check of three real posts using
 the existing session. Each Copy link destination matched its own post, with no
