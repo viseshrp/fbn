@@ -8,6 +8,7 @@ the desktop adapter; storage and delivery remain independent of either reader.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import Iterator
@@ -29,6 +30,7 @@ from .exceptions import (
     TransientNavigationError,
 )
 from .extractor import (
+    _FACEBOOK_TIMESTAMP_RE,
     FACEBOOK_HOSTS,
     extract_posts,
     parse_facebook_timestamp,
@@ -60,6 +62,9 @@ MOBILE_SCAN_SCRIPT = r"""
   const menuSelector = '[role="button"][aria-label^="More options for "]';
   const textSelector = '[data-mcomponent="ServerTextArea"],'
     + '[data-mcomponent="TextArea"]';
+  const timestampPattern = new RegExp(__FBN_TIMESTAMP_PATTERN__, 'i');
+  const contributorBadges = ['All-star contributor', 'Top contributor',
+    'Rising contributor'];
   const actionLabel = node => clean(node.getAttribute('aria-label'))
     .replace(/\p{Co}/gu, '').trim().replace(/^\d+\s*/, '').toLowerCase();
   const excludedSelector = '[role="article"],[aria-label^="Comment by "],'
@@ -119,10 +124,33 @@ MOBILE_SCAN_SCRIPT = r"""
       const timestamps = Array.from(header.querySelectorAll(textSelector)).filter(
         node => visible(node) && clean(node.getAttribute('aria-label'))
           && !authors[0].contains(node)
-      );
-      if (timestamps.length !== 1) {
+      ).map(node => ({node, label: clean(node.getAttribute('aria-label'))}));
+      // Contributor headers put badge and date in one labelled wrapper, while
+      // the date's TextArea itself has no label. Require the same rendered badge
+      // and a recognized date; arbitrary author/menu containers cannot qualify.
+      for (const node of header.querySelectorAll(
+        '[data-mcomponent="MContainer"][aria-label]'
+      )) {
+        if (!visible(node) || node.contains(menu) || node.contains(authors[0])
+          || authors[0].contains(node)) continue;
+        const raw = clean(node.getAttribute('aria-label'));
+        const badge = contributorBadges.find(value => raw.startsWith(value + ',')
+          && Array.from(node.querySelectorAll(textSelector)).some(
+            child => visible(child) && clean(child.innerText) === value
+          ));
+        if (!badge) continue;
+        const label = raw.slice(badge.length + 1).replace(/^[,\s]+/, '');
+        const date = label.replace(/, (?:Private|Public) group$/, '');
+        if (timestampPattern.test(date)) timestamps.push({node, label});
+      }
+      const distinctTimestamps = timestamps.filter(item => !timestamps.some(
+        other => other !== item && item.node.contains(other.node)
+          && item.label === other.label
+      ));
+      if (distinctTimestamps.length !== 1) {
         missing.add('unique_primary_timestamp'); continue;
       }
+      const timestamp = distinctTimestamps[0];
       const sections = sectionsFor(card);
       const start = sections.indexOf(header) + 1;
       const end = footerIndex(sections, start);
@@ -166,8 +194,8 @@ MOBILE_SCAN_SCRIPT = r"""
       if (!text && !mediaCount) { missing.add('primary_body_or_media'); continue; }
       if (!tokens.cards.has(card)) tokens.cards.set(card, ++tokens.next);
       records.push({card, menu, payload: {
-        author: owner, text, timestamp: clean(timestamps[0].innerText),
-        timestampLabel: clean(timestamps[0].getAttribute('aria-label')),
+        author: owner, text, timestamp: clean(timestamp.node.innerText),
+        timestampLabel: timestamp.label,
         cardToken: tokens.cards.get(card),
         actionToken: menu.getAttribute('data-action-id'),
         mediaCount, partial, stableContent: Boolean(text), position: records.length,
@@ -182,7 +210,7 @@ MOBILE_SCAN_SCRIPT = r"""
   };
   return includeContent ? {...counts, records} : counts;
 }
-"""
+""".replace("__FBN_TIMESTAMP_PATTERN__", json.dumps(_FACEBOOK_TIMESTAMP_RE.pattern))
 
 MOBILE_PERMALINK_SCAN_SCRIPT = MOBILE_SCAN_SCRIPT.replace(
     "const permalink = false;", "const permalink = true;"

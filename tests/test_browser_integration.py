@@ -358,6 +358,73 @@ def test_mobile_verifies_permalink_with_author_inside_timestamp_component(
         ).endswith("/posts/301/")
 
 
+@pytest.mark.parametrize(
+    "badge", ["All-star contributor", "Top contributor", "Rising contributor"]
+)
+@pytest.mark.parametrize("permalink", [False, True])
+def test_mobile_reads_timestamp_from_contributor_metadata_wrapper(
+    tmp_path, badge, permalink
+):
+    html = mobile_fixture([("301", "Author", "Body")]).replace(
+        '<div data-mcomponent="ServerTextArea" '
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h</div>',
+        '<div data-mcomponent="MContainer" '
+        f'aria-label="{badge}, , Sunday, October 11, 2026 at 10:00 AM, Private group">'
+        f'<div data-mcomponent="TextArea">{badge}</div>'
+        '<div data-mcomponent="TextArea">2h</div></div>',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=0.1, permalink=permalink)
+            is PageState.FEED
+        )
+        with mobile_records(page, permalink=permalink) as records:
+            assert len(records) == 1
+            assert records[0][1]["timestampLabel"] == (
+                "Sunday, October 11, 2026 at 10:00 AM, Private group"
+            )
+
+
+@pytest.mark.parametrize(
+    "invalid", ["badge_only", "unrelated_badge", "two_dates", "menu_container"]
+)
+def test_mobile_contributor_wrapper_cannot_hide_missing_or_ambiguous_timestamp(
+    tmp_path, invalid
+):
+    replacement = (
+        '<div data-mcomponent="MContainer" '
+        'aria-label="All-star contributor, , 2 hours ago, Private group">'
+        '<div data-mcomponent="TextArea">All-star contributor</div>'
+        '<div data-mcomponent="TextArea">2h</div></div>'
+    )
+    if invalid == "badge_only":
+        replacement = replacement.replace(", , 2 hours ago, Private group", "")
+    elif invalid == "unrelated_badge":
+        replacement = replacement.replace(">All-star contributor<", ">Another badge<")
+    elif invalid == "two_dates":
+        replacement += (
+            '<div data-mcomponent="TextArea" aria-label="3 hours ago">3h</div>'
+        )
+    else:
+        replacement = replacement.replace(
+            ">2h</div>",
+            '>2h<button role="button" aria-label="More options for Nested">'
+            "...</button></div>",
+        )
+    html = mobile_fixture([("301", "Author", "Body")]).replace(
+        '<div data-mcomponent="ServerTextArea" '
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h</div>',
+        replacement,
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="unique_primary_"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
 def test_mobile_does_not_accept_sort_text_inside_a_post(tmp_path):
     html = mobile_fixture([("301", "Author", "New posts")], sorted_feed=False)
     html = html.replace('id="sort-label"', 'id="sort-label" style="display:none"')
