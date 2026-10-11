@@ -422,6 +422,58 @@ def test_mobile_reads_primary_date_from_metadata_container(
             )
 
 
+@pytest.mark.parametrize(
+    "prefix_order",
+    ["badge-author", "badge-author-badge", "author-badge", "badge-badge-author"],
+)
+@pytest.mark.parametrize(
+    "date", ["4 days ago", "26 Sep", "Sunday, October 11, 2026 at 10:00 AM"]
+)
+def test_mobile_verifies_metadata_with_badges_before_or_after_author(
+    tmp_path, prefix_order, date
+):
+    source_html = mobile_fixture([("301", "Primary Author", "Primary body")]).replace(
+        "Sunday, October 11, 2026 at 10:00 AM", date
+    )
+    parts = prefix_order.split("-")
+    badges = iter(["All-star contributor", "Group expert"])
+    labels = ["Primary Author" if part == "author" else next(badges) for part in parts]
+    contents = "".join(
+        '<div data-mcomponent="ServerTextArea">'
+        + ('<span role="link">Primary Author</span>' if part == "author" else label)
+        + "</div>"
+        for part, label in zip(parts, labels, strict=True)
+    )
+    target_html = source_html.replace(
+        '<span role="link">Primary Author</span>', "Group title"
+    ).replace(
+        '<div data-mcomponent="ServerTextArea" ' + f'aria-label="{date}">2h</div>',
+        '<div data-mcomponent="MContainer" '
+        + f'aria-label="{", , ".join(labels)}, {date}, Private group">'
+        + contents
+        + '<div data-mcomponent="TextArea">2h</div></div>',
+    )
+    with _local_context(tmp_path) as context:
+        source = context.new_page()
+        source.set_content(source_html)
+        with mobile_records(source) as records:
+            payload = records[0][1]
+        target = context.new_page()
+        target.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=target_html
+            ),
+        )
+        assert resolve_post_link(
+            target,
+            "https://m.facebook.com/groups/contract-group/posts/301/",
+            payload,
+            frozenset({"contract-group"}),
+            timeout_seconds=0.1,
+        ).endswith("/posts/301/")
+
+
 @pytest.mark.parametrize("wrapper", [False, True])
 def test_mobile_verifies_older_post_with_date_only_publication(tmp_path, wrapper):
     html = mobile_fixture([("301", "Author", "Body")]).replace(

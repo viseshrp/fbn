@@ -120,10 +120,10 @@ MOBILE_SCAN_SCRIPT = r"""
         missing.add('matching_primary_author'); continue;
       }
       const timestampLabel = node => {
-        let label = clean(node.getAttribute('aria-label')).replace(/^[,\s]+/, '');
-        if (label.startsWith(owner + ',')) {
-          label = label.slice(owner.length + 1).replace(/^[,\s]+/, '');
-        }
+        const stripOwner = value => value.startsWith(owner + ',')
+          ? value.slice(owner.length + 1).replace(/^[,\s]+/, '') : value;
+        let label = stripOwner(clean(node.getAttribute('aria-label'))
+          .replace(/^[,\s]+/, ''));
         // Metadata prefixes must also exist as rendered, non-link text within
         // this exact wrapper. Do not maintain a growing list of badge names or
         // strip an unverified author's name merely because it precedes a date.
@@ -138,7 +138,9 @@ MOBILE_SCAN_SCRIPT = r"""
             .find(value => value && value.length <= 80
               && label.startsWith(value + ','));
           if (!prefix) break;
-          label = label.slice(prefix.length + 1).replace(/^[,\s]+/, '');
+          // Permalink metadata can place a badge before the verified author.
+          label = stripOwner(label.slice(prefix.length + 1)
+            .replace(/^[,\s]+/, ''));
         }
         return label;
       };
