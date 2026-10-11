@@ -14,7 +14,6 @@ import click
 
 from . import __version__
 from .auth import load_facebook_cookies
-from .browser import PlaywrightPostSource
 from .config import SUPPORTED_BROWSERS, BrowserSettings, ScheduleSettings
 from .diagnostics import run_doctor
 from .exceptions import (
@@ -167,15 +166,6 @@ def _scan_options(function: CommandFunction) -> CommandFunction:
 
 def _run_options(function: CommandFunction) -> CommandFunction:
     options = [
-        click.option(
-            "--view",
-            type=click.Choice(["desktop", "mobile"]),
-            default="mobile",
-            envvar="FBN_VIEW",
-            show_default=True,
-            show_envvar=True,
-            help="Facebook reader; desktop remains available for rollback.",
-        ),
         click.option(
             "-i",
             "--id",
@@ -359,9 +349,8 @@ def _run_once(
     apprise_url: str | None,
     dry_run: bool,
     notify_initial: bool,
-    view: str = "mobile",
 ) -> RunSummary:
-    source = _post_source(settings, view)
+    source = MobilePostSource(settings)
     sink = _notification_sink(apprise_url=apprise_url, dry_run=dry_run)
     with SQLiteStateRepository(state_file) as state:
         service = MonitorService(source, state, sink)
@@ -371,14 +360,6 @@ def _run_once(
             notify_initial=notify_initial,
             commit_delivery=not dry_run,
         )
-
-
-def _post_source(settings: BrowserSettings, view: str):
-    return (
-        MobilePostSource(settings)
-        if view == "mobile"
-        else PlaywrightPostSource(settings)
-    )
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -460,7 +441,7 @@ def bootstrap_command(
 
     previous_sigterm = signal.signal(signal.SIGTERM, interrupt_bootstrap)
     try:
-        state = PlaywrightPostSource(settings).bootstrap_auth(
+        state = MobilePostSource(settings).bootstrap_auth(
             group,
             cookies,
             navigation_timeout_seconds=navigation_timeout,
@@ -518,7 +499,7 @@ def login_command(
         ):
             raise ConfigurationError("Interactive login was cancelled.")
 
-    PlaywrightPostSource(settings).interactive_login(wait_for_user)
+    MobilePostSource(settings).interactive_login(wait_for_user)
     click.echo("Recovery profile saved locally. Cookie values were not exported.")
     LOGGER.info("Interactive login completed")
 
@@ -572,7 +553,6 @@ def doctor_command(
 @_domain_errors
 def check_command(
     *,
-    view: str,
     browser: str,
     profile_dir: Path | None,
     executable_path: Path | None,
@@ -620,7 +600,6 @@ def check_command(
     )
     try:
         summary = _run_once(
-            view=view,
             group=group,
             settings=settings,
             policy=policy,
@@ -657,7 +636,6 @@ def check_command(
 @_domain_errors
 def monitor_command(
     *,
-    view: str,
     browser: str,
     profile_dir: Path | None,
     executable_path: Path | None,
@@ -729,7 +707,7 @@ def monitor_command(
             SQLiteStateRepository(state_file) as state,
             MonitorHealth.from_environment() as health,
         ):
-            service = MonitorService(_post_source(settings, view), state, sink)
+            service = MonitorService(MobilePostSource(settings), state, sink)
             loop = MonitorLoop(
                 service,
                 state,

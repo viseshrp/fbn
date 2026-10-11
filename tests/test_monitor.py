@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -216,8 +215,6 @@ def test_run_lock_encloses_fetch_and_delivery() -> None:
 def test_operational_logs_include_counts_but_not_post_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A recovered permalink retains a content key without being a fallback ID.
-    monkeypatch.setitem(globals(), "POST", replace(POST, fallback_key="key"))
     state = FakeState(ObservationBatch(False, 1, 1, (PENDING,)))
     sink = FakeSink()
     records: list[dict[str, object]] = []
@@ -245,15 +242,9 @@ def test_operational_logs_include_counts_but_not_post_content(
         and record["extra"]["group_key"] == "group"  # type: ignore[index]
         and record["extra"]["page_state"] == "feed"  # type: ignore[index]
         and record["extra"]["post_count"] == 1  # type: ignore[index]
-        and record["extra"]["fallback_identity_count"] == 0  # type: ignore[index]
-        and record["extra"]["group_fallback_link_count"] == 0  # type: ignore[index]
         for record in records
     )
-    assert any(
-        record["message"] == "Observation recorded"
-        and record["extra"]["reconciled_count"] == 0  # type: ignore[index]
-        for record in records
-    )
+    assert any(record["message"] == "Observation recorded" for record in records)
     assert any(
         record["message"] == "Notification chunk delivery committed"
         and record["extra"]["group_key"] == "group"  # type: ignore[index]

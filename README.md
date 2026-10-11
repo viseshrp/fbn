@@ -150,21 +150,11 @@ Keeping `FBN_APPRISE_URL` out of shell history is safer than passing
 from `fbn` errors. A notification includes visible post text and links, so that
 content is sent to the notification service selected in the Apprise URL.
 
-The optional desktop reader finds some post permalinks only on hover. FBN
-hovers unresolved primary-story timestamps without clicking or navigating,
-with at most ten attempts and a two-second budget per extraction pass. Comment,
-reply, quoted-story, and off-site timestamps are excluded. Recovering a link
-preserves the story's visible-content identity to avoid sending it again.
-If no direct link is available, the notification explicitly labels its group
-feed link as a fallback rather than a link to that post.
+### Mobile reader
 
-### Mobile reader (default)
-
-`check` and `monitor` default to the mobile reader. Desktop remains available
-for rollback with `--view desktop` or `FBN_VIEW=desktop`. Compose passes
-`FBN_VIEW` from `.env`, defaulting to `mobile`. Authentication,
-the SQLite database, delivery history, and notification configuration are shared;
-changing the reader does not require another bootstrap or a new database.
+`check`, `monitor`, `bootstrap`, and `login` use mobile Facebook. The desktop
+parser, reader switch, temporary post IDs, and content-fingerprint matching have
+been removed. Existing cookies and notification settings are unchanged.
 
 The mobile reader is a separate parser for the rendered English-language Bloks
 layout at `m.facebook.com`, using Playwright's standard Pixel 7 emulation. It
@@ -204,10 +194,19 @@ Opening a post menu and copying its link share the configured timeout, capped
 at 30 seconds. Closing the menu has a separate cleanup budget of at most five
 seconds; clipboard interception is always removed, including after a timeout.
 
-The mobile switch passed a bounded read-only Pi check of three real posts using
-the existing session. Each Copy link destination matched its own post, with no
-database writes or notifications during that check. Keep the desktop rollback
-until the deployed mobile service has also completed its scheduled checks.
+Post identity is the permanent post ID in the verified canonical URL, never a
+share token or a hash of rendered text. Text changes, emoji labels, and truncation
+do not create a new post. Different IDs remain separate even with identical text.
+
+Schema version 4 upgrades saved direct links to canonical IDs and merges their
+seen history and outbox receipts atomically. A delivered alias wins over a
+pending duplicate. Original changed records are retained in `identity_archive`.
+Historical entries without direct links are archived, not assigned guessed IDs;
+FBN cannot reliably identify those old entries if Facebook shows them again.
+An unresolved coverage marker remains open rather than skipping ahead. An
+unresolved pending delivery stops migration so it cannot be silently dropped.
+Keep a private database backup before upgrading; rollback requires both the old
+image and the old database. The obsolete fingerprint column and index are removed.
 
 State is committed before notification delivery and pending deliveries survive
 restarts. Delivery is at least once: a crash after a successful send but before

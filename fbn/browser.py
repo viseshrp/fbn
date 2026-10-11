@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, suppress
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
@@ -34,422 +32,11 @@ from .exceptions import (
     ProfileInUseError,
     TransientNavigationError,
 )
-from .extractor import chronological_group_url, extract_posts, parse_post_url
 from .logging import get_logger
-from .models import GroupRef, Post, ScanPolicy, ScanResult
+from .models import GroupRef
 
-FACEBOOK_HOME_URL = "https://www.facebook.com/"
+FACEBOOK_HOME_URL = "https://m.facebook.com/"
 LOGGER = get_logger("browser")
-PERMALINK_HYDRATION_SECONDS = 2.0
-MAX_PERMALINK_HOVERS = 10
-DOM_SCAN_SCRIPT = """
-(includeContent) => {
-  const linkSelector =
-    'a[href*="/groups/"][href*="/posts/"],' +
-    'a[href*="/groups/"][href*="/permalink/"],' +
-    'a[href*="/photo/"][href*="set=gm."]';
-  const itemSelector =
-    '[role="article"],[aria-posinset],[data-pagelet*="FeedUnit"]';
-  const positionedItemSelector =
-    '[aria-posinset],[data-pagelet*="FeedUnit"]';
-  const feedSelector = '[role="feed"],[data-pagelet*="GroupFeed"]';
-  const discussionSelector =
-    '[aria-label^="Comment by "],[aria-label^="Reply by "],' +
-    '[data-ad-rendering-role="comment"],[data-pagelet*="Comment"]';
-  const feedRoots = Array.from(document.querySelectorAll(feedSelector)).filter(
-    (root) => root.getClientRects().length > 0
-  );
-  const stripGraphemeJoiners = (value) => value.replace(/\\u034f/g, '');
-  const nestedContentRoots = (container) => Array.from(
-    container.querySelectorAll(`${itemSelector},${discussionSelector}`)
-  ).filter((candidate) => candidate !== container);
-  const isNestedContent = (element, container) => nestedContentRoots(container)
-    .some((candidate) => candidate.contains(element));
-  const cleanContainerText = (container, authorElement, timestampElement) => {
-    const hidden = nestedContentRoots(container).map((element) => ({
-      element,
-      style: element.getAttribute('style'),
-    }));
-    for (const item of hidden) {
-      item.element.style.setProperty('display', 'none', 'important');
-    }
-    let text = '';
-    try {
-      text = stripGraphemeJoiners(container.innerText || '').trim();
-    } finally {
-      for (const item of hidden) {
-        if (item.style === null) {
-          item.element.removeAttribute('style');
-        } else {
-          item.element.setAttribute('style', item.style);
-        }
-      }
-    }
-    text = text.replace(/^(?:Facebook\\s+){2,}/i, '').trim();
-
-    const author = authorElement
-      ? (authorElement.innerText || '').trim()
-      : '';
-    const rawTimestamp = timestampElement
-      ? stripGraphemeJoiners(timestampElement.innerText || '').trim()
-      : '';
-    const timestampStart = rawTimestamp ? text.indexOf(rawTimestamp) : -1;
-    const authorStartsText = Boolean(author && text.startsWith(author));
-    const timestampPrefix = authorStartsText && timestampStart >= author.length
-      ? text.slice(author.length, timestampStart)
-      : '';
-    const timestampIsInHeader = (
-      /^Follow(?:\\s|$)/i.test(text)
-      || (authorStartsText && /[·•]/.test(timestampPrefix))
-    );
-
-    // Timestamp links render a small value but expose off-screen character
-    // decoys through innerText. Remove a bounded leading header through that
-    // exact raw element instead of copying its decoys into the post body.
-    let removedTimestampHeader = false;
-    if (timestampStart >= 0 && timestampStart <= 1_024 && timestampIsInHeader) {
-      text = text.slice(timestampStart + rawTimestamp.length).trim();
-      text = text.replace(/^[·•]\\s*/, '').trim();
-      removedTimestampHeader = true;
-    }
-    if (!removedTimestampHeader && authorStartsText) {
-      const separator = text.indexOf('·', author.length);
-      if (separator >= 0 && separator <= author.length + 512) {
-        text = text.slice(separator + 1).trim();
-      }
-    }
-    text = text.replace(/^Follow(?:\\s+\\S){8,}?\\s+·\\s*/i, '').trim();
-    text = text.replace(/(?:\\s+Facebook){2,}\\s*$/i, '').trim();
-    return text;
-  };
-  const visualText = (element) => {
-    const bounds = element.getBoundingClientRect();
-    const leaves = Array.from(element.querySelectorAll('*'))
-      .filter((candidate) => (
-        candidate.children.length === 0
-        && (candidate.textContent || '').length > 0
-      ))
-      .map((candidate) => ({
-        text: candidate.textContent || '',
-        bounds: candidate.getBoundingClientRect(),
-        style: getComputedStyle(candidate),
-      }))
-      .filter((candidate) => (
-        candidate.bounds.width > 0
-        && candidate.bounds.height > 0
-        && candidate.bounds.bottom > bounds.top
-        && candidate.bounds.top < bounds.bottom
-        && candidate.bounds.right > bounds.left
-        && candidate.bounds.left < bounds.right
-        && candidate.style.visibility !== 'hidden'
-        && candidate.style.display !== 'none'
-        && candidate.style.opacity !== '0'
-      ))
-      .sort((left, right) => (
-        Math.abs(left.bounds.y - right.bounds.y) < 2
-          ? left.bounds.x - right.bounds.x
-          : left.bounds.y - right.bounds.y
-      ));
-    const rendered = leaves.length
-      ? leaves.map((candidate) => candidate.text).join('')
-      : (element.innerText || '');
-    return stripGraphemeJoiners(rendered).replace(/\\s+/g, ' ').trim();
-  };
-  const isTimestampText = (value) => (
-    /^(?:just now|[0-9]+\\s*[smhdw])$/i.test(value)
-    || /^[0-9]+\\s+(?:seconds?|minutes?|hours?|days?|weeks?)\\s+ago$/i.test(
-      value
-    )
-    || /^(?:today|yesterday)\\s+at\\s+(?:[01]?[0-9]|2[0-3]):[0-5][0-9]$/i
-      .test(value)
-    || /^[0-9]{1,2}\\s+[A-Za-z]+\\s+at\\s+(?:[01]?[0-9]|2[0-3]):[0-5][0-9]$/i
-      .test(value)
-  );
-  const semanticItems = feedRoots.flatMap(
-    (root) => Array.from(root.querySelectorAll(itemSelector))
-  ).filter((item) => item.getClientRects().length > 0);
-  const seenContainers = new Set();
-  const containers = [];
-  for (const item of semanticItems) {
-    const feedRoot = item.closest(feedSelector);
-    let container = item;
-    let cursor = item.parentElement;
-    while (cursor && cursor !== feedRoot) {
-      if (cursor.matches && cursor.matches(itemSelector)) {
-        container = cursor;
-      }
-      cursor = cursor.parentElement;
-    }
-    if (feedRoot && !seenContainers.has(container)) {
-      seenContainers.add(container);
-      containers.push(container);
-    }
-  }
-  const payloads = [];
-  const timestampsToHydrate = [];
-  let directPermalinkCount = 0;
-  let storyMessageCount = 0;
-  let fallbackPostCount = 0;
-  let authorCount = 0;
-  const isCommentPermalink = (candidate) => {
-    const href = candidate.getAttribute('href') || candidate.href || '';
-    const queryStart = href.indexOf('?');
-    if (queryStart < 0) {
-      return false;
-    }
-    const fragmentStart = href.indexOf('#', queryStart);
-    const query = href.slice(
-      queryStart + 1,
-      fragmentStart < 0 ? undefined : fragmentStart
-    );
-    const parameters = new URLSearchParams(query);
-    return parameters.has('comment_id')
-      || parameters.has('reply_comment_id');
-  };
-  const isGroupPhotoWithoutGroup = (candidate) => {
-    try {
-      const url = new URL(
-        candidate.getAttribute('href') || candidate.href || '',
-        window.location.href
-      );
-      return /^\\/photo\\/?$/.test(url.pathname)
-        && (url.searchParams.get('set') || '').startsWith('gm.')
-        && !url.searchParams.has('idorvanity');
-    } catch (error) {
-      return false;
-    }
-  };
-
-  for (const container of containers) {
-    if (container.getClientRects().length === 0) {
-      continue;
-    }
-
-    // Some feeds put the primary story directly in the positioned wrapper;
-    // its only article descendants are comments or quoted posts. In that
-    // layout an article descendant must not become the primary post scope.
-    const wrapperStoryElement = Array.from(container.querySelectorAll(
-      '[data-ad-rendering-role="story_message"]'
-    )).find((candidate) => !isNestedContent(candidate, container)) || null;
-    const wrapperOwnsStory = Boolean(
-      wrapperStoryElement && !container.matches('[role="article"]')
-    );
-    const candidates = Array.from(container.querySelectorAll(linkSelector));
-    const directlyScopedCandidates = candidates.filter((candidate) => {
-      const positionedItem = candidate.closest(positionedItemSelector);
-      if (container.matches(positionedItemSelector)) {
-        if (positionedItem !== container) {
-          return false;
-        }
-
-        // Current Facebook markup places the actual post article inside a
-        // separate aria-posinset feed wrapper. Permit that one semantic
-        // article layer, but reject deeper quoted/shared post articles.
-        let articleDepth = container.matches('[role="article"]') ? 1 : 0;
-        let cursor = candidate.parentElement;
-        while (cursor && cursor !== container) {
-          if (cursor.matches('[role="article"]')) {
-            articleDepth += 1;
-          }
-          cursor = cursor.parentElement;
-        }
-        return cursor === container
-          && articleDepth <= (wrapperOwnsStory ? 0 : 1);
-      }
-
-      return candidate.closest(itemSelector) === container;
-    });
-    const selected = directlyScopedCandidates.find(
-      (candidate) => (
-        !isCommentPermalink(candidate)
-        && !isGroupPhotoWithoutGroup(candidate)
-        && !candidate.closest(discussionSelector)
-      )
-    ) || null;
-    const discussionCandidates = wrapperOwnsStory
-      ? candidates.filter((candidate) => {
-          if (!isCommentPermalink(candidate)
-              || candidate.closest(positionedItemSelector) !== container) {
-            return false;
-          }
-          // An explicitly marked comment attached to this wrapper can expose
-          // its parent-post link. A quoted article or nested reply cannot.
-          const discussion = candidate.closest(discussionSelector);
-          if (!discussion) {
-            return false;
-          }
-          let articleDepth = 0;
-          let cursor = candidate.parentElement;
-          while (cursor && cursor !== container) {
-            if (cursor.matches('[role="article"]')) {
-              if (!cursor.matches(discussionSelector)) return false;
-              articleDepth += 1;
-            }
-            cursor = cursor.parentElement;
-          }
-          return cursor === container && articleDepth <= 1;
-        })
-      : [];
-    const commentContext = selected
-      ? null
-      : (directlyScopedCandidates.find(isCommentPermalink)
-        || discussionCandidates[0] || null);
-    const photoContext = selected || commentContext
-      ? null
-      : (directlyScopedCandidates.find((candidate) => (
-          isGroupPhotoWithoutGroup(candidate)
-          && !candidate.closest(discussionSelector)
-        )) || null);
-    const postContext = commentContext || photoContext;
-    const selectedArticle = selected
-      ? selected.closest('[role="article"]')
-      : null;
-    const directArticle = container.matches('[role="article"]')
-      ? container
-      : Array.from(container.querySelectorAll('[role="article"]')).find(
-          (candidate) => {
-            const parentArticle = candidate.parentElement
-              ? candidate.parentElement.closest('[role="article"]')
-              : null;
-            const positionedItem = candidate.closest(positionedItemSelector);
-            return !parentArticle
-              && (!container.matches(positionedItemSelector)
-                || positionedItem === container);
-          }
-        );
-    const contentContainer = wrapperStoryElement
-      ? container
-      : selectedArticle && container.contains(selectedArticle)
-      ? selectedArticle
-      : (directArticle || container);
-    const authorElements = Array.from(contentContainer.querySelectorAll(
-      '[data-ad-rendering-role="profile_name"] a,'
-      + 'a[data-ad-rendering-role="profile_name"],'
-      + 'h2 a, h3 a, h4 a, strong a'
-    )).filter((candidate) => !isNestedContent(candidate, contentContainer));
-    const authorElement = authorElements[0] || null;
-    const storyElements = Array.from(contentContainer.querySelectorAll(
-      '[data-ad-rendering-role="story_message"]'
-    )).filter((candidate) => !isNestedContent(candidate, contentContainer));
-    const storyElement = storyElements[0] || null;
-    if (selected) {
-      directPermalinkCount += 1;
-    }
-    if (storyElement) {
-      storyMessageCount += 1;
-    }
-    if (authorElement) {
-      authorCount += 1;
-    }
-    if (!selected && !storyElement) {
-      // A nested permalink or discussion alone is not a top-level post.
-      continue;
-    }
-    const collapsed = Array.from(
-      contentContainer.querySelectorAll('[aria-expanded="false"]')
-    ).some((candidate) => !isNestedContent(candidate, contentContainer));
-    const timestampLinks = Array.from(contentContainer.querySelectorAll('a'))
-      .filter((candidate) => !isNestedContent(candidate, contentContainer));
-    const trackedTimestamp = timestampLinks.find((candidate) => (
-      (candidate.getAttribute('href') || '').includes('__tn__=%2CO')
-      && isTimestampText(visualText(candidate))
-    ));
-    const selectedText = selected ? visualText(selected) : '';
-    const timestampElement = trackedTimestamp
-      || (isTimestampText(selectedText) ? selected : null);
-    const timestamp = timestampElement ? visualText(timestampElement) : '';
-    const fallbackText = storyElement
-      ? cleanContainerText(storyElement, null, null)
-      : '';
-    if (!selected && !fallbackText) {
-      continue;
-    }
-    if (!selected && timestampElement) {
-      try {
-        const url = new URL(timestampElement.href, window.location.href);
-        if (url.protocol === 'https:'
-            && ['facebook.com', 'www.facebook.com'].includes(url.hostname)
-            && !url.username && !url.password && !url.port
-            && (url.pathname === '/'
-              || /^\\/groups\\/[^/]+\\/?$/.test(url.pathname))) {
-          timestampsToHydrate.push(timestampElement);
-        }
-      } catch (error) {
-        // A malformed timestamp link remains an explicitly labelled fallback.
-      }
-    }
-    if (!selected) {
-      fallbackPostCount += 1;
-    }
-    let authorIdentity = authorElement
-      ? (authorElement.innerText || '').trim()
-      : '';
-    if (authorElement) {
-      try {
-        const authorUrl = new URL(
-          authorElement.getAttribute('href') || authorElement.href || '',
-          window.location.href
-        );
-        authorIdentity = `${authorUrl.hostname}${authorUrl.pathname}`;
-      } catch (error) {
-        // The visible author remains a bounded fallback identity component.
-      }
-    }
-    const pageUrl = new URL(window.location.href);
-    const fallbackHref = `${pageUrl.origin}${pageUrl.pathname}`;
-    const fallbackIdentity = `${authorIdentity}\n${fallbackText}`;
-
-    payloads.push(
-      includeContent
-        ? {
-            href: selected
-              ? (selected.href || selected.getAttribute('href') || '')
-              : fallbackHref,
-            text: storyElement
-              ? fallbackText
-              : selected
-              ? cleanContainerText(
-                  contentContainer,
-                  authorElement,
-                  timestampElement
-                )
-              : fallbackText,
-            author: authorElement
-              ? (authorElement.innerText || '').trim()
-              : null,
-            fallback: !selected,
-            stableContent: Boolean(storyElement),
-            identity: !selected ? fallbackIdentity : '',
-            contextHref: postContext
-              ? (postContext.href
-                || postContext.getAttribute('href')
-                || '')
-              : '',
-            partial: collapsed,
-            position: payloads.length,
-            timestamp,
-          }
-        : null
-    );
-  }
-
-  if (includeContent === 'timestamps') {
-    return timestampsToHydrate;
-  }
-  return {
-    hasFeed: feedRoots.length > 0,
-    feedRootCount: feedRoots.length,
-    itemCount: new Set(semanticItems).size,
-    containerCount: containers.length,
-    directPermalinkCount,
-    storyMessageCount,
-    fallbackPostCount,
-    authorCount,
-    postCount: payloads.length,
-    payloads: includeContent ? payloads : [],
-  };
-}
-"""
 
 
 class PageState(str, Enum):
@@ -470,7 +57,7 @@ class PageSignals:
     top_level_item_count: int = 0
     direct_permalink_count: int = 0
     story_message_count: int = 0
-    fallback_post_count: int = 0
+    primary_body_count: int = 0
     author_count: int = 0
     post_count: int = 0
     has_feed: bool = False
@@ -496,7 +83,7 @@ def _missing_layout_components(signals: PageSignals) -> tuple[str, ...]:
             missing.append("direct_post_permalink")
         if signals.story_message_count == 0:
             missing.append("story_message")
-        elif signals.fallback_post_count == 0:
+        elif signals.primary_body_count == 0:
             missing.append("visible_story_body")
     return tuple(missing or ("recognized_terminal_state",))
 
@@ -510,7 +97,7 @@ def _layout_error_message(signals: PageSignals) -> str:
         f"top_level_items={signals.top_level_item_count}; "
         f"direct_permalinks={signals.direct_permalink_count}; "
         f"story_messages={signals.story_message_count}; "
-        f"fallback_posts={signals.fallback_post_count}; "
+        f"primary_bodies={signals.primary_body_count}; "
         f"authors={signals.author_count}; "
         f"post_candidates={signals.post_count}."
     )
@@ -596,7 +183,7 @@ def read_page_signals(
     page: Page,
     *,
     status: int | None = None,
-    dom_scan_script: str = DOM_SCAN_SCRIPT,
+    dom_scan_script: str | None = None,
 ) -> PageSignals:
     """Read only coarse page-state signals; never return page content."""
 
@@ -640,7 +227,7 @@ def read_page_signals(
     )
     has_explicit_empty = _has_explicit_empty_state(page)
 
-    feed_signals = page.evaluate(dom_scan_script, False)
+    feed_signals = page.evaluate(dom_scan_script, False) if dom_scan_script else {}
     if not isinstance(feed_signals, dict):
         feed_signals = {}
 
@@ -652,7 +239,7 @@ def read_page_signals(
         top_level_item_count=int(feed_signals.get("containerCount", 0)),
         direct_permalink_count=int(feed_signals.get("directPermalinkCount", 0)),
         story_message_count=int(feed_signals.get("storyMessageCount", 0)),
-        fallback_post_count=int(feed_signals.get("fallbackPostCount", 0)),
+        primary_body_count=int(feed_signals.get("primaryBodyCount", 0)),
         author_count=int(feed_signals.get("authorCount", 0)),
         post_count=int(feed_signals.get("postCount", 0)),
         has_feed=feed_signals.get("hasFeed") is True,
@@ -668,204 +255,8 @@ def read_page_signals(
     )
 
 
-def wait_for_terminal_page(
-    page: Page,
-    *,
-    status: int | None = None,
-    timeout_seconds: float,
-    expected_group: GroupRef | None = None,
-) -> PageState:
-    """Poll through dynamic feed skeletons until a recognized state appears."""
-
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        signals = read_page_signals(page, status=status)
-        try:
-            state = classify_page(signals)
-        except LayoutChangedError:
-            if expected_group is not None and not _is_expected_group_url(
-                signals.url,
-                expected_group,
-            ):
-                raise AccessDeniedError(
-                    "Facebook redirected away from the requested group."
-                ) from None
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                LOGGER.warning(
-                    "Group feed layout unrecognized",
-                    missing_components=",".join(_missing_layout_components(signals)),
-                    feed_root_count=signals.feed_root_count,
-                    feed_item_count=signals.feed_item_count,
-                    top_level_item_count=signals.top_level_item_count,
-                    direct_permalink_count=signals.direct_permalink_count,
-                    story_message_count=signals.story_message_count,
-                    fallback_post_count=signals.fallback_post_count,
-                    author_count=signals.author_count,
-                    post_candidate_count=signals.post_count,
-                )
-                raise
-            page.wait_for_timeout(min(0.25, remaining) * 1_000)
-            continue
-        if expected_group is not None and not _is_expected_group_url(
-            signals.url,
-            expected_group,
-        ):
-            raise AccessDeniedError(
-                "Facebook redirected away from the requested group."
-            )
-        LOGGER.debug(
-            "Page state recognized",
-            page_state=state.value,
-            response_status=signals.status,
-            feed_item_count=signals.feed_item_count,
-            post_link_count=signals.post_count,
-        )
-        return state
-
-
-def _is_expected_group_url(url: str, group: GroupRef) -> bool:
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    hostname = (parsed.hostname or "").casefold()
-    expected_path = f"/groups/{group.key}".casefold()
-    return (
-        parsed.scheme.casefold() == "https"
-        and (hostname == "facebook.com" or hostname.endswith(".facebook.com"))
-        and parsed.path.rstrip("/").casefold() == expected_path
-    )
-
-
-def collect_dom_payloads(page: Page) -> list[dict[str, object]]:
-    """Collect minimal visible post payloads from the current DOM."""
-
-    result = page.evaluate(DOM_SCAN_SCRIPT, True)
-    if not isinstance(result, dict):
-        return []
-    payloads = result.get("payloads")
-    return payloads if isinstance(payloads, list) else []
-
-
-def hydrate_post_permalinks(
-    page: Page,
-    *,
-    max_candidates: int = MAX_PERMALINK_HOVERS,
-    timeout_seconds: float = PERMALINK_HYDRATION_SECONDS,
-) -> None:
-    """Hover unresolved primary timestamps, without clicking or navigating.
-
-    The DOM scanner supplies only the post's own rendered header timestamps,
-    excluding comment, reply, shared-story, and off-site links. Facebook may
-    populate their permalinks only on hover. Both attempts and total time are
-    bounded; unchanged links retain the normal fallback identity.
-    """
-
-    if max_candidates <= 0 or timeout_seconds <= 0:
-        return
-    deadline = time.monotonic() + timeout_seconds
-    timestamps = None
-    properties = {}
-    attempted = 0
-    resolved = 0
-    try:
-        timestamps = page.evaluate_handle(DOM_SCAN_SCRIPT, "timestamps")
-        properties = timestamps.get_properties()
-        for handle in properties.values():
-            if attempted >= max_candidates or time.monotonic() >= deadline:
-                break
-            element = handle.as_element()
-            if element is None:
-                continue
-            attempted += 1
-            try:
-                remaining_ms = max(1, int((deadline - time.monotonic()) * 1_000))
-                element.hover(timeout=min(500, remaining_ms))
-                if time.monotonic() >= deadline:
-                    break
-                remaining_ms = max(1, int((deadline - time.monotonic()) * 1_000))
-                result = page.wait_for_function(
-                    r"""(node) => {
-                      try {
-                        return /^\/groups\/[^/]+\/(posts|permalink)\//.test(
-                          new URL(node.href).pathname
-                        );
-                      } catch (error) { return false; }
-                    }""",
-                    arg=element,
-                    timeout=min(500, remaining_ms),
-                )
-                result.dispose()
-                if parse_post_url(element.get_attribute("href")) is not None:
-                    resolved += 1
-            except PlaywrightError:
-                # Detached or unhydrated timestamps must not lose the post.
-                continue
-    except PlaywrightError:
-        # The normal scan still classifies navigation and acquisition errors.
-        pass
-    finally:
-        for handle in properties.values():
-            with suppress(PlaywrightError):
-                handle.dispose()
-        if timestamps is not None:
-            with suppress(PlaywrightError):
-                timestamps.dispose()
-    if attempted:
-        LOGGER.debug(
-            "Post permalink hydration completed",
-            attempted_count=attempted,
-            resolved_count=resolved,
-        )
-
-
-def collect_group_aliases(page: Page, group: GroupRef) -> frozenset[str]:
-    """Resolve one visible group-navigation alias without trusting page content."""
-
-    discovered: set[str] = set()
-    links = page.locator(
-        '[role="main"] [role="tablist"] a[role="tab"][href*="/groups/"]'
-    )
-    try:
-        for index in range(min(links.count(), 100)):
-            link = links.nth(index)
-            if not link.is_visible() or link.evaluate(
-                """
-                (element) => Boolean(
-                  element.closest(
-                    '[role="feed"],[data-pagelet*="GroupFeed"]'
-                  )
-                )
-                """
-            ):
-                continue
-            href = link.get_attribute("href")
-            if not href:
-                continue
-            parsed = urlparse(urljoin(page.url, href))
-            parts = parsed.path.strip("/").split("/")
-            if (
-                parsed.hostname
-                and (
-                    parsed.hostname.casefold() == "facebook.com"
-                    or parsed.hostname.casefold().endswith(".facebook.com")
-                )
-                and len(parts) == 2
-                and parts[0].casefold() == "groups"
-                and parts[1]
-            ):
-                discovered.add(parts[1])
-    except (PlaywrightError, ValueError):
-        return frozenset({group.key})
-
-    if len(discovered) == 1:
-        return frozenset({group.key, *discovered})
-    return frozenset({group.key})
-
-
-class PlaywrightPostSource:
-    """Fetch visible recent posts through a dedicated persistent browser."""
+class BrowserSession:
+    """Own persistent browser authentication, locking and cleanup."""
 
     def __init__(
         self,
@@ -984,57 +375,6 @@ class PlaywrightPostSource:
                         ) from original
                 raise
 
-    def _validate_authenticated_profile(
-        self,
-        group: GroupRef,
-        *,
-        navigation_timeout_seconds: float,
-        acquire_lock: bool = True,
-    ) -> PageState:
-        LOGGER.debug(
-            "Authentication profile validation started",
-            group_key=group.key,
-            timeout_seconds=navigation_timeout_seconds,
-        )
-        with self._context(
-            headless=True,
-            acquire_lock=acquire_lock,
-        ) as context:
-            page: Page | None = None
-            try:
-                page = context.new_page()
-                page.set_default_timeout(navigation_timeout_seconds * 1_000)
-                page.set_default_navigation_timeout(navigation_timeout_seconds * 1_000)
-                response = page.goto(
-                    chronological_group_url(group),
-                    wait_until="domcontentloaded",
-                )
-                status = response.status if response is not None else None
-                LOGGER.debug(
-                    "Authentication profile navigation completed",
-                    group_key=group.key,
-                    response_status=status,
-                )
-                return wait_for_terminal_page(
-                    page,
-                    status=status,
-                    timeout_seconds=navigation_timeout_seconds,
-                    expected_group=group,
-                )
-            except PlaywrightTimeoutError as exc:
-                raise TransientNavigationError(
-                    "Facebook group validation timed out during authentication "
-                    "bootstrap."
-                ) from exc
-            except PlaywrightError as exc:
-                raise TransientNavigationError(
-                    "Facebook group navigation failed during authentication bootstrap."
-                ) from exc
-            finally:
-                if page is not None:
-                    with suppress(PlaywrightError):
-                        page.close()
-
     def _replace_profile_cookies(
         self,
         cookies: Sequence[Mapping[str, object]],
@@ -1094,199 +434,6 @@ class PlaywrightPostSource:
             ): cookie.get("value")
             for cookie in cookies
         }
-
-    def fetch_recent(
-        self,
-        group: GroupRef,
-        policy: ScanPolicy,
-        *,
-        boundary_post_id: str | None = None,
-    ) -> ScanResult:
-        """Fetch recent posts, looking deeper for the stored post marker."""
-
-        LOGGER.debug(
-            "Feed fetch started",
-            group_key=group.key,
-            browser=self.settings.browser,
-            headless=self.settings.headless,
-            sample_count=policy.sample_count,
-            boundary_search=boundary_post_id is not None,
-        )
-        with self._context(
-            headless=self.settings.headless,
-            timezone_id=policy.timezone_name,
-        ) as context:
-            page: Page | None = None
-            try:
-                page = context.new_page()
-                page.set_default_timeout(policy.navigation_timeout_seconds * 1_000)
-                page.set_default_navigation_timeout(
-                    policy.navigation_timeout_seconds * 1_000
-                )
-                response = page.goto(
-                    chronological_group_url(group),
-                    wait_until="domcontentloaded",
-                )
-                status = response.status if response is not None else None
-                LOGGER.debug(
-                    "Feed navigation completed",
-                    group_key=group.key,
-                    response_status=status,
-                )
-                state = wait_for_terminal_page(
-                    page,
-                    status=status,
-                    timeout_seconds=policy.navigation_timeout_seconds,
-                    expected_group=group,
-                )
-                if state is PageState.EMPTY:
-                    LOGGER.info("Group feed empty", group_key=group.key)
-                    return ScanResult(
-                        posts=(),
-                        page_state=state.value,
-                        scrolls=0,
-                        bounded=False,
-                    )
-
-                observed_at = datetime.now(timezone.utc)
-                posts = self._scan_feed(
-                    page,
-                    group,
-                    policy,
-                    observed_at,
-                    boundary_post_id=boundary_post_id,
-                )
-                if not posts:
-                    LOGGER.warning(
-                        "Feed post validation failed",
-                        missing_components="valid_post_identity_for_group",
-                    )
-                    raise LayoutChangedError(
-                        "A feed was present, but no top-level post had a valid "
-                        "identity for this group."
-                    )
-                return posts
-            except PlaywrightTimeoutError as exc:
-                raise TransientNavigationError(
-                    "Facebook group navigation timed out; no immediate retry "
-                    "was attempted."
-                ) from exc
-            except PlaywrightError as exc:
-                raise TransientNavigationError(
-                    "Facebook group navigation failed; no immediate retry was "
-                    "attempted."
-                ) from exc
-            finally:
-                if page is not None:
-                    with suppress(PlaywrightError):
-                        page.close()
-
-    def _scan_feed(
-        self,
-        page: Page,
-        group: GroupRef,
-        policy: ScanPolicy,
-        observed_at: datetime,
-        *,
-        boundary_post_id: str | None = None,
-    ) -> ScanResult:
-        accumulated: list[Post] = []
-        seen_ids: set[str] = set()
-        stagnant = 0
-        scrolls = 0
-        limit_reached = False
-        allowed_group_keys: frozenset[str] = frozenset({group.key})
-        post_limit = policy.sample_count
-        if boundary_post_id is not None:
-            post_limit *= policy.max_scrolls + 1
-
-        for scan_index in range(policy.max_scrolls + 1):
-            state = wait_for_terminal_page(
-                page,
-                timeout_seconds=policy.navigation_timeout_seconds,
-                expected_group=group,
-            )
-            if state is PageState.EMPTY:
-                break
-            allowed_group_keys = allowed_group_keys.union(
-                collect_group_aliases(page, group)
-            )
-            hydrate_post_permalinks(
-                page,
-                max_candidates=min(policy.sample_count, MAX_PERMALINK_HOVERS),
-                timeout_seconds=min(
-                    policy.navigation_timeout_seconds, PERMALINK_HYDRATION_SECONDS
-                ),
-            )
-            before = len(accumulated)
-            extracted = extract_posts(
-                collect_dom_payloads(page),
-                group,
-                observed_at,
-                limit=post_limit,
-                allowed_group_keys=allowed_group_keys,
-                timezone_name=policy.timezone_name,
-            )
-            LOGGER.debug(
-                "Feed extraction pass completed",
-                group_key=group.key,
-                pass_number=scan_index + 1,
-                candidate_count=len(extracted),
-                accumulated_count=len(accumulated),
-            )
-            for post in extracted:
-                if post.post_id in seen_ids:
-                    continue
-                seen_ids.add(post.post_id)
-                accumulated.append(replace(post, position=len(accumulated)))
-                if post.post_id == boundary_post_id:
-                    return ScanResult(
-                        posts=tuple(accumulated),
-                        page_state=PageState.FEED.value,
-                        scrolls=scrolls,
-                        bounded=False,
-                    )
-                if len(accumulated) >= post_limit:
-                    if boundary_post_id is None:
-                        return ScanResult(
-                            posts=tuple(accumulated),
-                            page_state=PageState.FEED.value,
-                            scrolls=scrolls,
-                            bounded=True,
-                        )
-                    limit_reached = True
-                    break
-
-            if limit_reached:
-                break
-
-            stagnant = stagnant + 1 if len(accumulated) == before else 0
-            if stagnant >= policy.stagnant_scrolls or scan_index == policy.max_scrolls:
-                break
-
-            page.evaluate(
-                "() => window.scrollBy(0, Math.max(window.innerHeight * 0.8, 600))"
-            )
-            scrolls += 1
-            page.wait_for_timeout(policy.settle_seconds * 1_000)
-
-        if boundary_post_id is not None:
-            LOGGER.warning(
-                "Stored post marker was not reached within scan limits",
-                group_key=group.key,
-                post_count=len(accumulated),
-                scroll_count=scrolls,
-            )
-        return ScanResult(
-            posts=tuple(accumulated),
-            page_state=PageState.FEED.value,
-            scrolls=scrolls,
-            bounded=(
-                limit_reached
-                or scrolls >= policy.max_scrolls
-                or stagnant >= policy.stagnant_scrolls
-            ),
-        )
 
     def _prepare_profile(self) -> Path:
         profile_dir = Path(self.settings.profile_dir)

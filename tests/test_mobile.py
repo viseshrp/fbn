@@ -11,6 +11,27 @@ from fbn.mobile import MobilePostSource, mobile_group_url, verified_group_keys
 from fbn.models import Post
 
 
+def test_mobile_launch_failure_is_redacted(tmp_path):
+    from playwright.sync_api import Error as PlaywrightError
+
+    from fbn.config import BrowserSettings
+    from fbn.exceptions import BrowserUnavailableError
+
+    def fail(*args, **kwargs):
+        raise PlaywrightError("private-driver-detail")
+
+    runtime = SimpleNamespace(
+        devices={"Pixel 7": {}},
+        chromium=SimpleNamespace(launch_persistent_context=fail),
+    )
+    source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "profile"))
+    with pytest.raises(BrowserUnavailableError) as caught:
+        source._launch_context(
+            runtime, profile_dir=tmp_path / "profile", headless=True, timezone_id=None
+        )
+    assert "private-driver-detail" not in str(caught.value)
+
+
 def test_mobile_urls_normalize_to_existing_desktop_identity():
     group = parse_group_ref("https://m.facebook.com/groups/test-group/")
     assert group.url == "https://www.facebook.com/groups/test-group/"

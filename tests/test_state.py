@@ -28,7 +28,6 @@ def post(
     author: str | None = "Author",
     text: str | None = None,
     published_at: datetime | None = None,
-    fallback_key: str | None = None,
     url: str | None = None,
 ) -> Post:
     return Post(
@@ -44,7 +43,6 @@ def post(
         observed_at=observed_at,
         position=position,
         published_at=published_at,
-        fallback_key=fallback_key,
     )
 
 
@@ -175,13 +173,13 @@ def test_boundary_queues_every_unnotified_post_before_it_regardless_of_date(
             GROUP,
             (
                 post(
-                    "other-day",
+                    "otherday",
                     position=0,
                     published_at=T0 - timedelta(days=2),
                 ),
                 post("unknown", position=1),
                 post("baseline", position=2),
-                post("older-unseen", position=3),
+                post("olderunseen", position=3),
             ),
             observed_at=T0 + timedelta(hours=1),
         )
@@ -196,10 +194,10 @@ def test_boundary_queues_every_unnotified_post_before_it_regardless_of_date(
     assert observation.inserted == 3
     assert observation.queued == 2
     assert [item.post_id for item in observation.pending] == [
-        "other-day",
+        "otherday",
         "unknown",
     ]
-    assert stored_ids == {"baseline", "other-day", "unknown", "older-unseen"}
+    assert stored_ids == {"baseline", "otherday", "unknown", "olderunseen"}
 
 
 def test_boundary_advances_and_survives_restart(tmp_path: Path) -> None:
@@ -209,7 +207,7 @@ def test_boundary_advances_and_survives_restart(tmp_path: Path) -> None:
         first = repository.observe(
             GROUP,
             (
-                post("first-new", position=0),
+                post("firstnew", position=0),
                 post("baseline", position=1),
             ),
             observed_at=T0 + timedelta(hours=1),
@@ -222,8 +220,8 @@ def test_boundary_advances_and_survives_restart(tmp_path: Path) -> None:
             (
                 post("newest", position=0),
                 post("next", position=1),
-                post("first-new", position=2),
-                post("older-unseen", position=3),
+                post("firstnew", position=2),
+                post("olderunseen", position=3),
             ),
             observed_at=T0 + timedelta(hours=2),
         )
@@ -277,17 +275,17 @@ def test_missing_boundary_keeps_queueing_posts_that_appear_later(
 ) -> None:
     state_path = tmp_path / "state.sqlite3"
     with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
-        repository.observe(GROUP, (post("old-boundary"),))
+        repository.observe(GROUP, (post("oldboundary"),))
         first = repository.observe(
             GROUP,
-            tuple(post(f"new-{index}", position=index) for index in range(10)),
+            tuple(post(f"new{index}", position=index) for index in range(10)),
             observed_at=T0 + timedelta(hours=1),
         )
         repository.mark_delivered(tuple(item.event_id for item in first.pending))
 
         second_posts = tuple(
             post(
-                f"new-{index}" if index < 9 else "previously-outside-sample",
+                f"new{index}" if index < 9 else "previouslyoutsidesample",
                 position=index,
             )
             for index in range(10)
@@ -302,238 +300,8 @@ def test_missing_boundary_keeps_queueing_posts_that_appear_later(
     assert first.queued == 10
     assert second.inserted == 1
     assert second.queued == 1
-    assert [item.post_id for item in second.pending] == ["previously-outside-sample"]
-    assert boundary == "old-boundary"
-
-
-def test_fallback_key_reuses_seen_identity_when_volatile_id_changes(
-    tmp_path: Path,
-) -> None:
-    state_path = tmp_path / "state.sqlite3"
-    stable_key = "visible-stable"
-    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
-        first = repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-old",
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            notify_initial=True,
-        )
-        repository.mark_delivered((first.pending[0].event_id,))
-        repository._require_connection().execute(
-            """
-            UPDATE groups
-            SET notification_boundary_post_id = 'outside-sample'
-            WHERE group_key = ?
-            """,
-            (GROUP.key,),
-        )
-
-        later = T0 + timedelta(hours=1)
-        duplicate = repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-new",
-                    observed_at=later,
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            observed_at=later,
-        )
-        stored = (
-            repository._require_connection()
-            .execute("SELECT post_id, last_seen_at FROM posts")
-            .fetchall()
-        )
-
-    assert duplicate.inserted == 0
-    assert duplicate.queued == 0
-    assert duplicate.reconciled == 1
-    assert duplicate.pending == ()
-    assert [row["post_id"] for row in stored] == ["content-old"]
-    assert stored[0]["last_seen_at"] == later.isoformat(timespec="microseconds")
-
-
-def test_existing_fallback_id_is_backfilled_before_alias_reuse(
-    tmp_path: Path,
-) -> None:
-    state_path = tmp_path / "state.sqlite3"
-    stable_key = "visible-stable"
-    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
-        first = repository.observe(
-            GROUP,
-            (post("content-current", url=GROUP.url),),
-            notify_initial=True,
-        )
-        repository.mark_delivered((first.pending[0].event_id,))
-
-        repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-current",
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            observed_at=T0 + timedelta(minutes=1),
-        )
-        duplicate = repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-changed",
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            observed_at=T0 + timedelta(hours=1),
-        )
-        rows = (
-            repository._require_connection()
-            .execute("SELECT post_id, fallback_key FROM posts")
-            .fetchall()
-        )
-
-    assert duplicate.inserted == 0
-    assert duplicate.queued == 0
-    assert duplicate.reconciled == 1
-    assert [(row["post_id"], row["fallback_key"]) for row in rows] == [
-        ("content-current", stable_key)
-    ]
-
-
-def test_fallback_alias_repairs_a_boundary_that_uses_the_volatile_id(
-    tmp_path: Path,
-) -> None:
-    state_path = tmp_path / "state.sqlite3"
-    stable_key = "visible-stable"
-    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
-        first = repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-canonical",
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            notify_initial=True,
-        )
-        repository.mark_delivered((first.pending[0].event_id,))
-        repository._require_connection().execute(
-            """
-            UPDATE groups
-            SET notification_boundary_post_id = 'content-volatile'
-            WHERE group_key = ?
-            """,
-            (GROUP.key,),
-        )
-
-        observation = repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-volatile",
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            observed_at=T0 + timedelta(hours=1),
-        )
-        boundary = repository.notification_boundary(GROUP)
-
-    assert observation.inserted == 0
-    assert observation.queued == 0
-    assert observation.reconciled == 1
-    assert boundary == "content-canonical"
-
-
-def test_fallback_alias_does_not_replace_a_recovered_direct_url(
-    tmp_path: Path,
-) -> None:
-    state_path = tmp_path / "state.sqlite3"
-    stable_key = "visible-stable"
-    direct_url = f"https://www.facebook.com/groups/{GROUP.key}/posts/123/"
-    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
-        repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-current",
-                    fallback_key=stable_key,
-                    url=direct_url,
-                ),
-            ),
-        )
-        repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-changed",
-                    fallback_key=stable_key,
-                    url=GROUP.url,
-                ),
-            ),
-            observed_at=T0 + timedelta(hours=1),
-        )
-        canonical_url = (
-            repository._require_connection()
-            .execute("SELECT canonical_url FROM posts")
-            .fetchone()[0]
-        )
-
-    assert canonical_url == direct_url
-
-
-def test_fallback_key_keeps_distinct_recovered_post_urls_separate(
-    tmp_path: Path,
-) -> None:
-    state_path = tmp_path / "state.sqlite3"
-    stable_key = "visible-stable"
-    first_url = f"https://www.facebook.com/groups/{GROUP.key}/posts/123/"
-    second_url = f"https://www.facebook.com/groups/{GROUP.key}/posts/456/"
-    with SQLiteStateRepository(state_path, clock=lambda: T0) as repository:
-        repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-first",
-                    fallback_key=stable_key,
-                    url=first_url,
-                ),
-            ),
-        )
-        observation = repository.observe(
-            GROUP,
-            (
-                post(
-                    "content-second",
-                    fallback_key=stable_key,
-                    url=second_url,
-                ),
-            ),
-            observed_at=T0 + timedelta(hours=1),
-        )
-        rows = (
-            repository._require_connection()
-            .execute("SELECT post_id, canonical_url FROM posts ORDER BY post_id")
-            .fetchall()
-        )
-
-    assert observation.inserted == 1
-    assert observation.queued == 1
-    assert observation.reconciled == 0
-    assert [(row["post_id"], row["canonical_url"]) for row in rows] == [
-        ("content-first", first_url),
-        ("content-second", second_url),
-    ]
+    assert [item.post_id for item in second.pending] == ["previouslyoutsidesample"]
+    assert boundary == "oldboundary"
 
 
 def test_seen_but_unnotified_post_is_queued_after_it_moves_before_boundary(
@@ -598,21 +366,21 @@ def test_version_one_state_is_migrated_from_latest_outbox_batch(
         INSERT INTO groups (group_key, initialized_at)
         VALUES ('example-group', '2026-01-01T12:00:00+00:00');
         INSERT INTO posts VALUES
-            ('example-group', 'older', 'https://example.invalid/older',
+            ('example-group', 'older', 'https://www.facebook.com/groups/example-group/posts/older/',
              '2026-01-01T12:00:00+00:00', '2026-01-01T12:00:00+00:00'),
-            ('example-group', 'latest-top', 'https://example.invalid/latest-top',
+            ('example-group', 'latesttop', 'https://www.facebook.com/groups/example-group/posts/latesttop/',
              '2026-01-01T13:00:00+00:00', '2026-01-01T13:00:00+00:00'),
-            ('example-group', 'latest-second',
-             'https://example.invalid/latest-second',
+            ('example-group', 'latestsecond',
+             'https://www.facebook.com/groups/example-group/posts/latestsecond/',
              '2026-01-01T13:00:00+00:00', '2026-01-01T13:00:00+00:00');
         INSERT INTO outbox (
             event_id, group_key, post_id, position, created_at, delivered_at
         ) VALUES
             ('older-event', 'example-group', 'older', 0,
              '2026-01-01T12:00:00+00:00', '2026-01-01T12:01:00+00:00'),
-            ('latest-second-event', 'example-group', 'latest-second', 1,
+            ('latest-second-event', 'example-group', 'latestsecond', 1,
              '2026-01-01T13:00:00+00:00', '2026-01-01T13:01:00+00:00'),
-            ('latest-top-event', 'example-group', 'latest-top', 0,
+            ('latest-top-event', 'example-group', 'latesttop', 0,
              '2026-01-01T13:00:00+00:00', '2026-01-01T13:01:00+00:00');
         PRAGMA user_version = 1;
         """
@@ -638,8 +406,8 @@ def test_version_one_state_is_migrated_from_latest_outbox_batch(
             .fetchone()[0]
         )
 
-    assert row["notification_boundary_post_id"] == "latest-top"
-    assert version == 3
+    assert row["notification_boundary_post_id"] == "latesttop"
+    assert version == 4
     with sqlite3.connect(state_path) as migrated:
         post_columns = {
             row[1] for row in migrated.execute("PRAGMA table_info(posts)").fetchall()
@@ -647,8 +415,8 @@ def test_version_one_state_is_migrated_from_latest_outbox_batch(
         indexes = {
             row[1] for row in migrated.execute("PRAGMA index_list(posts)").fetchall()
         }
-    assert "fallback_key" in post_columns
-    assert "posts_fallback_key_lookup" in indexes
+    assert "fallback_key" not in post_columns
+    assert "posts_fallback_key_lookup" not in indexes
 
 
 def test_posts_and_outbox_entries_are_inserted_atomically(
@@ -663,7 +431,7 @@ def test_posts_and_outbox_entries_are_inserted_atomically(
         with pytest.raises(sqlite3.IntegrityError):
             repository.observe(
                 GROUP,
-                (post("new-one", position=0), post("new-two", position=1)),
+                (post("newone", position=0), post("newtwo", position=1)),
                 observed_at=T0 + timedelta(hours=1),
             )
 

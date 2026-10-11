@@ -47,7 +47,7 @@ def test_login_opens_a_headed_dedicated_profile(
             captured["waited"] = True
             wait_for_user()
 
-    monkeypatch.setattr(cli, "PlaywrightPostSource", FakePostSource)
+    monkeypatch.setattr(cli, "MobilePostSource", FakePostSource)
     profile_dir = tmp_path / "profile"
 
     result = CliRunner().invoke(
@@ -98,7 +98,7 @@ def test_bootstrap_imports_auth_file_and_validates_headlessly(
             captured["timeout"] = navigation_timeout_seconds
             return FakeState()
 
-    monkeypatch.setattr(cli, "PlaywrightPostSource", FakePostSource)
+    monkeypatch.setattr(cli, "MobilePostSource", FakePostSource)
     auth_file = tmp_path / "facebook-auth.json"
     auth_file.write_text(
         json.dumps(
@@ -337,11 +337,9 @@ def test_check_requires_apprise_unless_dry_run(tmp_path: Path) -> None:
     assert "required unless --dry-run is used" in result.output
 
 
-@pytest.mark.parametrize("view", ["desktop", "mobile"])
 def test_monitor_propagates_headless_chromium_and_dry_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    view: str,
 ) -> None:
     captured: dict[str, object] = {}
     captured_signals: list[tuple[signal.Signals, object]] = []
@@ -398,7 +396,7 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
 
     monkeypatch.setattr(
         cli,
-        "MobilePostSource" if view == "mobile" else "PlaywrightPostSource",
+        "MobilePostSource",
         FakePostSource,
     )
     monkeypatch.setattr(cli, "SQLiteStateRepository", FakeState)
@@ -412,8 +410,6 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
         cli.main,
         [
             "monitor",
-            "--view",
-            view,
             "--id",
             "pi-group",
             "--browser",
@@ -458,44 +454,12 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
     assert "monitor stopped" in result.output
 
 
-@pytest.mark.parametrize(
-    ("arguments", "environment", "expected"),
-    [
-        ([], {}, "mobile"),
-        (["--view", "mobile"], {}, "mobile"),
-        ([], {"FBN_VIEW": "mobile"}, "mobile"),
-        ([], {"FBN_VIEW": "desktop"}, "desktop"),
-        (["--view", "desktop"], {"FBN_VIEW": "mobile"}, "desktop"),
-    ],
-)
-def test_check_selects_reader_from_flag_or_environment(
-    monkeypatch, arguments, environment, expected
-):
-    def fake_run_once(**kwargs):
-        assert kwargs["view"] == expected
-        return RunSummary("test-group", 0, 0, 0, 0, True)
-
-    monkeypatch.setattr(cli, "_run_once", fake_run_once)
+def test_desktop_reader_option_is_removed():
     result = CliRunner().invoke(
-        cli.main,
-        ["check", "--id", "test-group", "--dry-run", *arguments],
-        env={"FBN_APPRISE_URL": "", **environment},
-    )
-    assert result.exit_code == 0, result.output
-
-
-def test_reader_factory_retains_desktop_and_adds_mobile(tmp_path):
-    settings = BrowserSettings(profile_dir=tmp_path / "unused")
-    assert type(cli._post_source(settings, "desktop")) is cli.PlaywrightPostSource
-    assert type(cli._post_source(settings, "mobile")) is cli.MobilePostSource
-
-
-def test_unsupported_reader_is_rejected():
-    result = CliRunner().invoke(
-        cli.main, ["check", "--id", "test-group", "--view", "unsupported"]
+        cli.main, ["check", "--id", "test-group", "--view", "desktop"]
     )
     assert result.exit_code == 2
-    assert "Invalid value for '--view'" in result.output
+    assert "No such option" in result.output
 
 
 def test_monitor_alerts_on_layout_failure_and_clears_health(

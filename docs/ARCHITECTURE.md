@@ -39,7 +39,9 @@ browser is an optional recovery path only.
 | `fbn.auth` | Bounded secret-file parsing, Facebook-domain filtering, and cookie normalization. |
 | `fbn.config` | Platform paths, browser/scan/schedule validation, duration parsing. |
 | `fbn.models` | Immutable group, post, scan, observation, delivery, and run-summary values. |
-| `fbn.browser` | Persistent Playwright context lifecycle, navigation, page-state classification, bounded scrolling. |
+| `fbn.browser` | Persistent browser authentication, locks, cleanup, and page-state classification. |
+| `fbn.mobile` | Mobile primary-card parser, New posts sorting, Copy link verification, bounded scrolling. |
+| `fbn.migrations` | Atomic schema upgrades and archived historical identity records. |
 | `fbn.extractor` | Canonical group/post URL parsing and DOM payload normalization. |
 | `fbn.state` | SQLite schema, migrations, baseline/observation transaction, durable outbox. |
 | `fbn.notifications` | Plain-text rendering and Apprise/console sinks. |
@@ -107,6 +109,15 @@ fetcher.
 The stable key is `(group_key, post_id)`. Feed position is retained only for
 deterministic notification ordering.
 
+`post_id` is parsed from the verified canonical post URL. Schema version 4
+rekeys prior direct-link records and merges their outbox receipts; a delivered
+receipt suppresses a pending duplicate. Original changed records are kept in
+`identity_archive`. Unlinked delivered/baseline history is archived, while an
+unlinked pending event blocks migration. An unresolved coverage marker stays
+open. No active acquisition or observation path generates temporary IDs or
+matches posts by their text. Archived unlinked history cannot be reliably
+matched to a later observation without additional evidence.
+
 ### `ScanResult`
 
 - ordered posts
@@ -161,9 +172,9 @@ exposed browser-debugging endpoints remain out of scope.
 2. Launch the configured persistent context. The default is Playwright Chromium
    headlessly with `channel="chromium"`. `--headed` is an explicit
    troubleshooting override on a trusted display.
-3. Navigate to the canonical group URL with chronological sorting requested.
+3. Navigate to the mobile group URL and explicitly select New posts.
 4. Classify the response URL/status and visible page state.
-5. Extract visible canonical post anchors and semantic container text.
+5. Read each primary card, copy its own link, and verify the resolved post.
 6. Scroll by a viewport at a time while IDs are still increasing and bounds
    remain.
 7. Return a normalized `ScanResult`.
@@ -209,10 +220,8 @@ removes query/fragment tracking data, normalizes Unicode/whitespace, enforces
 text limits, parses the rendered Facebook timestamp with `dateparser`, and
 deduplicates IDs while retaining the first visible position. Parsing uses the
 scan time as an explicit relative base and the configured IANA timezone. The
-Playwright context uses that same timezone so rendering and parsing agree. The
-browser reconstructs timestamp text from glyphs whose rendered rectangles
-intersect the timestamp link, excluding Facebook's off-rectangle character
-decoys.
+Playwright context uses that same timezone so rendering and parsing agree. The mobile parser reads only primary-header metadata, excluding comment and
+quoted-post timestamps.
 Facebook can redirect a numeric group URL while rendering its post permalinks
 under a custom group alias. The browser adapter accepts one such alias only
 when it is the sole candidate in the visible group-navigation tablist; related

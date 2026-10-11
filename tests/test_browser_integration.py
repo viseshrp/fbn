@@ -3,33 +3,17 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from html import escape
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from fbn.browser import (
-    PageState,
-    PlaywrightPostSource,
-    classify_page,
-    collect_dom_payloads,
-    collect_group_aliases,
-    hydrate_post_permalinks,
-    read_page_signals,
-    wait_for_terminal_page,
-)
+from fbn.browser import PageState
 from fbn.config import BrowserSettings
 from fbn.exceptions import (
-    AccessDeniedError,
-    AccountActionRequiredError,
-    AuthenticationRequiredError,
-    BrowserUnavailableError,
     LayoutChangedError,
-    TransientNavigationError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
 from fbn.mobile import (
@@ -44,82 +28,52 @@ from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
 from tests.mobile_fixtures import mobile_fixture
 
-FIXTURES = Path(__file__).parent / "fixtures"
 
-
-# These assertions describe reader behavior, not desktop selectors. Register
-# the mobile adapter here only after this contract passes against desktop.
-@pytest.fixture(params=["desktop", "mobile"])
-def reader_contract(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[object]:
-    view = request.param
+@pytest.fixture
+def reader_contract(tmp_path: Path) -> Iterator[object]:
     group = parse_group_ref("contract-group")
     observed_at = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
     with _local_context(tmp_path) as context:
         page = context.new_page()
 
         def read(stories: list[tuple[str, str, str]]) -> tuple:
-            if view == "mobile":
-                by_id = {story[0]: story for story in stories}
+            by_id = {story[0]: story for story in stories}
 
-                def route_mobile(route):
-                    path = route.request.url.split("?")[0].rstrip("/").split("/")
-                    is_post = "share" in path or "posts" in path
-                    chosen = [by_id[path[-1]]] if is_post else stories
-                    html = mobile_fixture(chosen)
-                    if "share" in path:
-                        # Playwright routes only the first request of an HTTP
-                        # redirect chain. Simulate its final URL locally so the
-                        # fixture never attempts the redirected network request.
-                        html += (
-                            "<script>history.replaceState(null,'','/groups/"
-                            f"{group.key}/posts/{path[-1]}/')</script>"
+            def route_mobile(route):
+                path = route.request.url.split("?")[0].rstrip("/").split("/")
+                is_post = "share" in path or "posts" in path
+                chosen = [by_id[path[-1]]] if is_post else stories
+                html = mobile_fixture(chosen)
+                if "share" in path:
+                    # Playwright routes only the first request of an HTTP
+                    # redirect chain. Simulate its final URL locally so the
+                    # fixture never attempts the redirected network request.
+                    html += (
+                        "<script>history.replaceState(null,'','/groups/"
+                        f"{group.key}/posts/{path[-1]}/')</script>"
+                    )
+                route.fulfill(status=200, content_type="text/html", body=html)
+
+            context.route("**/*", route_mobile)
+            page.goto(f"https://m.facebook.com/groups/{group.key}/")
+            target = context.new_page()
+            payloads = []
+            try:
+                with mobile_records(page) as records:
+                    for menu, payload in records:
+                        copied = copy_post_link(page, menu, timeout_seconds=1)
+                        href = resolve_post_link(
+                            target,
+                            copied,
+                            payload,
+                            frozenset({group.key}),
+                            timeout_seconds=1,
                         )
-                    route.fulfill(status=200, content_type="text/html", body=html)
-
-                context.route("**/*", route_mobile)
-                page.goto(f"https://m.facebook.com/groups/{group.key}/")
-                target = context.new_page()
-                payloads = []
-                try:
-                    with mobile_records(page) as records:
-                        for menu, payload in records:
-                            copied = copy_post_link(page, menu, timeout_seconds=1)
-                            href = resolve_post_link(
-                                target,
-                                copied,
-                                payload,
-                                frozenset({group.key}),
-                                timeout_seconds=1,
-                            )
-                            payloads.append({**payload, "href": href})
-                    return extract_posts(payloads, group, observed_at, limit=50)
-                finally:
-                    target.close()
-                    context.unroute("**/*", route_mobile)
-            assert view == "desktop"
-            cards = []
-            for position, (post_id, author, body) in enumerate(stories, start=1):
-                cards.append(
-                    f'<article role="article" aria-posinset="{position}">'
-                    f'<h2><a href="https://www.facebook.com/author">'
-                    f"{escape(author)}</a></h2>"
-                    '<div data-ad-rendering-role="story_message">'
-                    f"{escape(body)}</div>"
-                    f'<a href="{group.url}posts/{post_id}/?ref=share">2h</a>'
-                    '<article role="article" aria-label="Shared post">'
-                    '<h2><a href="https://www.facebook.com/quoted">Quoted</a></h2>'
-                    f'<a href="{group.url}posts/999/">Quoted body</a></article>'
-                    '<div aria-label="Comment by Reply Example">'
-                    '<a href="https://www.facebook.com/reply">Reply Example</a>'
-                    f'<a href="{group.url}posts/998/?comment_id=7">'
-                    "Nested reply body</a></div></article>"
-                )
-            page.set_content(
-                '<main><div role="feed">' + "".join(cards) + "</div></main>"
-            )
-            return extract_posts(
-                collect_dom_payloads(page), group, observed_at, limit=50
-            )
+                        payloads.append({**payload, "href": href})
+                return extract_posts(payloads, group, observed_at, limit=50)
+            finally:
+                target.close()
+                context.unroute("**/*", route_mobile)
 
         try:
             yield read
@@ -137,7 +91,6 @@ def test_reader_contract_main_post_content_and_link_stay_together(reader_contrac
     ]
     for post in posts:
         assert post.url.endswith(f"/posts/{post.post_id}/")
-        assert post.fallback_key is not None
         assert "Reply" not in post.text
         assert "Quoted" not in post.text
 
@@ -836,94 +789,6 @@ def test_mobile_fetch_allows_post_menu_to_load_beyond_old_three_second_cap(tmp_p
         assert tuple(context.pages) == original_pages
 
 
-def test_scan_recovers_hover_only_primary_post_permalink(tmp_path: Path) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
-    source = PlaywrightPostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        page.route(
-            "**/*",
-            lambda route: route.fulfill(
-                status=200,
-                content_type="text/html",
-                body=_fixture("hover_permalink_feed.html"),
-            ),
-        )
-        page.goto(group.url)
-        before = extract_posts(collect_dom_payloads(page), group, observed_at, 10)
-        result = source._scan_feed(page, group, ScanPolicy(max_scrolls=0), observed_at)
-        assert page.locator("#timestamp").get_attribute("data-hovered") == "yes"
-        assert page.locator("#comment-timestamp").get_attribute("data-hovered") is None
-        assert page.locator("#quoted-timestamp").get_attribute("data-hovered") is None
-
-    assert len(before) == len(result.posts) == 1
-    assert before[0].url == group.url
-    recovered = result.posts[0]
-    assert recovered.url == "https://www.facebook.com/groups/test-group/posts/502/"
-    assert recovered.author == before[0].author == "Primary Example"
-    assert recovered.text == before[0].text == "Primary story with photos"
-    assert recovered.fallback_key == before[0].fallback_key
-    assert recovered.fallback_key is not None
-
-    with SQLiteStateRepository(tmp_path / "state.sqlite3") as state:
-        first = state.observe(group, before, notify_initial=True)
-        state.mark_delivered([item.event_id for item in first.pending])
-        next_observation = state.observe(group, result.posts)
-        assert next_observation.inserted == next_observation.queued == 0
-        assert next_observation.reconciled == 1
-        assert not next_observation.pending
-        row = (
-            state._require_connection()
-            .execute("SELECT canonical_url FROM posts")
-            .fetchone()
-        )
-        assert row["canonical_url"] == recovered.url
-
-
-@pytest.mark.parametrize(
-    "href",
-    [
-        "https://www.facebook.com/groups/test-group/posts/502/",
-        "https://example.invalid/?__tn__=%2CO",
-    ],
-)
-def test_hydration_skips_direct_and_offsite_timestamps(
-    tmp_path: Path, href: str
-) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
-    fixture = _fixture("hover_permalink_feed.html").replace(
-        'id="timestamp" href="https://www.facebook.com/groups/test-group/?__tn__=%2CO"',
-        f'id="timestamp" href="{href}"',
-    )
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        page.route(
-            "**/*",
-            lambda route: route.fulfill(
-                status=200, content_type="text/html", body=fixture
-            ),
-        )
-        page.goto(group.url)
-        before = extract_posts(collect_dom_payloads(page), group, observed_at, 10)
-        hydrate_post_permalinks(page)
-        after = extract_posts(collect_dom_payloads(page), group, observed_at, 10)
-        assert page.locator("#timestamp").get_attribute("data-hovered") is None
-        assert page.locator("#comment-timestamp").get_attribute("data-hovered") is None
-        assert page.locator("#quoted-timestamp").get_attribute("data-hovered") is None
-
-    assert before == after
-    assert len(after) == 1
-    assert after[0].text == "Primary story with photos"
-    assert after[0].fallback_key is not None
-
-
-def _fixture(name: str) -> str:
-    return (FIXTURES / name).read_text(encoding="utf-8")
-
-
 @contextmanager
 def _local_context(
     tmp_path: Path,
@@ -936,36 +801,9 @@ def _local_context(
         profile_dir=tmp_path / requested,
         headless=True,
     )
-    source = PlaywrightPostSource(settings)
-    try:
-        with source._context(
-            headless=True,
-            timezone_id=timezone_id,
-        ) as context:
-            yield context
-            return
-    except BrowserUnavailableError:
-        if "FBN_TEST_BROWSER" in os.environ or sys.platform != "darwin":
-            pytest.fail(f"the required {requested} headless browser did not launch")
-
-    # Local macOS development can use installed Chrome when the matching
-    # Playwright Chromium binary has not been downloaded. CI always exercises
-    # the explicit Chromium path above.
-    fallback = PlaywrightPostSource(
-        BrowserSettings(
-            browser="chrome",
-            profile_dir=tmp_path / "chrome",
-            headless=True,
-        )
-    )
-    try:
-        with fallback._context(
-            headless=True,
-            timezone_id=timezone_id,
-        ) as context:
-            yield context
-    except BrowserUnavailableError:
-        pytest.skip("no local Playwright Chromium or Chrome browser is installed")
+    source = MobilePostSource(settings)
+    with source._context(headless=True, timezone_id=timezone_id) as context:
+        yield context
 
 
 def test_headless_browser_uses_configured_timezone(tmp_path: Path) -> None:
@@ -981,378 +819,6 @@ def test_headless_browser_uses_configured_timezone(tmp_path: Path) -> None:
     assert timezone_id == "America/New_York"
 
 
-def test_headless_browser_classifies_all_sanitized_page_states(
-    tmp_path: Path,
-) -> None:
-    expected_errors = {
-        "login.html": AuthenticationRequiredError,
-        "checkpoint.html": AccountActionRequiredError,
-        "captcha.html": AccountActionRequiredError,
-        "blocked.html": TransientNavigationError,
-        "body_blocked.html": TransientNavigationError,
-        "access_denied.html": AccessDeniedError,
-        "body_access_denied.html": AccessDeniedError,
-        "layout_changed.html": LayoutChangedError,
-    }
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("feed.html"))
-            assert classify_page(read_page_signals(page)) is PageState.FEED
-
-            page.set_content(_fixture("empty.html"))
-            assert classify_page(read_page_signals(page)) is PageState.EMPTY
-
-            for fixture_name, error_type in expected_errors.items():
-                page.set_content(_fixture(fixture_name))
-                with pytest.raises(error_type):
-                    classify_page(read_page_signals(page))
-        finally:
-            page.close()
-
-
-def test_headless_browser_extracts_ordered_visible_posts(tmp_path: Path) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 7, 28, 12, tzinfo=timezone.utc)
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("feed.html"))
-            payloads = collect_dom_payloads(page)
-        finally:
-            page.close()
-
-    posts = extract_posts(payloads, group, observed_at, limit=10)
-
-    assert len(payloads) == 2
-    assert [post.post_id for post in posts] == ["101", "pfbidExample12345"]
-    assert all(post.post_id != "999" for post in posts)
-    assert [post.author for post in posts] == ["Alice Example", "Bob Example"]
-    assert "First visible post body" in posts[0].text
-    assert posts[0].url == ("https://www.facebook.com/groups/test-group/posts/101/")
-    assert posts[0].published_at == observed_at - timedelta(minutes=2)
-    assert posts[1].published_at == observed_at - timedelta(minutes=5)
-    assert posts[1].partial is True
-
-
-def test_headless_browser_accepts_one_article_inside_positioned_feed_item(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("positioned_wrapper_feed.html"))
-            payloads = collect_dom_payloads(page)
-        finally:
-            page.close()
-
-    posts = extract_posts(payloads, group, observed_at, limit=10)
-
-    assert len(payloads) == 1
-    assert [post.post_id for post in posts] == ["201"]
-    assert all(post.post_id != "999" for post in posts)
-    assert posts[0].author == "Alice Example"
-    assert not posts[0].text.startswith("Facebook")
-    assert not posts[0].text.endswith("Facebook")
-    assert "Follow" not in posts[0].text
-    assert "metadata" not in posts[0].text
-    assert "Visible post inside a positioned feed wrapper" in posts[0].text
-
-
-def test_headless_browser_extracts_photo_only_group_post(tmp_path: Path) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("photo_feed.html"))
-            payloads = collect_dom_payloads(page)
-        finally:
-            page.close()
-
-    posts = extract_posts(payloads, group, observed_at, limit=10)
-
-    assert len(payloads) == 1
-    assert [post.post_id for post in posts] == ["202"]
-    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
-    assert posts[0].author == "Alice Example"
-    assert posts[0].text.startswith("Fresh produce!!")
-    assert "Follow" not in posts[0].text
-    assert "contributor" not in posts[0].text
-    assert "decoy" not in posts[0].text
-    assert "41m" not in posts[0].text
-    assert "\u034f" not in posts[0].text
-    assert payloads[0]["timestamp"] == "41m"
-    assert posts[0].published_at == observed_at - timedelta(minutes=41)
-
-
-def test_headless_browser_excludes_nested_reply_author_and_body(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("comment_reply_feed.html"))
-            payloads = collect_dom_payloads(page)
-        finally:
-            page.close()
-
-    posts = extract_posts(payloads, group, observed_at, limit=10)
-
-    assert len(posts) == 1
-    assert posts[0].post_id == "301"
-    assert posts[0].author == "Parent Example"
-    assert posts[0].text == "Primary post body"
-    assert "Reply Example" not in posts[0].text
-    assert "Nested reply body" not in posts[0].text
-
-
-def test_headless_browser_fingerprints_post_when_permalink_is_omitted(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 9, 9, 12, tzinfo=timezone.utc)
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("no_permalink_feed.html"))
-            first_payloads = collect_dom_payloads(page)
-            second_payloads = collect_dom_payloads(page)
-            signals = read_page_signals(page)
-        finally:
-            page.close()
-
-    first = extract_posts(first_payloads, group, observed_at, limit=10)
-    second = extract_posts(second_payloads, group, observed_at, limit=10)
-
-    assert classify_page(signals) is PageState.FEED
-    assert signals.feed_root_count == 1
-    assert signals.top_level_item_count == 1
-    assert signals.direct_permalink_count == 0
-    assert signals.story_message_count == 1
-    assert signals.fallback_post_count == 1
-    assert signals.author_count == 1
-    assert len(first) == 1
-    assert first[0].post_id.startswith("content-")
-    assert first[0].post_id == second[0].post_id
-    assert first[0].fallback_key == second[0].fallback_key
-    assert first[0].fallback_key is not None
-    assert first[0].url == ("https://www.facebook.com/groups/test-group/posts/999/")
-    assert first[0].author == "Parent Example"
-    assert first[0].text == "Primary post without a permalink"
-    assert "Reply Example" not in first[0].text
-    assert "Nested reply body" not in first[0].text
-    assert first[0].published_at is None
-
-
-def test_headless_browser_recovers_fallback_url_from_group_photo_set(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("test-group")
-    observed_at = datetime(2026, 9, 13, 12, tzinfo=timezone.utc)
-
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("photo_without_group_feed.html"))
-            payloads = collect_dom_payloads(page)
-        finally:
-            page.close()
-
-    posts = extract_posts(payloads, group, observed_at, limit=10)
-
-    assert len(posts) == 1
-    assert posts[0].post_id.startswith("content-")
-    assert posts[0].fallback_key is not None
-    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/202/"
-    assert posts[0].author == "Photo Author"
-    assert posts[0].text == "Photo post without an idorvanity parameter"
-
-
-def test_headless_browser_owns_story_outside_comment_articles(tmp_path: Path) -> None:
-    group = parse_group_ref("test-group")
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("wrapper_story_feed.html"))
-            payloads = collect_dom_payloads(page)
-            signals = read_page_signals(page)
-        finally:
-            page.close()
-    posts = extract_posts(
-        payloads, group, datetime(2026, 10, 1, tzinfo=timezone.utc), limit=10
-    )
-    assert classify_page(signals) is PageState.FEED
-    assert signals.author_count == signals.story_message_count == 1
-    assert signals.direct_permalink_count == 0
-    assert len(posts) == 1
-    assert posts[0].author == "Primary Example"
-    assert posts[0].text == "Primary wrapper story"
-    assert posts[0].url == "https://www.facebook.com/groups/test-group/posts/501/"
-    assert posts[0].post_id.startswith("content-")
-
-
-def test_wrapper_story_does_not_use_quoted_or_nested_reply_links(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("test-group")
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("wrapper_story_feed.html"))
-            page.locator('a[href*="comment_id=42"]').evaluate(
-                "element => element.remove()"
-            )
-            payloads = collect_dom_payloads(page)
-        finally:
-            page.close()
-    posts = extract_posts(
-        payloads, group, datetime(2026, 10, 1, tzinfo=timezone.utc), limit=10
-    )
-    assert len(posts) == 1
-    assert posts[0].text == "Primary wrapper story"
-    assert posts[0].url == group.url
-
-
-@pytest.mark.parametrize("fixture_name", ["sidebar_only.html", "nested_only.html"])
-def test_headless_browser_rejects_links_outside_direct_feed_items(
-    tmp_path: Path,
-    fixture_name: str,
-) -> None:
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture(fixture_name))
-            payloads = collect_dom_payloads(page)
-            signals = read_page_signals(page)
-        finally:
-            page.close()
-
-    assert payloads == []
-    with pytest.raises(LayoutChangedError):
-        classify_page(signals)
-
-
-def test_headless_browser_accepts_one_group_header_alias(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("1663189947098862")
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("alias_feed.html"))
-            payloads = collect_dom_payloads(page)
-            aliases = collect_group_aliases(page, group)
-        finally:
-            page.close()
-
-    posts = extract_posts(
-        payloads,
-        group,
-        datetime(2026, 7, 28, 12, tzinfo=timezone.utc),
-        limit=10,
-        allowed_group_keys=aliases,
-    )
-    assert aliases == frozenset({"1663189947098862", "custom-alias"})
-    assert len(posts) == 1
-    assert posts[0].group_key == "1663189947098862"
-
-
-def test_headless_browser_rejects_unrelated_group_link_as_alias(
-    tmp_path: Path,
-) -> None:
-    group = parse_group_ref("1663189947098862")
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(_fixture("related_group_feed.html"))
-            payloads = collect_dom_payloads(page)
-            aliases = collect_group_aliases(page, group)
-        finally:
-            page.close()
-
-    posts = extract_posts(
-        payloads,
-        group,
-        datetime(2026, 7, 28, 12, tzinfo=timezone.utc),
-        limit=10,
-        allowed_group_keys=aliases,
-    )
-    assert aliases == frozenset({"1663189947098862"})
-    assert posts == ()
-
-
-def test_headless_browser_waits_through_a_dynamic_feed_skeleton(
-    tmp_path: Path,
-) -> None:
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(
-                '<main role="main"><div id="feed" role="feed"></div></main>'
-            )
-            page.evaluate(
-                """
-                () => setTimeout(() => {
-                  const article = document.createElement('article');
-                  article.setAttribute('role', 'article');
-                  article.innerHTML =
-                    '<a href="/groups/test-group/posts/123/">post</a>';
-                  document.querySelector('#feed').appendChild(article);
-                }, 100)
-                """
-            )
-
-            state = wait_for_terminal_page(page, timeout_seconds=2)
-        finally:
-            page.close()
-
-    assert state is PageState.FEED
-
-
-def test_headless_browser_does_not_false_empty_before_item_link_hydrates(
-    tmp_path: Path,
-) -> None:
-    with _local_context(tmp_path) as context:
-        page = context.new_page()
-        try:
-            page.set_content(
-                """
-                <main role="main">
-                  <div id="feed" role="feed">
-                    <article id="item" role="article">no posts yet</article>
-                  </div>
-                </main>
-                """
-            )
-            page.evaluate(
-                """
-                () => setTimeout(() => {
-                  const link = document.createElement('a');
-                  link.href = '/groups/test-group/posts/124/';
-                  link.innerText = 'hydrated permalink';
-                  document.querySelector('#item').appendChild(link);
-                }, 100)
-                """
-            )
-
-            state = wait_for_terminal_page(page, timeout_seconds=2)
-        finally:
-            page.close()
-
-    assert state is PageState.FEED
-
-
 def test_persistent_profile_retains_facebook_cookie_across_headless_relaunch(
     tmp_path: Path,
 ) -> None:
@@ -1361,7 +827,7 @@ def test_persistent_profile_retains_facebook_cookie_across_headless_relaunch(
         profile_dir=tmp_path / "persistent-cookie-profile",
         headless=True,
     )
-    source = PlaywrightPostSource(settings)
+    source = MobilePostSource(settings)
     cookie = {
         "name": "fbn_persistence_probe",
         "value": "local-sanitized-value",
@@ -1370,15 +836,10 @@ def test_persistent_profile_retains_facebook_cookie_across_headless_relaunch(
         "expires": 2_000_000_000,
         "secure": True,
     }
-    try:
-        with source._context(headless=True) as context:
-            context.add_cookies([cookie])
-        with source._context(headless=True) as context:
-            persisted = context.cookies("https://www.facebook.com/")
-    except BrowserUnavailableError:
-        if "FBN_TEST_BROWSER" in os.environ or sys.platform != "darwin":
-            pytest.fail("the required headless browser did not launch")
-        pytest.skip("no local Playwright Chromium browser is installed")
+    with source._context(headless=True) as context:
+        context.add_cookies([cookie])
+    with source._context(headless=True) as context:
+        persisted = context.cookies("https://www.facebook.com/")
 
     assert any(
         item["name"] == cookie["name"] and item["value"] == cookie["value"]

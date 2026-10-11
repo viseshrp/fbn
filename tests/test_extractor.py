@@ -7,7 +7,6 @@ import pytest
 
 from fbn.exceptions import ConfigurationError
 from fbn.extractor import (
-    chronological_group_url,
     extract_posts,
     normalize_visible_text,
     parse_facebook_timestamp,
@@ -33,9 +32,6 @@ def test_parse_group_ref_canonicalizes_facebook_url() -> None:
 
     assert group.key == "local.group"
     assert group.url == "https://www.facebook.com/groups/local.group/"
-    assert chronological_group_url(group) == (
-        "https://www.facebook.com/groups/local.group/?sorting_setting=CHRONOLOGICAL"
-    )
 
 
 @pytest.mark.parametrize(
@@ -275,153 +271,6 @@ def test_extract_posts_has_deterministic_position_order_and_post_limit() -> None
 
     assert [post.post_id for post in posts] == ["100", "200"]
     assert len(posts) == 2
-
-
-def test_fallback_post_uses_parent_url_from_comment_context() -> None:
-    posts = extract_posts(
-        [
-            {
-                "href": "https://www.facebook.com/groups/local/",
-                "contextHref": (
-                    "https://www.facebook.com/groups/local/posts/123/"
-                    "?comment_id=456&reply_comment_id=789"
-                ),
-                "fallback": True,
-                "identity": "author\npost body",
-                "text": "post body",
-            }
-        ],
-        parse_group_ref("local"),
-        OBSERVED_AT,
-        limit=1,
-    )
-
-    assert posts[0].post_id.startswith("content-")
-    assert posts[0].url == "https://www.facebook.com/groups/local/posts/123/"
-    assert posts[0].fallback_key is not None
-
-
-def test_fallback_visible_content_key_ignores_volatile_profile_identity() -> None:
-    group = parse_group_ref("local")
-    common = {
-        "href": group.url,
-        "fallback": True,
-        "author": "Same visible author",
-        "text": "Same visible post body",
-    }
-
-    first = extract_posts(
-        [{**common, "identity": "facebook.com/first-profile\nSame visible post body"}],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )[0]
-    second = extract_posts(
-        [{**common, "identity": "facebook.com/second-profile\nSame visible post body"}],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )[0]
-
-    assert first.post_id != second.post_id
-    assert first.fallback_key == second.fallback_key
-
-
-def test_fallback_visible_content_key_changes_with_visible_content() -> None:
-    group = parse_group_ref("local")
-
-    first = extract_posts(
-        [
-            {
-                "href": group.url,
-                "fallback": True,
-                "identity": "volatile profile\nfirst body",
-                "author": "Visible author",
-                "text": "first body",
-            }
-        ],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )[0]
-    second = extract_posts(
-        [
-            {
-                "href": group.url,
-                "fallback": True,
-                "identity": "volatile profile\nsecond body",
-                "author": "Visible author",
-                "text": "second body",
-            }
-        ],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )[0]
-
-    assert first.fallback_key != second.fallback_key
-
-
-def test_fallback_post_uses_group_photo_set_as_parent_url() -> None:
-    group = parse_group_ref("local")
-    payload = {
-        "href": group.url,
-        "contextHref": (
-            "https://www.facebook.com/photo/?fbid=987&set=gm.123&__cft__[0]=tracking"
-        ),
-        "fallback": True,
-        "identity": "author\nphoto post body",
-        "text": "photo post body",
-    }
-    posts = extract_posts(
-        [payload],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )
-    previous = extract_posts(
-        [{**payload, "contextHref": ""}],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )
-
-    assert posts[0].post_id.startswith("content-")
-    assert posts[0].post_id == previous[0].post_id
-    assert posts[0].url == "https://www.facebook.com/groups/local/posts/123/"
-
-
-@pytest.mark.parametrize(
-    "context_href",
-    [
-        "https://www.facebook.com/groups/other/posts/123/?comment_id=456",
-        "https://evil.example/groups/local/posts/123/?comment_id=456",
-        "https://www.facebook.com/groups/local/posts/123/",
-        "https://evil.example/photo/?fbid=987&set=gm.123",
-        "https://www.facebook.com/photo/?fbid=987&set=other.123",
-        "https://www.facebook.com/photo/?fbid=987&set=gm.123&idorvanity=other",
-    ],
-)
-def test_fallback_post_rejects_untrusted_parent_context(
-    context_href: str,
-) -> None:
-    group = parse_group_ref("local")
-    posts = extract_posts(
-        [
-            {
-                "href": group.url,
-                "contextHref": context_href,
-                "fallback": True,
-                "identity": "author\npost body",
-                "text": "post body",
-            }
-        ],
-        group,
-        OBSERVED_AT,
-        limit=1,
-    )
-
-    assert posts[0].url == group.url
 
 
 def test_normalize_visible_text_normalizes_unicode_whitespace_and_caps() -> None:

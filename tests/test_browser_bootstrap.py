@@ -8,7 +8,7 @@ import pytest
 from playwright.sync_api import Error as PlaywrightError
 
 import fbn.browser as browser_module
-from fbn.browser import PageSignals, PageState, PlaywrightPostSource
+from fbn.browser import BrowserSession, PageSignals, PageState
 from fbn.config import BrowserSettings
 from fbn.exceptions import (
     AuthenticationRequiredError,
@@ -17,6 +17,7 @@ from fbn.exceptions import (
     TransientNavigationError,
 )
 from fbn.extractor import parse_group_ref
+from fbn.mobile import MobilePostSource
 from fbn.models import ScanPolicy
 
 
@@ -55,6 +56,15 @@ class FakePage:
     def locator(self, selector: str) -> FakeLocator:
         del selector
         return FakeLocator()
+
+    def route(self, *args):
+        pass
+
+    def on(self, *args):
+        pass
+
+    def remove_listener(self, *args):
+        pass
 
     def close(self) -> None:
         self.closed = True
@@ -111,8 +121,8 @@ def source_with_context(
     monkeypatch: pytest.MonkeyPatch,
     *,
     settings_headless: bool = False,
-) -> PlaywrightPostSource:
-    source = PlaywrightPostSource(
+) -> MobilePostSource:
+    source = MobilePostSource(
         BrowserSettings(
             browser="chromium",
             profile_dir=tmp_path / "profile",
@@ -133,6 +143,21 @@ def source_with_context(
         yield context
 
     monkeypatch.setattr(source, "_context", fake_context)
+    import fbn.mobile as mobile_module
+
+    monkeypatch.setattr(
+        mobile_module,
+        "wait_for_mobile_page",
+        lambda page, **kw: browser_module.classify_page(
+            browser_module.read_page_signals(page, status=kw.get("status"))
+        ),
+    )
+
+    @contextmanager
+    def fake_navigation(page):
+        yield None
+
+    monkeypatch.setattr(mobile_module, "initial_group_navigation", fake_navigation)
     return source
 
 
@@ -458,7 +483,7 @@ def test_context_maps_driver_teardown_error_without_raw_details(
     secret = "private-driver-shutdown-detail"
     context = FakeContext(())
     manager = TeardownErrorManager(context, secret)
-    source = PlaywrightPostSource(
+    source = BrowserSession(
         BrowserSettings(profile_dir=tmp_path / "profile"),
         playwright_factory=lambda: manager,
     )
@@ -478,7 +503,7 @@ def test_profile_rejects_a_different_browser_configuration(
     profile = tmp_path / "profile"
     profile.mkdir()
     (profile / ".fbn-browser").write_text("chrome\n", encoding="utf-8")
-    source = PlaywrightPostSource(
+    source = BrowserSession(
         BrowserSettings(browser="chromium", profile_dir=profile),
     )
 
@@ -493,7 +518,7 @@ def test_profile_marker_includes_explicit_executable_path(tmp_path: Path) -> Non
     profile = tmp_path / "profile"
     executable = tmp_path / "chromium"
     context = FakeContext(())
-    source = PlaywrightPostSource(
+    source = BrowserSession(
         BrowserSettings(
             browser="executable",
             profile_dir=profile,
@@ -514,7 +539,7 @@ def test_failed_first_browser_launch_does_not_bind_empty_profile(
     tmp_path: Path,
 ) -> None:
     profile = tmp_path / "profile"
-    failing = PlaywrightPostSource(
+    failing = BrowserSession(
         BrowserSettings(browser="chromium", profile_dir=profile),
         playwright_factory=lambda: NormalManager(FailingPersistentChromium()),
     )
@@ -528,7 +553,7 @@ def test_failed_first_browser_launch_does_not_bind_empty_profile(
     assert not (profile / ".fbn-browser").exists()
 
     context = FakeContext(())
-    corrected = PlaywrightPostSource(
+    corrected = BrowserSession(
         BrowserSettings(browser="chrome", profile_dir=profile),
         playwright_factory=lambda: NormalManager(FakePersistentChromium(context)),
     )

@@ -245,6 +245,12 @@ the same run.
   may cause a duplicate, but it must not silently lose a pending post.
 - Post body/author data are cleared from the outbox after successful delivery;
   stable IDs and canonical links remain for deduplication.
+- The verified canonical URL supplies the permanent post ID. Rendered text,
+  emoji labels, and share tokens are never post identities. Desktop parsing
+  and content-fingerprint matching are removed.
+- Schema version 4 merges recoverable historical aliases without resending
+  delivered posts. Unresolved history is archived and unresolved pending
+  events block migration. An unresolved coverage marker remains open.
 
 ### FR-6: notification
 

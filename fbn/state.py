@@ -7,7 +7,6 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import datetime, timezone
 from types import TracebackType
 
@@ -16,6 +15,8 @@ from filelock import Timeout as FileLockTimeout
 
 from .config import ensure_private_directory, resolve_state_file
 from .exceptions import ConfigurationError, MonitorInUseError
+from .extractor import parse_post_url
+from .migrations import migrate
 from .models import GroupRef, ObservationBatch, PendingNotification, Post
 
 _SCHEMA = """
@@ -35,7 +36,6 @@ CREATE TABLE IF NOT EXISTS posts (
     canonical_url TEXT NOT NULL,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    fallback_key TEXT,
     PRIMARY KEY (group_key, post_id),
     FOREIGN KEY (group_key) REFERENCES groups(group_key)
 );
@@ -59,7 +59,6 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS outbox_pending_order
     ON outbox (group_key, delivered_at, created_at, position, event_id);
 """
-_SCHEMA_VERSION = 3
 
 
 def _utc_now() -> datetime:
@@ -129,9 +128,12 @@ class SQLiteStateRepository:
             self._connection.execute("PRAGMA busy_timeout = 30000")
             self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.executescript(_SCHEMA)
-            self._migrate_schema(self._connection)
+            migrate(self._connection)
             self._restrict_database_files()
         except ConfigurationError:
+            if self._connection is not None:
+                self._connection.close()
+                self._connection = None
             raise
         except (OSError, sqlite3.Error) as exc:
             if self._connection is not None:
@@ -259,20 +261,9 @@ class SQLiteStateRepository:
             inserted_posts: list[Post] = []
             resolved_posts: list[Post] = []
             resolved_post_ids: set[str] = set()
-            reconciled = 0
             queued = 0
 
             for post in unique_posts:
-                observed_post_id = post.post_id
-                post = self._resolve_fallback_identity(
-                    connection,
-                    group,
-                    post,
-                )
-                if post.post_id != observed_post_id:
-                    reconciled += 1
-                    if boundary_post_id == observed_post_id:
-                        boundary_post_id = post.post_id
                 if post.post_id not in resolved_post_ids:
                     resolved_post_ids.add(post.post_id)
                     resolved_posts.append(post)
@@ -283,9 +274,8 @@ class SQLiteStateRepository:
                         post_id,
                         canonical_url,
                         first_seen_at,
-                        last_seen_at,
-                        fallback_key
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         group.key,
@@ -293,7 +283,6 @@ class SQLiteStateRepository:
                         post.url,
                         scan_timestamp,
                         scan_timestamp,
-                        post.fallback_key,
                     ),
                 )
                 if cursor.rowcount:
@@ -302,20 +291,12 @@ class SQLiteStateRepository:
                     connection.execute(
                         """
                         UPDATE posts
-                        SET canonical_url = CASE
-                                WHEN ? = ? THEN canonical_url
-                                ELSE ?
-                            END,
-                            last_seen_at = ?,
-                            fallback_key = COALESCE(fallback_key, ?)
+                        SET canonical_url = ?, last_seen_at = ?
                         WHERE group_key = ? AND post_id = ?
                         """,
                         (
                             post.url,
-                            group.url,
-                            post.url,
                             scan_timestamp,
-                            post.fallback_key,
                             group.key,
                             post.post_id,
                         ),
@@ -416,7 +397,6 @@ class SQLiteStateRepository:
             inserted=len(inserted_posts),
             queued=queued,
             pending=pending,
-            reconciled=reconciled,
         )
 
     def pending(self, group: GroupRef) -> tuple[PendingNotification, ...]:
@@ -589,62 +569,6 @@ class SQLiteStateRepository:
         return connection
 
     @staticmethod
-    def _migrate_schema(connection: sqlite3.Connection) -> None:
-        """Upgrade existing state in place without discarding seen posts."""
-
-        group_columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(groups)").fetchall()
-        }
-        post_columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(posts)").fetchall()
-        }
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            if "notification_boundary_post_id" not in group_columns:
-                connection.execute(
-                    """
-                    ALTER TABLE groups
-                    ADD COLUMN notification_boundary_post_id TEXT
-                    """
-                )
-                connection.execute(
-                    """
-                    WITH ranked AS (
-                        SELECT
-                            group_key,
-                            post_id,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY group_key
-                                ORDER BY created_at DESC, position, event_id
-                            ) AS rank
-                        FROM outbox
-                    )
-                    UPDATE groups
-                    SET notification_boundary_post_id = (
-                        SELECT ranked.post_id
-                        FROM ranked
-                        WHERE ranked.group_key = groups.group_key
-                          AND ranked.rank = 1
-                    )
-                    """
-                )
-            if "fallback_key" not in post_columns:
-                connection.execute("ALTER TABLE posts ADD COLUMN fallback_key TEXT")
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS posts_fallback_key_lookup
-                ON posts (group_key, fallback_key, first_seen_at)
-                """
-            )
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-            connection.commit()
-        except BaseException:
-            connection.rollback()
-            raise
-
-    @staticmethod
     def _visible_notification_boundary(
         connection: sqlite3.Connection,
         group_key: str,
@@ -723,36 +647,6 @@ class SQLiteStateRepository:
         )
 
     @staticmethod
-    def _resolve_fallback_identity(
-        connection: sqlite3.Connection,
-        group: GroupRef,
-        post: Post,
-    ) -> Post:
-        """Map a volatile fallback ID to its first stable visible-content match."""
-
-        if post.fallback_key is None:
-            return post
-        rows = connection.execute(
-            """
-            SELECT post_id, canonical_url
-            FROM posts
-            WHERE group_key = ? AND fallback_key = ?
-            ORDER BY first_seen_at, post_id
-            """,
-            (group.key, post.fallback_key),
-        ).fetchall()
-        if any(row["post_id"] == post.post_id for row in rows):
-            return post
-        for row in rows:
-            if (
-                post.url == group.url
-                or row["canonical_url"] == group.url
-                or row["canonical_url"] == post.url
-            ):
-                return replace(post, post_id=str(row["post_id"]))
-        return post
-
-    @staticmethod
     def _unique_posts(group: GroupRef, posts: Sequence[Post]) -> tuple[Post, ...]:
         unique: list[Post] = []
         seen: set[str] = set()
@@ -761,6 +655,9 @@ class SQLiteStateRepository:
                 raise ValueError("posts must contain only Post values")
             if post.group_key != group.key:
                 raise ValueError(f"post {post.post_id!r} belongs to a different group")
+            link = parse_post_url(post.url)
+            if link is None or link.post_id != post.post_id:
+                raise ValueError("post identity must match its verified direct link")
             if post.post_id not in seen:
                 seen.add(post.post_id)
                 unique.append(post)
@@ -820,7 +717,3 @@ class SQLiteStateRepository:
             )
             for row in rows
         )
-
-
-StateRepository = SQLiteStateRepository
-SQLiteState = SQLiteStateRepository

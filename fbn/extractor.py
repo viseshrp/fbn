@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping
@@ -21,9 +20,6 @@ FACEBOOK_ORIGIN = "https://www.facebook.com"
 FACEBOOK_HOSTS = frozenset({"facebook.com", "www.facebook.com", "m.facebook.com"})
 DEFAULT_TEXT_LIMIT = 4_000
 MAX_AUTHOR_LENGTH = 256
-MAX_FALLBACK_IDENTITY_LENGTH = 8_192
-FALLBACK_POST_ID_PREFIX = "content-"
-FALLBACK_KEY_PREFIX = "visible-"
 
 _GROUP_KEY_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 _POST_ID_PATTERN = r"[A-Za-z0-9]{1,200}"
@@ -113,14 +109,6 @@ def parse_group_ref(value: str) -> GroupRef:
         group_key = match.group("group")
 
     return GroupRef(key=group_key, url=_canonical_group_url(group_key))
-
-
-def chronological_group_url(group: GroupRef) -> str:
-    """Return the canonical group feed URL requesting chronological sorting."""
-
-    if not _SIMPLE_GROUP_RE.fullmatch(group.key):
-        raise ConfigurationError("The Facebook group ID/slug is malformed.")
-    return f"{_canonical_group_url(group.key)}?sorting_setting=CHRONOLOGICAL"
 
 
 def parse_post_url(value: object) -> PostLink | None:
@@ -239,123 +227,6 @@ def _payload_position(payload: Mapping[str, Any], fallback: int) -> int:
     return fallback
 
 
-def _fallback_post_link(
-    payload: Mapping[str, Any],
-    group: GroupRef,
-    text: str,
-    accepted_group_keys: Collection[str],
-) -> PostLink | None:
-    """Derive a local identity when Facebook omits the post permalink."""
-
-    if payload.get("fallback") is not True or not text:
-        return None
-    identity = normalize_visible_text(
-        payload.get("identity"),
-        limit=MAX_FALLBACK_IDENTITY_LENGTH,
-    )
-    if not identity:
-        return None
-    fingerprint = hashlib.sha256(f"{group.key}\0{identity}".encode()).hexdigest()
-    context_link = _fallback_context_post_link(
-        payload.get("contextHref"),
-        group,
-    )
-    url = group.url
-    if (
-        context_link is not None
-        and context_link.group_key.casefold() in accepted_group_keys
-    ):
-        url = context_link.url
-    return PostLink(
-        group_key=group.key,
-        post_id=f"{FALLBACK_POST_ID_PREFIX}{fingerprint}",
-        url=url,
-    )
-
-
-def _fallback_deduplication_key(
-    group: GroupRef,
-    author: str | None,
-    text: str,
-) -> str:
-    """Fingerprint stable visible content without volatile profile URLs."""
-
-    visible_identity = f"{author or ''}\0{text}"
-    fingerprint = hashlib.sha256(
-        f"{group.key}\0{visible_identity}".encode()
-    ).hexdigest()
-    return f"{FALLBACK_KEY_PREFIX}{fingerprint}"
-
-
-def _comment_parent_post_link(value: object) -> PostLink | None:
-    """Recover a parent-post URL from a comment or reply permalink."""
-
-    if not isinstance(value, str):
-        return None
-    path = _facebook_path(value)
-    if path is None:
-        return None
-    parsed = urlsplit(value)
-    query = parse_qs(parsed.query, keep_blank_values=True)
-    if "comment_id" not in query and "reply_comment_id" not in query:
-        return None
-    match = _POST_PATH_RE.fullmatch(path)
-    if match is None:
-        return None
-    post_id = match.group("post")
-    if post_id.isdigit() and post_id.startswith("0"):
-        return None
-    group_key = match.group("group")
-    kind = match.group("kind")
-    return PostLink(
-        group_key=group_key,
-        post_id=post_id,
-        url=f"{FACEBOOK_ORIGIN}/groups/{group_key}/{kind}/{post_id}/",
-    )
-
-
-def _fallback_context_post_link(
-    value: object,
-    group: GroupRef,
-) -> PostLink | None:
-    """Recover a post URL from a trusted link inside its feed item."""
-
-    comment_link = _comment_parent_post_link(value)
-    if comment_link is not None:
-        return comment_link
-    if not isinstance(value, str):
-        return None
-    path = _facebook_path(value)
-    if path not in {"/photo", "/photo/"}:
-        return None
-    parsed = urlsplit(value)
-    query = parse_qs(parsed.query, keep_blank_values=True)
-    set_values = query.get("set", ())
-    photo_match = (
-        _PHOTO_SET_RE.fullmatch(set_values[0]) if len(set_values) == 1 else None
-    )
-    if photo_match is None:
-        return None
-    group_values = query.get("idorvanity", ())
-    if group_values:
-        if (
-            len(group_values) != 1
-            or _SIMPLE_GROUP_RE.fullmatch(group_values[0]) is None
-        ):
-            return None
-        group_key = group_values[0]
-    else:
-        group_key = group.key
-    post_id = photo_match.group("post")
-    if post_id.isdigit() and post_id.startswith("0"):
-        return None
-    return PostLink(
-        group_key=group_key,
-        post_id=post_id,
-        url=f"{FACEBOOK_ORIGIN}/groups/{group_key}/posts/{post_id}/",
-    )
-
-
 def extract_posts(
     payloads: Iterable[Mapping[str, Any]],
     group: GroupRef,
@@ -396,13 +267,6 @@ def extract_posts(
             limit=MAX_AUTHOR_LENGTH,
         )
         link = parse_post_url(payload.get("href"))
-        if link is None:
-            link = _fallback_post_link(
-                payload,
-                group,
-                text,
-                accepted_group_keys,
-            )
         if (
             link is None
             or link.group_key.casefold() not in accepted_group_keys
@@ -424,12 +288,6 @@ def extract_posts(
                 payload.get("timestamp"),
                 observed_at,
                 timezone_name=timezone_name,
-            ),
-            fallback_key=(
-                _fallback_deduplication_key(group, author or None, text)
-                if payload.get("fallback") is True
-                or payload.get("stableContent") is True
-                else None
             ),
         )
         extracted.append((position, source_index, post))

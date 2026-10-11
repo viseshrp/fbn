@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-import fbn.browser as browser_module
 from fbn.browser import (
     PageSignals,
     PageState,
     classify_page,
-    wait_for_terminal_page,
 )
 from fbn.exceptions import (
     AccessDeniedError,
@@ -16,7 +14,6 @@ from fbn.exceptions import (
     LayoutChangedError,
     TransientNavigationError,
 )
-from fbn.extractor import parse_group_ref
 
 
 def signals(**overrides: object) -> PageSignals:
@@ -105,48 +102,3 @@ def test_post_content_error_phrases_do_not_override_a_recognized_feed() -> None:
         )
         is PageState.FEED
     )
-
-
-def test_terminal_page_rejects_a_feed_redirected_away_from_group(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    wrong_page = object()
-    monkeypatch.setattr(
-        browser_module,
-        "read_page_signals",
-        lambda page, *, status=None: PageSignals(
-            url="https://www.facebook.com/",
-            status=status,
-            post_count=1,
-            has_feed=True,
-        ),
-    )
-
-    with pytest.raises(AccessDeniedError, match="redirected away"):
-        wait_for_terminal_page(
-            wrong_page,  # type: ignore[arg-type]
-            timeout_seconds=1,
-            expected_group=parse_group_ref("expected-group"),
-        )
-
-
-def test_terminal_page_preserves_auth_error_after_redirect(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    login_page = object()
-    monkeypatch.setattr(
-        browser_module,
-        "read_page_signals",
-        lambda page, *, status=None: PageSignals(
-            url="https://www.facebook.com/login/",
-            status=status,
-            has_login=True,
-        ),
-    )
-
-    with pytest.raises(AuthenticationRequiredError):
-        wait_for_terminal_page(
-            login_page,  # type: ignore[arg-type]
-            timeout_seconds=1,
-            expected_group=parse_group_ref("expected-group"),
-        )

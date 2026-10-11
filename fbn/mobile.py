@@ -1,10 +1,4 @@
-"""Mobile Facebook acquisition. Desktop DOM selectors are deliberately unused.
-
-Only rendered primary cards in the mobile scroller are read. Links come from
-each card's own Copy link action, never a comment, quoted post, or guessed ID.
-The persistent profile lifecycle and coarse failure categories are shared with
-the desktop adapter; storage and delivery remain independent of either reader.
-"""
+"""Mobile Facebook acquisition using verified primary-post Copy link actions."""
 
 from __future__ import annotations
 
@@ -21,10 +15,12 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import BrowserContext, ElementHandle, Page, Response, Route
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from .browser import PageState, PlaywrightPostSource, classify_page, read_page_signals
+from .browser import BrowserSession, PageState, classify_page, read_page_signals
 from .exceptions import (
     AccessDeniedError,
+    BrowserUnavailableError,
     ConfigurationError,
     LayoutChangedError,
     TransientNavigationError,
@@ -217,7 +213,7 @@ MOBILE_SCAN_SCRIPT = r"""
         timestampLabel: timestamp.label,
         cardToken: tokens.cards.get(card),
         actionToken: menu.getAttribute('data-action-id'),
-        mediaCount, partial, stableContent: Boolean(text), position: records.length,
+        mediaCount, partial, position: records.length,
       }});
     }
   }
@@ -737,7 +733,7 @@ def _post_target(context: BrowserContext) -> Iterator[Page]:
             target.close()
 
 
-class MobilePostSource(PlaywrightPostSource):
+class MobilePostSource(BrowserSession):
     """A separately implemented mobile reader sharing only browser ownership."""
 
     def _launch_context(
@@ -757,9 +753,62 @@ class MobilePostSource(PlaywrightPostSource):
             options["executable_path"] = str(self.settings.executable_path)
         else:
             options["channel"] = self.settings.browser
-        return playwright.chromium.launch_persistent_context(
-            str(profile_dir), **options
+        try:
+            return playwright.chromium.launch_persistent_context(
+                str(profile_dir), **options
+            )
+        except PlaywrightError as exc:
+            raise BrowserUnavailableError(
+                "The mobile browser could not be started. Run `fbn doctor`."
+            ) from exc
+
+    def _validate_authenticated_profile(
+        self,
+        group: GroupRef,
+        *,
+        navigation_timeout_seconds: float,
+        acquire_lock: bool = True,
+    ) -> PageState:
+        LOGGER.debug(
+            "Authentication profile validation started",
+            group_key=group.key,
+            timeout_seconds=navigation_timeout_seconds,
         )
+        with self._context(
+            headless=True,
+            acquire_lock=acquire_lock,
+        ) as context:
+            page: Page | None = None
+            try:
+                page = context.new_page()
+                page.set_default_timeout(navigation_timeout_seconds * 1_000)
+                page.set_default_navigation_timeout(navigation_timeout_seconds * 1_000)
+                with initial_group_navigation(page) as navigation:
+                    response = page.goto(
+                        mobile_group_url(group), wait_until="domcontentloaded"
+                    )
+                    state = wait_for_mobile_page(
+                        page,
+                        status=response.status if response else None,
+                        timeout_seconds=navigation_timeout_seconds,
+                    )
+                    verified_group_keys(
+                        response, group, page.url, navigation=navigation
+                    )
+                return state
+            except PlaywrightTimeoutError as exc:
+                raise TransientNavigationError(
+                    "Facebook group validation timed out during authentication "
+                    "bootstrap."
+                ) from exc
+            except PlaywrightError as exc:
+                raise TransientNavigationError(
+                    "Facebook group navigation failed during authentication bootstrap."
+                ) from exc
+            finally:
+                if page is not None:
+                    with suppress(PlaywrightError):
+                        page.close()
 
     def fetch_recent(
         self,
@@ -771,7 +820,7 @@ class MobilePostSource(PlaywrightPostSource):
         with self._context(
             headless=self.settings.headless, timezone_id=policy.timezone_name
         ) as context:
-            page = context.new_page()
+            page: Page | None = None
 
             # Reject direct off-site navigations. Final redirect destinations
             # are independently checked before any post is accepted.
@@ -782,8 +831,9 @@ class MobilePostSource(PlaywrightPostSource):
                 else:
                     route.fallback()
 
-            page.route("**/*", guard)
             try:
+                page = context.new_page()
+                page.route("**/*", guard)
                 with initial_group_navigation(page) as navigation:
                     response = page.goto(
                         mobile_group_url(group),
@@ -814,8 +864,9 @@ class MobilePostSource(PlaywrightPostSource):
                     "Mobile acquisition failed; no immediate retry was attempted."
                 ) from exc
             finally:
-                with suppress(PlaywrightError):
-                    page.close()
+                if page is not None:
+                    with suppress(PlaywrightError):
+                        page.close()
 
     def _scan_mobile(
         self,

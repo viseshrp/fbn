@@ -219,17 +219,19 @@ jobs:
             --entrypoint python \
             --network none \
             --shm-size 1gb \
-            --volume "${{ github.workspace }}/tests/fixtures:/fixtures:ro" \
+            --volume "${{ github.workspace }}/tests/mobile_fixtures.py:/fixtures/mobile_fixtures.py:ro" \
+            --env PYTHONPATH=/fixtures \
             fbn:ci \
             -c "from pathlib import Path; \
           from playwright.sync_api import sync_playwright; \
-          from fbn.browser import PageState, classify_page, collect_dom_payloads, read_page_signals; \
+          from fbn.mobile import mobile_records, wait_for_mobile_page; \
+          from mobile_fixtures import mobile_fixture; \
           runtime = sync_playwright().start(); \
           browser = runtime.chromium.launch(channel='chromium', headless=True); \
           page = browser.new_page(); \
-          page.set_content(Path('/fixtures/feed.html').read_text(encoding='utf-8')); \
-          assert classify_page(read_page_signals(page)) is PageState.FEED; \
-          assert len(collect_dom_payloads(page)) == 2; \
+          page.set_content(mobile_fixture([('101','Synthetic Author','Synthetic body')])); \
+          wait_for_mobile_page(page, timeout_seconds=2); \
+          assert page.locator('[aria-label^=\"More options for \"]').count() == 1; \
           browser.close(); \
           runtime.stop()"
 

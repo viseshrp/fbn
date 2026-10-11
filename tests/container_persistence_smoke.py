@@ -9,7 +9,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fbn.browser import PlaywrightPostSource
+from fbn.browser import BrowserSession
 from fbn.config import BrowserSettings
 from fbn.models import GroupRef, Post
 from fbn.state import SQLiteStateRepository
@@ -26,8 +26,8 @@ GROUP = GroupRef(
 OBSERVED_AT = datetime(2026, 7, 28, tzinfo=timezone.utc)
 POST = Post(
     group_key=GROUP.key,
-    post_id="persistence-probe",
-    url=("https://www.facebook.com/groups/container-smoke/posts/persistence-probe/"),
+    post_id="persistenceprobe",
+    url=("https://www.facebook.com/groups/container-smoke/posts/persistenceprobe/"),
     text="sanitized local fixture",
     author="Test",
     observed_at=OBSERVED_AT,
@@ -36,7 +36,7 @@ POST = Post(
 
 
 def write_state() -> None:
-    source = PlaywrightPostSource(
+    source = BrowserSession(
         BrowserSettings(
             browser="chromium",
             profile_dir=PROFILE_DIR,
@@ -67,7 +67,7 @@ def write_state() -> None:
 
 
 def read_state() -> None:
-    source = PlaywrightPostSource(
+    source = BrowserSession(
         BrowserSettings(
             browser="chromium",
             profile_dir=PROFILE_DIR,

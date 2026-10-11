@@ -76,15 +76,7 @@ def render_digest_chunks(
         author = item.author.strip() if item.author else "Unknown author"
         text = item.body.strip() if item.body else "(Visible text unavailable)"
         text = text[:MAX_POST_BODY_CHARS]
-        link = item.url
-        if item.url.rstrip("/") == (
-            f"https://www.facebook.com/groups/{item.group_key}"
-        ):
-            link = (
-                "Direct post link unavailable.\n"
-                f"Group feed (not a direct post link): {item.url}"
-            )
-        section = f"{author}\n{text}\n{link}"
+        section = f"{author}\n{text}\n{item.url}"
         added_length = len(section) + (2 if sections else 0)
         if len(section) > MAX_DIGEST_CHARS:
             raise ValueError("one pending notification exceeds the digest limit")

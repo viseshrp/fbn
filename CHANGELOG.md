@@ -40,6 +40,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Use the verified canonical Facebook post ID as the only active post identity.
+  Schema version 4 upgrades saved direct links, merges delivery receipts, and
+  archives unresolved history without guessing IDs or dropping pending posts.
+- Use the mobile reader for monitoring and authentication; keep bundled
+  notifications and existing cookies, delivery settings, and scan bounds.
 - Resolved hover-only primary post timestamp links within a bounded time
   budget, without clicking or following comment/shared-story links.
 - Kept primary story text and its deduplication key stable when a group-feed
@@ -88,6 +93,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- Desktop DOM extraction, timestamp-hover link recovery, temporary content IDs,
+  content-fingerprint matching, reader-selection flags, and obsolete fixtures.
 - `facebook-scraper`, `schedule`, and Tenacity runtime dependencies.
 - Facebook username, password, per-monitor cookie-file, and custom-user-agent
   options.
