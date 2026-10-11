@@ -48,11 +48,15 @@ MAX_LINK_SECONDS = 10.0
 # Neither the footer nor any following comment preview is a content section.
 MOBILE_SCAN_SCRIPT = r"""
 (includeContent) => {
+  const permalink = false;
   const clean = value => (value || '').normalize('NFKC')
     .replace(/[\u034f\u200b\u200e\u200f\ufeff]/g, '')
     .replace(/\s+/g, ' ').trim();
-  const visible = node => node.getClientRects().length > 0
-    && getComputedStyle(node).visibility !== 'hidden';
+  // Bloks leaves off-screen cards in the DOM with content-visibility:auto.
+  // Their boxes exist, but innerText is empty until scrolling renders them.
+  const visible = node => node.checkVisibility({
+    contentVisibilityAuto: true, visibilityProperty: true, opacityProperty: true,
+  });
   const menuSelector = '[role="button"][aria-label^="More options for "]';
   const textSelector = '[data-mcomponent="ServerTextArea"],'
     + '[data-mcomponent="TextArea"]';
@@ -75,17 +79,32 @@ MOBILE_SCAN_SCRIPT = r"""
     while (node && node.parentElement !== root) node = node.parentElement;
     return node;
   };
+  const sectionsFor = card => Array.from(card.children).filter(node =>
+    node.hasAttribute('data-mcomponent') || node.querySelector('[data-mcomponent]')
+  );
+  const primaryMenus = card => Array.from(card.querySelectorAll(menuSelector))
+    .filter(menu => visible(menu) && !menu.closest(excludedSelector)
+      && sectionsFor(card).slice(0, 2).includes(branch(card, menu)));
+  const action = (section, pattern) => Array.from(section.querySelectorAll(
+    '[role="button"]'
+  )).some(node => !node.closest(excludedSelector) && visible(node)
+    && pattern.test(actionLabel(node)));
+  const footerIndex = (sections, start) => sections.findIndex((section, index) =>
+    index >= start && action(section, /^like(?:,|$)/)
+    && action(section, /^(?:make a comment|comments?)$/));
   for (const root of roots) {
-    for (const card of root.children) {
-      const menus = Array.from(card.querySelectorAll(menuSelector)).filter(visible);
-      if (!menus.length) continue;
-      // A nested discussion or quoted story cannot supply the primary menu.
-      const primary = menus.filter(menu => {
-        if (menu.closest(excludedSelector)) return false;
-        const section = branch(card, menu);
-        if (!section) return false;
-        return Array.from(card.children).slice(0, 2).includes(section);
-      });
+    let cards = Array.from(root.children);
+    if (permalink) {
+      // Single-post pages can put header/body/actions directly in the scroller.
+      // Only use that shape when one primary header precedes its own footer.
+      const menus = primaryMenus(root), sections = sectionsFor(root);
+      if (menus.length === 1) {
+        const start = sections.indexOf(branch(root, menus[0])) + 1;
+        if (footerIndex(sections, start) >= start) cards = [root];
+      }
+    }
+    for (const card of cards) {
+      const primary = primaryMenus(card);
       if (!primary.length) continue;
       candidateCount++;
       if (primary.length !== 1) { missing.add('unique_primary_menu'); continue; }
@@ -99,20 +118,14 @@ MOBILE_SCAN_SCRIPT = r"""
       }
       const timestamps = Array.from(header.querySelectorAll(textSelector)).filter(
         node => visible(node) && clean(node.getAttribute('aria-label'))
-          && !node.contains(authors[0]) && !authors[0].contains(node)
+          && !authors[0].contains(node)
       );
       if (timestamps.length !== 1) {
         missing.add('unique_primary_timestamp'); continue;
       }
-      const sections = Array.from(card.children);
+      const sections = sectionsFor(card);
       const start = sections.indexOf(header) + 1;
-      const action = (section, pattern) => Array.from(section.querySelectorAll(
-        '[role="button"]'
-      )).some(node => !node.closest(excludedSelector) && visible(node)
-        && pattern.test(actionLabel(node)));
-      const end = sections.findIndex((section, index) => index >= start
-        && action(section, /^like(?:,|$)/)
-        && action(section, /^(?:make a comment|comments?)$/));
+      const end = footerIndex(sections, start);
       if (end < start) { missing.add('primary_action_footer'); continue; }
       const texts = [];
       let mediaCount = 0;
@@ -171,13 +184,18 @@ MOBILE_SCAN_SCRIPT = r"""
 }
 """
 
+MOBILE_PERMALINK_SCAN_SCRIPT = MOBILE_SCAN_SCRIPT.replace(
+    "const permalink = false;", "const permalink = true;"
+)
+
 _SORT_CONTROL_SCRIPT = r"""
 ({label, feedOnly = false}) => {
   const clean = value => (value || '').normalize('NFKC')
     .replace(/[\u034f\u200b-\u200f\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   const nodes = Array.from(document.querySelectorAll(
     '[data-mcomponent="ServerTextArea"],[data-mcomponent="TextArea"]'
-  )).filter(node => node.getClientRects().length && clean(node.innerText) === label
+  )).filter(node => node.getClientRects().length
+    && clean(node.innerText).toLowerCase() === label.toLowerCase()
     && !node.closest('[role="article"],[aria-label^="Comment by "]'));
   // Sort text belongs to a group control, not to a story body.
   const controls = nodes.filter(node => {
@@ -251,16 +269,85 @@ def _group_key(value: str) -> str | None:
         return None
 
 
+class InitialGroupNavigation:
+    """Browser-observed provenance, collected only before sort/menu actions.
+
+    A history rename must belong to the original successful group document.
+    Child frames, later documents and aliases scraped from content cannot prove it.
+    """
+
+    def __init__(self, frame_id: str) -> None:
+        self.frame_id = frame_id
+        self.events: list[tuple[str, str]] = []
+        self.overflow = False
+
+    def _append(self, kind: str, url: str) -> None:
+        if len(self.events) >= 10:
+            self.overflow = True
+        else:
+            self.events.append((kind, url))
+
+    def document_event(self, event: dict[str, Any]) -> None:
+        frame = event["frame"]
+        if frame["id"] == self.frame_id:
+            self._append("document", frame["url"])
+
+    def history_event(self, event: dict[str, Any]) -> None:
+        if event["frameId"] == self.frame_id:
+            self._append(event.get("navigationType", "unknown"), event["url"])
+
+    def proves_alias(self, response: Response, group: GroupRef, final: str) -> bool:
+        final_key = _group_key(final)
+        return bool(
+            not self.overflow
+            and group.key.isdigit()
+            and final_key
+            and not final_key.isdigit()
+            and response.status == 200
+            and _group_key(response.url) == group.key
+            and response.request.redirected_from is None
+            and len(self.events) >= 2
+            and self.events[0] == ("document", response.url)
+            and self.events[-1] == ("historyApi", final)
+            and all(
+                kind == "historyApi" and _group_key(url) in {group.key, final_key}
+                for kind, url in self.events[1:]
+            )
+        )
+
+
+@contextmanager
+def initial_group_navigation(page: Page) -> Iterator[InitialGroupNavigation]:
+    session = page.context.new_cdp_session(page)
+    try:
+        session.send("Page.enable")
+        frame_id = session.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
+        proof = InitialGroupNavigation(frame_id)
+        session.on("Page.frameNavigated", proof.document_event)
+        session.on("Page.navigatedWithinDocument", proof.history_event)
+        yield proof
+    finally:
+        # Do not let a subsequent sort, post menu or navigation bless an alias.
+        with suppress(PlaywrightError):
+            session.detach()
+
+
 def verified_group_keys(
-    response: Response | None, group: GroupRef, final_url: str
+    response: Response | None,
+    group: GroupRef,
+    final_url: str,
+    *,
+    navigation: InitialGroupNavigation | None = None,
 ) -> frozenset[str]:
-    """Trust aliases only from an HTTPS group-to-group HTTP redirect chain."""
+    """Trust HTTP redirects or the initial group document's history rename."""
 
     final_key = _group_key(final_url)
     if final_key == group.key:
         return frozenset({group.key})
     if response is None or final_key is None or not group.key.isdigit():
         raise AccessDeniedError("Mobile navigation left the verified group.")
+    if navigation is not None and navigation.proves_alias(response, group, final_url):
+        return frozenset({group.key, final_key})
     chain = []
     request = response.request
     while request is not None and len(chain) < 10:
@@ -285,23 +372,26 @@ def _layout_failure(*missing: str) -> LayoutChangedError:
 
 
 def wait_for_mobile_page(
-    page: Page, *, timeout_seconds: float, status: int | None = None
+    page: Page,
+    *,
+    timeout_seconds: float,
+    status: int | None = None,
+    permalink: bool = False,
 ) -> PageState:
+    script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
     deadline = time.monotonic() + timeout_seconds
     while True:
-        signals = read_page_signals(
-            page, status=status, dom_scan_script=MOBILE_SCAN_SCRIPT
-        )
+        signals = read_page_signals(page, status=status, dom_scan_script=script)
         try:
             state = classify_page(signals)
         except LayoutChangedError:
             if time.monotonic() >= deadline:
-                result = page.evaluate(MOBILE_SCAN_SCRIPT, False)
+                result = page.evaluate(script, False)
                 missing = result.get("missing", [])
                 raise _layout_failure(*(missing or ["primary_mobile_card"])) from None
             page.wait_for_timeout(100)
             continue
-        result = page.evaluate(MOBILE_SCAN_SCRIPT, False)
+        result = page.evaluate(script, False)
         if result.get("missing"):
             if time.monotonic() >= deadline:
                 raise _layout_failure(*result["missing"])
@@ -325,6 +415,7 @@ def _control(
 def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
     """Select and verify the visible sort, even if the URL asks for chronology."""
 
+    page.bring_to_front()
     handle = _control(page, "New posts", feed_only=True)
     if handle is not None:
         handle.dispose()
@@ -357,8 +448,11 @@ def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
 
 
 @contextmanager
-def mobile_records(page: Page) -> Iterator[list[tuple[ElementHandle, dict[str, Any]]]]:
-    root = page.evaluate_handle(MOBILE_SCAN_SCRIPT, True)
+def mobile_records(
+    page: Page, *, permalink: bool = False
+) -> Iterator[list[tuple[ElementHandle, dict[str, Any]]]]:
+    script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
+    root = page.evaluate_handle(script, True)
     handles = []
     try:
         result = root.get_property("records")
@@ -415,8 +509,18 @@ def copy_post_link(page: Page, menu: ElementHandle, *, timeout_seconds: float) -
             page.evaluate(_CAPTURE_RESTORE_SCRIPT)
 
 
+def _publication_label(payload: dict[str, Any]) -> str:
+    # Permalink headers put the verified author and publication time together;
+    # feed headers keep them separate. Strip only that same verified author.
+    label = payload["timestampLabel"].strip(" ,")
+    author = payload["author"]
+    if label.startswith(author + ","):
+        label = label[len(author) + 1 :].strip()
+    return re.sub(r",\s*(?:Private|Public) group$", "", label).strip(" ,")
+
+
 def _post_signature(payload: dict[str, Any]) -> tuple[str, str, str]:
-    return (payload["author"], payload["text"], payload["timestampLabel"])
+    return (payload["author"], payload["text"], _publication_label(payload))
 
 
 def resolve_post_link(
@@ -449,13 +553,14 @@ def resolve_post_link(
         target,
         timeout_seconds=timeout_seconds,
         status=response.status if response is not None else None,
+        permalink=True,
     )
     resolved = parse_post_url(target.url)
     if resolved is None or resolved.group_key not in allowed_group_keys:
         raise _layout_failure("resolved_link_for_verified_group")
     if direct is not None and direct.post_id != resolved.post_id:
         raise _layout_failure("unchanged_direct_post_identity")
-    with mobile_records(target) as records:
+    with mobile_records(target, permalink=True) as records:
         # A permalink page must expose one matching primary post. Text in a
         # comment or quoted post must never validate an unrelated destination.
         matches = [
@@ -463,14 +568,8 @@ def resolve_post_link(
             for _, item in records
             if item["author"] == payload["author"]
             and item["text"] == payload["text"]
-            and item["timestampLabel"] == payload["timestampLabel"]
-            and (
-                bool(item["text"])
-                or (
-                    item["mediaCount"] > 0
-                    and item["timestampLabel"] == payload["timestampLabel"]
-                )
-            )
+            and _publication_label(item) == _publication_label(payload)
+            and (bool(item["text"]) or item["mediaCount"] > 0)
         ]
         if len(records) != 1 or len(matches) != 1:
             raise _layout_failure("resolved_primary_post_matches_source")
@@ -526,17 +625,20 @@ class MobilePostSource(PlaywrightPostSource):
             page.route("**/*", guard)
             target.route("**/*", guard)
             try:
-                response = page.goto(
-                    mobile_group_url(group),
-                    wait_until="domcontentloaded",
-                    timeout=policy.navigation_timeout_seconds * 1_000,
-                )
-                wait_for_mobile_page(
-                    page,
-                    timeout_seconds=policy.navigation_timeout_seconds,
-                    status=response.status if response else None,
-                )
-                aliases = verified_group_keys(response, group, page.url)
+                with initial_group_navigation(page) as navigation:
+                    response = page.goto(
+                        mobile_group_url(group),
+                        wait_until="domcontentloaded",
+                        timeout=policy.navigation_timeout_seconds * 1_000,
+                    )
+                    wait_for_mobile_page(
+                        page,
+                        timeout_seconds=policy.navigation_timeout_seconds,
+                        status=response.status if response else None,
+                    )
+                    aliases = verified_group_keys(
+                        response, group, page.url, navigation=navigation
+                    )
                 select_new_posts(
                     page, timeout_seconds=min(5, policy.navigation_timeout_seconds)
                 )
@@ -628,7 +730,7 @@ class MobilePostSource(PlaywrightPostSource):
                     post = replace(
                         posts[0],
                         published_at=parse_facebook_timestamp(
-                            payload["timestampLabel"],
+                            _publication_label(payload),
                             observed_at,
                             timezone_name=policy.timezone_name,
                         )

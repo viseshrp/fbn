@@ -170,7 +170,7 @@ def _run_options(function: CommandFunction) -> CommandFunction:
         click.option(
             "--view",
             type=click.Choice(["desktop", "mobile"]),
-            default="desktop",
+            default="mobile",
             envvar="FBN_VIEW",
             show_default=True,
             show_envvar=True,
@@ -359,7 +359,7 @@ def _run_once(
     apprise_url: str | None,
     dry_run: bool,
     notify_initial: bool,
-    view: str = "desktop",
+    view: str = "mobile",
 ) -> RunSummary:
     source = _post_source(settings, view)
     sink = _notification_sink(apprise_url=apprise_url, dry_run=dry_run)

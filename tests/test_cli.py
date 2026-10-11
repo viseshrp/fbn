@@ -461,9 +461,10 @@ def test_monitor_propagates_headless_chromium_and_dry_run(
 @pytest.mark.parametrize(
     ("arguments", "environment", "expected"),
     [
-        ([], {}, "desktop"),
+        ([], {}, "mobile"),
         (["--view", "mobile"], {}, "mobile"),
         ([], {"FBN_VIEW": "mobile"}, "mobile"),
+        ([], {"FBN_VIEW": "desktop"}, "desktop"),
         (["--view", "desktop"], {"FBN_VIEW": "mobile"}, "desktop"),
     ],
 )

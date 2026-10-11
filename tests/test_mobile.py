@@ -70,6 +70,124 @@ def test_unproven_or_cross_group_aliases_are_rejected(urls):
         verified_group_keys(redirect_response(*urls), parse_group_ref("123"), urls[-1])
 
 
+def history_proof(*events):
+    from fbn.mobile import InitialGroupNavigation
+
+    proof = InitialGroupNavigation("main")
+    for kind, url in events:
+        if kind == "document":
+            proof.document_event({"frame": {"id": "main", "url": url}})
+        else:
+            proof.history_event({"frameId": "main", "url": url, "navigationType": kind})
+    return proof
+
+
+def test_initial_same_document_group_rename_is_verified():
+    group = parse_group_ref("123")
+    initial = mobile_group_url(group)
+    final = "https://m.facebook.com/groups/test-group/"
+    response = redirect_response(initial)
+    response.status, response.url = 200, initial
+    proof = history_proof(("document", initial), ("historyApi", final))
+    assert verified_group_keys(response, group, final, navigation=proof) == {
+        "123",
+        "test-group",
+    }
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [("historyApi", "https://m.facebook.com/groups/test-group/")],
+        [("document", "https://m.facebook.com/groups/unrelated/")],
+        [("document", "https://evil.invalid/groups/123/")],
+        [("document", "https://m.facebook.com/groups/test-group/")],
+        [
+            ("document", "https://m.facebook.com/groups/123/"),
+            ("document", "https://m.facebook.com/groups/test-group/"),
+        ],
+        [
+            ("document", "https://m.facebook.com/groups/123/"),
+            ("historyApi", "https://m.facebook.com/groups/unrelated/"),
+            ("historyApi", "https://m.facebook.com/groups/test-group/"),
+        ],
+        [
+            ("document", "https://m.facebook.com/groups/123/"),
+            ("fragment", "https://m.facebook.com/groups/test-group/"),
+        ],
+    ],
+)
+def test_history_alias_rejects_unbound_or_cross_document_evidence(events):
+    initial = "https://m.facebook.com/groups/123/"
+    response = redirect_response(initial)
+    response.status, response.url = 200, initial
+    with pytest.raises(AccessDeniedError):
+        verified_group_keys(
+            response,
+            parse_group_ref("123"),
+            "https://m.facebook.com/groups/test-group/",
+            navigation=history_proof(*events),
+        )
+
+
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_history_alias_requires_successful_group_response(status):
+    initial = mobile_group_url(parse_group_ref("123"))
+    final = "https://m.facebook.com/groups/test-group/"
+    response = redirect_response(initial)
+    response.status, response.url = status, initial
+    with pytest.raises(AccessDeniedError):
+        verified_group_keys(
+            response,
+            parse_group_ref("123"),
+            final,
+            navigation=history_proof(("document", initial), ("historyApi", final)),
+        )
+
+
+def test_subframe_events_cannot_prove_group_rename():
+    proof = history_proof(("document", "https://m.facebook.com/groups/123/"))
+    proof.history_event(
+        {
+            "frameId": "child",
+            "navigationType": "historyApi",
+            "url": "https://m.facebook.com/groups/test-group/",
+        }
+    )
+    response = redirect_response("https://m.facebook.com/groups/123/")
+    response.status, response.url = 200, response.request.url
+    with pytest.raises(AccessDeniedError):
+        verified_group_keys(
+            response,
+            parse_group_ref("123"),
+            "https://m.facebook.com/groups/test-group/",
+            navigation=proof,
+        )
+
+
+@pytest.mark.parametrize("invalid", ["overflow", "response", "final", "numeric"])
+def test_history_alias_is_bounded_and_bound_to_response_and_final_url(invalid):
+    initial = mobile_group_url(parse_group_ref("123"))
+    final = "https://m.facebook.com/groups/test-group/"
+    response = redirect_response(initial)
+    response.status, response.url = 200, initial
+    proof = history_proof(("document", initial), ("historyApi", final))
+    if invalid == "overflow":
+        for _ in range(10):
+            proof.history_event(
+                {"frameId": "main", "url": final, "navigationType": "historyApi"}
+            )
+    elif invalid == "response":
+        response.url = "https://m.facebook.com/groups/999/"
+    elif invalid == "final":
+        final = "https://m.facebook.com/groups/another/"
+    else:
+        final = "https://m.facebook.com/groups/999/"
+        proof = history_proof(("document", initial), ("historyApi", final))
+    with pytest.raises(AccessDeniedError):
+        verified_group_keys(response, parse_group_ref("123"), final, navigation=proof)
+
+
 def test_mobile_accessible_timestamp_is_parsed_in_configured_timezone():
     parsed = parse_facebook_timestamp(
         "Sunday, October 11, 2026 at 10:00 AM",
@@ -78,6 +196,39 @@ def test_mobile_accessible_timestamp_is_parsed_in_configured_timezone():
     )
     assert parsed is not None
     assert parsed.astimezone(timezone.utc).hour == 14
+
+
+def test_sort_activates_feed_tab_before_reading_controls(monkeypatch):
+    from fbn import mobile
+
+    activated = []
+    page = SimpleNamespace(bring_to_front=lambda: activated.append(True))
+
+    def control(*args, **kwargs):
+        assert activated == [True]
+        return SimpleNamespace(dispose=lambda: None)
+
+    monkeypatch.setattr(mobile, "_control", control)
+    mobile.select_new_posts(page, timeout_seconds=1)
+
+
+@pytest.mark.parametrize("author_prefix", ["", "Author, "])
+def test_publication_label_removes_only_verified_author_and_privacy(author_prefix):
+    from fbn.mobile import _publication_label
+
+    label = _publication_label(
+        {
+            "author": "Author",
+            "timestampLabel": f", {author_prefix}2 hours ago, Private group",
+        }
+    )
+    assert label == "2 hours ago"
+    assert (
+        _publication_label(
+            {"author": "Author", "timestampLabel": "Another, 2 hours ago, Public group"}
+        )
+        != label
+    )
 
 
 def test_newer_post_below_marker_is_ordered_before_marker():

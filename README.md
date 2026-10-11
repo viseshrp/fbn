@@ -150,7 +150,7 @@ Keeping `FBN_APPRISE_URL` out of shell history is safer than passing
 from `fbn` errors. A notification includes visible post text and links, so that
 content is sent to the notification service selected in the Apprise URL.
 
-The default desktop reader finds some post permalinks only on hover. FBN
+The optional desktop reader finds some post permalinks only on hover. FBN
 hovers unresolved primary-story timestamps without clicking or navigating,
 with at most ten attempts and a two-second budget per extraction pass. Comment,
 reply, quoted-story, and off-site timestamps are excluded. Recovering a link
@@ -158,11 +158,11 @@ preserves the story's visible-content identity to avoid sending it again.
 If no direct link is available, the notification explicitly labels its group
 feed link as a fallback rather than a link to that post.
 
-### Experimental mobile reader
+### Mobile reader (default)
 
-`check` and `monitor` accept `--view mobile` or `FBN_VIEW=mobile`. Desktop
-remains the default and can be selected explicitly with `--view desktop`.
-Compose passes `FBN_VIEW` from `.env`, defaulting to `desktop`. Authentication,
+`check` and `monitor` default to the mobile reader. Desktop remains available
+for rollback with `--view desktop` or `FBN_VIEW=desktop`. Compose passes
+`FBN_VIEW` from `.env`, defaulting to `mobile`. Authentication,
 the SQLite database, delivery history, and notification configuration are shared;
 changing the reader does not require another bootstrap or a new database.
 
@@ -171,7 +171,7 @@ layout at `m.facebook.com`, using Playwright's standard Pixel 7 emulation. It
 explicitly selects and verifies **New posts**. It reads each main post's body
 and ignores quoted posts, comments, replies, and comment previews. Each link
 comes from that main post's own **Copy link** menu. The resolved page must have
-the same author, body, and timestamp and a canonical post URL for the verified
+the same author, body, and publication time and a canonical post URL for the verified
 group. A missing or mismatched link stops the check; mobile never substitutes
 the group feed or a previous clipboard value.
 
@@ -183,12 +183,21 @@ the old marker in place so a later check can keep catching up. Scrolling is
 bounded by `--max-scrolls`, the catch-up sample limit, and a 90-second scan
 budget. None of this guarantees recovery of a post Facebook never displays.
 
-Keep desktop in production until mobile passes both the offline regression
-suite and a bounded live check. Numeric group IDs redirected to slugs are
-accepted only when their HTTP redirect chain proves the mapping. The tested
-live layout currently changes that URL through JavaScript instead, without
-this proof, so the mobile reader deliberately stops. Do not weaken group
-verification or change the default to work around that failure.
+Numeric group IDs may become readable slugs through an HTTP redirect or the
+initial group document's history API. The latter is accepted only with
+browser-observed main-frame navigation evidence tied to the successful original
+group response, collected before sorting or opening post menus. An unrelated
+group, child frame, later document, or unproven alias stops the check.
+
+Off-screen cards whose rendering Facebook defers are read after scrolling makes
+them available. A visible but incomplete card still stops the check and logs the
+missing component names. The permalink reader supports both wrapped cards and
+separate header/body/action sections, stopping before comments in either layout.
+
+The mobile switch passed a bounded read-only Pi check of three real posts using
+the existing session. Each Copy link destination matched its own post, with no
+database writes or notifications during that check. Keep the desktop rollback
+until the deployed mobile service has also completed its scheduled checks.
 
 State is committed before notification delivery and pending deliveries survive
 restarts. Delivery is at least once: a crash after a successful send but before

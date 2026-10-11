@@ -20,7 +20,7 @@ services:
       FBN_PROFILE_DIR: /home/fbn/.local/share/fbn/profile
       FBN_STATE_FILE: /home/fbn/.local/share/fbn/state.sqlite3
       FBN_TIMEZONE: "${FBN_TIMEZONE:-UTC}"
-      FBN_VIEW: "${FBN_VIEW:-desktop}"
+      FBN_VIEW: "${FBN_VIEW:-mobile}"
     volumes:
       - fbn-data:/home/fbn/.local/share/fbn
     depends_on:

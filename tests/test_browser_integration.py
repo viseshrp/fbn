@@ -295,6 +295,69 @@ def test_mobile_waits_for_all_primary_cards_to_finish_loading(tmp_path):
         assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
 
 
+def test_mobile_defers_unrendered_cards_until_scrolling_makes_them_readable(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_fixture([("301", "First", "Body"), ("302", "Second", "Later body")])
+        )
+        card = page.locator('[data-story="302"]')
+        card.evaluate("""n => {
+            n.style.marginTop = '10000px';
+            n.style.contentVisibility = 'auto';
+            n.style.containIntrinsicSize = '500px';
+        }""")
+        page.wait_for_timeout(100)
+        assert wait_for_mobile_page(page, timeout_seconds=0.1) is PageState.FEED
+        with mobile_records(page) as records:
+            assert [payload["author"] for _, payload in records] == ["First"]
+        card.scroll_into_view_if_needed()
+        page.wait_for_timeout(100)
+        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        with mobile_records(page) as records:
+            assert [payload["author"] for _, payload in records] == ["First", "Second"]
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_mobile_verifies_permalink_with_author_inside_timestamp_component(
+    tmp_path, wrapped
+):
+    html = mobile_fixture([("301", "Author", "Body")])
+    target_html = html.replace('<span role="link">Author</span>', "Group title")
+    target_html = target_html.replace(
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM"',
+        'aria-label="Author, Sunday, October 11, 2026 at 10:00 AM"',
+    ).replace(">2h</div>", '><span role="link">Author</span> 2h</div>')
+    if not wrapped:
+        target_html += """<script>
+          const root = document.querySelector('[data-type=vscroller]');
+          root.firstElementChild.remove();
+          const card = root.querySelector('[data-story]');
+          card.firstElementChild.remove();
+          card.replaceWith(...card.children);
+          root.prepend(document.createElement('div'), document.createElement('div'));
+        </script>"""
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            payload = records[0][1]
+        target = context.new_page()
+        target.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=target_html
+            ),
+        )
+        assert resolve_post_link(
+            target,
+            "https://m.facebook.com/groups/contract-group/posts/301/",
+            payload,
+            frozenset({"contract-group"}),
+            timeout_seconds=1,
+        ).endswith("/posts/301/")
+
+
 def test_mobile_does_not_accept_sort_text_inside_a_post(tmp_path):
     html = mobile_fixture([("301", "Author", "New posts")], sorted_feed=False)
     html = html.replace('id="sort-label"', 'id="sort-label" style="display:none"')
@@ -395,8 +458,12 @@ def test_mobile_rejects_wrong_copied_link_destinations(tmp_path, wrong):
             )
 
 
-def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(tmp_path):
-    group = parse_group_ref("contract-group")
+@pytest.mark.parametrize("rename", [False, True])
+@pytest.mark.parametrize("uppercase_sort", [False, True])
+def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(
+    tmp_path, rename, uppercase_sort
+):
+    group = parse_group_ref("123" if rename else "contract-group")
     stories = [("302", "Author", "Newer"), ("301", "Author", "Marker")]
     with _local_context(tmp_path) as context:
         original_pages = tuple(context.pages)
@@ -410,11 +477,18 @@ def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(tmp_path):
                 if is_post
                 else stories
             )
-            html = mobile_fixture(chosen, sorted_feed=is_post)
+            html = mobile_fixture(
+                chosen, sorted_feed=is_post, uppercase_sort=uppercase_sort
+            )
+            if rename and not is_post:
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/')</script>"
+                )
             if "/share/" in url:
                 html += (
                     "<script>history.replaceState(null,'','/groups/"
-                    f"{group.key}/posts/{key}/')</script>"
+                    f"contract-group/posts/{key}/')</script>"
                 )
             route.fulfill(status=200, content_type="text/html", body=html)
 

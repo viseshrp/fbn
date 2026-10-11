@@ -11,6 +11,7 @@ def mobile_fixture(
     *,
     group: str = "contract-group",
     sorted_feed: bool = True,
+    uppercase_sort: bool = False,
 ) -> str:
     cards = []
     for post_id, author, body in stories:
@@ -44,17 +45,33 @@ def mobile_fixture(
             "</div></div>"
         )
     sort_label = "New posts" if sorted_feed else "Most relevant"
+    sort_action = "onclick=\"document.getElementById('sort-menu').hidden=false\""
+    sort_control = (
+        f'<div id="sort-label" data-mcomponent="ServerTextArea" '
+        f'style="pointer-events:none">{sort_label}</div>'
+        '<div data-mcomponent="ServerTextArea" data-action-id="sort" '
+        f"{sort_action}>SORT</div>"
+        if uppercase_sort
+        else (
+            f'<div id="sort-label" data-mcomponent="ServerTextArea">{sort_label}</div>'
+            f"<button {sort_action}>"
+            '<div data-mcomponent="ServerTextArea">\u200bSort\u200b</div>'
+            "</button>"
+        )
+    )
     return (
         '<!doctype html><html><head><meta charset="utf-8"></head>'
         '<body><div data-mcomponent="MScreen">'
         '<div data-mcomponent="MContainer" data-type="vscroller">'
         '<div data-mcomponent="MContainer">'
-        f'<div id="sort-label" data-mcomponent="ServerTextArea">{sort_label}</div>'
-        "<button onclick=\"document.getElementById('sort-menu').hidden=false\">"
-        '<div data-mcomponent="ServerTextArea">\u200bSort\u200b</div>'
-        "</button></div>" + "".join(cards) + "</div></div>"
+        + sort_control
+        + "</div>"
+        + "".join(cards)
+        + "</div></div>"
         '<div id="sort-menu" hidden><button onclick="setSort()">'
-        '<div data-mcomponent="ServerTextArea">New posts</div></button></div>'
+        '<div data-mcomponent="ServerTextArea">'
+        + ("NEW POSTS" if uppercase_sort else "New posts")
+        + "</div></button></div>"
         '<div id="post-menu" hidden>'
         '<button aria-label="Close" onclick="closePost()">Close</button>'
         '<button aria-label="Share">Share</button>'
