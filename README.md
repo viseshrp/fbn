@@ -168,9 +168,13 @@ the group feed or a previous clipboard value.
 The post's first action row is the body boundary, even when its painting is
 deferred. An incomplete row is not replaced with a later reply's action row.
 Link verification waits for the same document to finish rendering within its
-existing timeout, without reloading or accepting a different destination.
+existing timeout. If a share page adds a separate panel with extra body controls,
+it opens that already-verified canonical mobile URL once and again requires an
+exact author, body, and publication match. This shares the original deadline;
+it never accepts a prefix match or retries an authentication/account failure.
 Failures log the exact failed comparison (author, body, publication time, or
-primary-post count), text lengths and partial/media flags, never private content.
+primary-post count), text-part lengths, control counts and partial/media flags,
+never private content.
 
 Later checks scroll toward the saved notification marker and read at least one
 additional pass after finding it. Known publication times correct visible

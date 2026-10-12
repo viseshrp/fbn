@@ -183,6 +183,7 @@ MOBILE_SCAN_SCRIPT = r"""
       const texts = [];
       let mediaCount = 0;
       let partial = false;
+      let bodyControlCount = 0;
       for (const section of sections.slice(start, end)) {
         const excluded = Array.from(section.querySelectorAll(excludedSelector));
         for (const nestedMenu of section.querySelectorAll(menuSelector)) {
@@ -212,8 +213,10 @@ MOBILE_SCAN_SCRIPT = r"""
         mediaCount += Array.from(section.querySelectorAll(
           '[data-mcomponent="ServerImageArea"],[data-mcomponent="ImageArea"],img,video'
         )).filter(node => visible(node) && own(node)).length;
-        partial ||= Array.from(section.querySelectorAll('[role="button"]'))
-          .some(node => own(node) && clean(node.innerText) === 'See more');
+        const controls = Array.from(section.querySelectorAll('[role="button"]'))
+          .filter(node => own(node));
+        bodyControlCount += controls.filter(visible).length;
+        partial ||= controls.some(node => clean(node.innerText) === 'See more');
       }
       const text = clean(texts.join(' '));
       if (!text && !mediaCount) { missing.add('primary_body_or_media'); continue; }
@@ -224,6 +227,8 @@ MOBILE_SCAN_SCRIPT = r"""
         cardToken: tokens.cards.get(card),
         actionToken: menu.getAttribute('data-action-id'),
         mediaCount, partial, position: records.length,
+        bodyControlCount, bodyTextPartCount: texts.length,
+        bodyTextLengths: texts.slice(0, 32).map(text => text.length),
       }});
     }
   }
@@ -693,8 +698,31 @@ def _verify_primary_post(
             target_partial=item.get("partial", False),
             source_media_count=payload["mediaCount"],
             target_media_count=item["mediaCount"],
+            source_text_parts=payload.get("bodyTextLengths", []),
+            target_text_parts=item.get("bodyTextLengths", []),
+            source_text_part_count=payload.get("bodyTextPartCount"),
+            target_text_part_count=item.get("bodyTextPartCount"),
+            source_body_controls=payload.get("bodyControlCount"),
+            target_body_controls=item.get("bodyControlCount"),
         )
         raise _layout_failure(*missing)
+
+
+def _has_additional_body_panel(item: dict[str, Any], source: dict[str, Any]) -> bool:
+    """A panel can trigger one re-render, never qualify a mismatched post."""
+
+    comparisons = _primary_post_comparisons(item, source)
+    return (
+        comparisons["resolved_primary_author_matches_source"]
+        and comparisons["resolved_primary_publication_matches_source"]
+        and bool(source["text"])
+        and item["text"] != source["text"]
+        and item["text"].startswith(source["text"] + " ")
+        and not source.get("partial", False)
+        and not item.get("partial", False)
+        and source.get("bodyControlCount") == 0
+        and item.get("bodyControlCount", 0) >= 2
+    )
 
 
 def resolve_post_link(
@@ -750,18 +778,49 @@ def resolve_post_link(
         raise _layout_failure("resolved_link_for_verified_group")
     if direct is not None and direct.post_id != resolved.post_id:
         raise _layout_failure("unchanged_direct_post_identity")
+    checked_canonical = False
     while True:
         if parse_post_url(target.url) != resolved:
             raise _layout_failure("unchanged_resolved_post_identity")
         with mobile_records(target, permalink=True) as records:
             items = [item for _, item in records]
         # A supported header/footer can arrive before the body finishes
-        # rendering. Re-read this same document within the original deadline;
-        # never reload, navigate again, relax matching, or log every poll.
+        # rendering. Re-read within the original deadline without relaxing
+        # matching or logging every poll.
         if len(items) == 1 and all(
             _primary_post_comparisons(items[0], payload).values()
         ):
             break
+        if (
+            not checked_canonical
+            and len(items) == 1
+            and _has_additional_body_panel(items[0], payload)
+        ):
+            # Share pages sometimes append an unrelated interface panel to the
+            # body. Re-render the already resolved mobile post once, then still
+            # require full equality. Never follow a different identity, extend
+            # the budget, or retry an account/access/navigation failure.
+            wait_for_mobile_page(
+                target,
+                timeout_seconds=_remaining_seconds(deadline, "canonical_post_check"),
+                permalink=True,
+            )
+            checked_canonical = True
+            LOGGER.info("Checking canonical post after additional body controls")
+            with _action_phase("canonical_post_navigation"):
+                response = target.goto(
+                    "https://m.facebook.com" + urlsplit(resolved.url).path,
+                    wait_until="domcontentloaded",
+                    timeout=_remaining_seconds(deadline, "canonical_post_navigation")
+                    * 1_000,
+                )
+            wait_for_mobile_page(
+                target,
+                timeout_seconds=_remaining_seconds(deadline, "canonical_post_render"),
+                status=response.status if response is not None else None,
+                permalink=True,
+            )
+            continue
         if time.monotonic() >= deadline:
             _verify_primary_post(items, payload)
         target.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))

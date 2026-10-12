@@ -785,6 +785,77 @@ def test_mobile_waits_for_permalink_body_to_finish_rendering(
         assert len(requests) == 1
 
 
+@pytest.mark.parametrize(
+    "destination",
+    ["matching", "wrong_body", "wrong_identity", "account_action", "persistent_panel"],
+)
+def test_mobile_extra_panel_gets_one_strict_canonical_check(tmp_path, destination):
+    source = {
+        "author": "Author",
+        "text": "Expected body",
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+        "mediaCount": 0,
+        "bodyControlCount": 0,
+        "partial": False,
+    }
+    panel = (
+        '<div data-mcomponent="MContainer">'
+        '<div data-mcomponent="ServerTextArea">Synthetic interface panel</div>'
+        '<button role="button"><span data-mcomponent="TextArea">First</span>'
+        '</button><button role="button"><span data-mcomponent="TextArea">'
+        "Second</span></button></div>"
+    )
+    canonical = "https://m.facebook.com/groups/contract-group/posts/999/"
+    requests = []
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+
+        def serve(route):
+            requests.append(route.request.url)
+            share = "/share/" in route.request.url
+            body = "Expected body"
+            if not share and destination == "wrong_body":
+                body += " Different continuation"
+            html = mobile_fixture([("999", "Author", body)])
+            if share or destination == "persistent_panel":
+                footer = (
+                    '</div><div data-mcomponent="MContainer">'
+                    '<button role="button" aria-label="Like,'
+                )
+                html = html.replace(footer, "</div>" + panel + footer[6:])
+            path = "/groups/contract-group/posts/999/"
+            if not share and destination == "wrong_identity":
+                path = "/groups/contract-group/posts/888/"
+            if not share and destination == "account_action":
+                path = "/checkpoint/"
+                html = '<input name="approvals_code">'
+            html += f"<script>history.replaceState(null,'','{path}')</script>"
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        error = (
+            AccountActionRequiredError
+            if destination == "account_action"
+            else LayoutChangedError
+        )
+
+        def resolve():
+            return resolve_post_link(
+                page,
+                "https://m.facebook.com/share/p/999/",
+                source,
+                frozenset({"contract-group"}),
+                timeout_seconds=2,
+            )
+
+        if destination == "matching":
+            assert resolve() == canonical.replace("m.facebook.com", "www.facebook.com")
+        else:
+            with pytest.raises(error):
+                resolve()
+        assert requests == ["https://m.facebook.com/share/p/999/", canonical]
+
+
 @pytest.mark.parametrize("footer_state", ["incomplete", "virtualized", "loading"])
 def test_mobile_never_uses_a_reply_action_row_as_the_post_footer(
     tmp_path, footer_state
