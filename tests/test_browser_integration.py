@@ -13,7 +13,11 @@ import pytest
 from fbn.browser import PageState
 from fbn.config import BrowserSettings
 from fbn.exceptions import (
+    AccessDeniedError,
+    AccountActionRequiredError,
+    AuthenticationRequiredError,
     LayoutChangedError,
+    TransientNavigationError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
 from fbn.mobile import (
@@ -27,6 +31,42 @@ from fbn.mobile import (
 from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
 from tests.mobile_fixtures import mobile_fixture
+
+
+@pytest.mark.parametrize(
+    ("html", "error"),
+    [
+        ('<input name="email">', AuthenticationRequiredError),
+        ('<input name="approvals_code">', AccountActionRequiredError),
+        ('<iframe src="about:blank#captcha"></iframe>', AccountActionRequiredError),
+        ("<main>Content isn't available</main>", AccessDeniedError),
+        ("<main>Temporarily blocked</main>", TransientNavigationError),
+        ("<main>Unknown layout</main>", LayoutChangedError),
+    ],
+)
+def test_mobile_dom_failure_states_stop_without_reading_posts(tmp_path, html, error):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(error):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_mobile_valid_post_quoting_error_text_is_still_a_post(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_fixture(
+                [
+                    (
+                        "101",
+                        "Synthetic Author",
+                        "Content isn't available. Temporarily blocked.",
+                    )
+                ]
+            )
+        )
+        assert wait_for_mobile_page(page, timeout_seconds=0.1) is PageState.FEED
 
 
 @pytest.fixture
