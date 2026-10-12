@@ -86,11 +86,21 @@ MOBILE_SCAN_SCRIPT = r"""
       && sectionsFor(card).slice(0, 2).includes(branch(card, menu)));
   const action = (section, pattern) => Array.from(section.querySelectorAll(
     '[role="button"]'
-  )).some(node => !node.closest(excludedSelector) && visible(node)
+  )).some(node => !node.closest(excludedSelector) && node.checkVisibility({
+    visibilityProperty: true, opacityProperty: true,
+  })
     && pattern.test(actionLabel(node)));
-  const footerIndex = (sections, start) => sections.findIndex((section, index) =>
-    index >= start && action(section, /^like(?:,|$)/)
-    && action(section, /^(?:make a comment|comments?)$/));
+  const footerIndex = (sections, start) => {
+    for (let index = start; index < sections.length; index++) {
+      const like = action(sections[index], /^(?:like|unlike)(?:,|$)/);
+      const comment = action(sections[index], /^(?:make a comment|comments?)$/);
+      // The first action row belongs to the post. If it is incomplete, wait
+      // for it; never scan through replies to find a later substitute footer.
+      // Its aria labels remain usable when content-visibility:auto defers paint.
+      if (like || comment) return like && comment ? index : -1;
+    }
+    return -1;
+  };
   for (const root of roots) {
     let cards = Array.from(root.children);
     if (permalink) {
@@ -645,6 +655,48 @@ def _post_signature(payload: dict[str, Any]) -> tuple[str, str, str]:
     return (payload["author"], payload["text"], _publication_label(payload))
 
 
+def _primary_post_comparisons(
+    item: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, bool]:
+    return {
+        "resolved_primary_author_matches_source": item["author"] == payload["author"],
+        "resolved_primary_body_matches_source": item["text"] == payload["text"],
+        "resolved_primary_publication_matches_source": (
+            _publication_label(item) == _publication_label(payload)
+        ),
+        "resolved_primary_body_or_media": bool(item["text"]) or item["mediaCount"] > 0,
+    }
+
+
+def _verify_primary_post(
+    records: list[dict[str, Any]], payload: dict[str, Any]
+) -> None:
+    """Require one matching post, reporting only safe comparison results."""
+
+    if len(records) != 1:
+        LOGGER.warning("Post link verification failed", primary_post_count=len(records))
+        raise _layout_failure("unique_resolved_primary_post")
+    item = records[0]
+    comparisons = _primary_post_comparisons(item, payload)
+    missing = [name for name, matches in comparisons.items() if not matches]
+    if missing:
+        LOGGER.warning(
+            "Post link verification failed",
+            author_matches=comparisons["resolved_primary_author_matches_source"],
+            body_matches=comparisons["resolved_primary_body_matches_source"],
+            publication_matches=comparisons[
+                "resolved_primary_publication_matches_source"
+            ],
+            source_body_chars=len(payload["text"]),
+            target_body_chars=len(item["text"]),
+            source_partial=payload.get("partial", False),
+            target_partial=item.get("partial", False),
+            source_media_count=payload["mediaCount"],
+            target_media_count=item["mediaCount"],
+        )
+        raise _layout_failure(*missing)
+
+
 def resolve_post_link(
     target: Page,
     copied: str,
@@ -698,19 +750,21 @@ def resolve_post_link(
         raise _layout_failure("resolved_link_for_verified_group")
     if direct is not None and direct.post_id != resolved.post_id:
         raise _layout_failure("unchanged_direct_post_identity")
-    with mobile_records(target, permalink=True) as records:
-        # A permalink page must expose one matching primary post. Text in a
-        # comment or quoted post must never validate an unrelated destination.
-        matches = [
-            item
-            for _, item in records
-            if item["author"] == payload["author"]
-            and item["text"] == payload["text"]
-            and _publication_label(item) == _publication_label(payload)
-            and (bool(item["text"]) or item["mediaCount"] > 0)
-        ]
-        if len(records) != 1 or len(matches) != 1:
-            raise _layout_failure("resolved_primary_post_matches_source")
+    while True:
+        if parse_post_url(target.url) != resolved:
+            raise _layout_failure("unchanged_resolved_post_identity")
+        with mobile_records(target, permalink=True) as records:
+            items = [item for _, item in records]
+        # A supported header/footer can arrive before the body finishes
+        # rendering. Re-read this same document within the original deadline;
+        # never reload, navigate again, relax matching, or log every poll.
+        if len(items) == 1 and all(
+            _primary_post_comparisons(items[0], payload).values()
+        ):
+            break
+        if time.monotonic() >= deadline:
+            _verify_primary_post(items, payload)
+        target.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
     return resolved.url
 
 

@@ -301,8 +301,9 @@ def _safe_error_notification(
             "Complete the requested account action in your browser before restarting."
         ),
         "LayoutChangedError": (
-            "The feed has no supported post structure. Inspect the missing layout "
-            "signals in the monitor log before restarting."
+            "FBN could not safely read the feed or verify a copied post link. "
+            "No unverified posts were saved or notified. Inspect the missing layout "
+            "signals and post comparison results in the monitor log before restarting."
         ),
         "DeliveryError": (
             "Check the notification service. Undelivered posts remain queued."

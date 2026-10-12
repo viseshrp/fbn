@@ -11,6 +11,39 @@ from fbn.mobile import MobilePostSource, mobile_group_url, verified_group_keys
 from fbn.models import Post
 
 
+@pytest.mark.parametrize("field", ["author", "text", "timestampLabel", "count"])
+def test_primary_link_mismatch_identifies_failed_comparison_without_content(
+    field, capsys
+):
+    from fbn.exceptions import LayoutChangedError
+    from fbn.logging import configure_logging
+    from fbn.mobile import _verify_primary_post
+
+    source = {
+        "author": "private-author",
+        "text": "private-body",
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+        "mediaCount": 0,
+        "partial": False,
+    }
+    target = dict(source)
+    names = {
+        "author": "resolved_primary_author_matches_source",
+        "text": "resolved_primary_body_matches_source",
+        "timestampLabel": "resolved_primary_publication_matches_source",
+        "count": "unique_resolved_primary_post",
+    }
+    if field != "count":
+        target[field] = "private-mismatch"
+    configure_logging(True)
+    with pytest.raises(LayoutChangedError, match=names[field]):
+        _verify_primary_post([] if field == "count" else [target], source)
+    output = capsys.readouterr().out
+    assert names[field] in output
+    assert "private-" not in output
+    assert "October" not in output
+
+
 def test_mobile_launch_failure_is_redacted(tmp_path):
     from playwright.sync_api import Error as PlaywrightError
 

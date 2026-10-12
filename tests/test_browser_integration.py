@@ -736,6 +736,99 @@ def test_mobile_rejects_wrong_copied_link_destinations(tmp_path, wrong):
             )
 
 
+@pytest.mark.parametrize("changed_identity", [False, True])
+def test_mobile_waits_for_permalink_body_to_finish_rendering(
+    tmp_path, changed_identity
+):
+    source = {
+        "author": "Author",
+        "text": "Expected complete body",
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+        "mediaCount": 0,
+    }
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        html = mobile_fixture([("999", "Author", "Still rendering")])
+        html += """<script>
+          history.replaceState(null,'','/groups/contract-group/posts/999/');
+          setTimeout(() => {
+            const body = document.querySelector('[data-story="999"]')
+              .children[2].querySelector('[data-mcomponent="ServerTextArea"]');
+            body.textContent = 'Expected complete body';
+          }, 250);
+        </script>"""
+        if changed_identity:
+            html += """<script>setTimeout(() => history.replaceState(
+              null, '', '/groups/contract-group/posts/888/'), 100);</script>"""
+        requests = []
+
+        def serve(route):
+            requests.append(route.request.url)
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+
+        def resolve():
+            return resolve_post_link(
+                page,
+                "https://m.facebook.com/share/p/999/",
+                source,
+                frozenset({"contract-group"}),
+                timeout_seconds=2,
+            )
+
+        if changed_identity:
+            with pytest.raises(LayoutChangedError, match="unchanged_resolved_post"):
+                resolve()
+        else:
+            assert resolve().endswith("/posts/999/")
+        assert len(requests) == 1
+
+
+@pytest.mark.parametrize("footer_state", ["incomplete", "virtualized", "loading"])
+def test_mobile_never_uses_a_reply_action_row_as_the_post_footer(
+    tmp_path, footer_state
+):
+    html = mobile_fixture([("999", "Author", "Only the primary body")])
+    primary_footer = (
+        '</div><div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like, press and hold for more reactions">'
+    )
+    replacement = primary_footer.replace(
+        '<div data-mcomponent="MContainer">',
+        '<div data-mcomponent="MContainer" '
+        'style="content-visibility:auto;contain-intrinsic-size:100px;'
+        'margin-top:3000px">',
+    )
+    if footer_state == "virtualized":
+        html = html.replace(primary_footer, replacement)
+    else:
+        html = html.replace('aria-label="Make a comment"', 'aria-label="Loading"')
+    html = html.replace(
+        "Following reply preview</div></div></div>",
+        'Following reply preview</div><img alt="Reply avatar"></div>'
+        '<div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like">Like</button>'
+        '<button role="button" aria-label="Comment">Comment</button></div></div>',
+    )
+    if footer_state == "loading":
+        html += """<script>setTimeout(() => document.querySelector(
+          '[aria-label="Loading"]').setAttribute('aria-label','Make a comment'),
+          250);</script>"""
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        if footer_state == "incomplete":
+            with pytest.raises(LayoutChangedError, match="primary_action_footer"):
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+        else:
+            wait_for_mobile_page(page, timeout_seconds=1)
+            with mobile_records(page) as records:
+                assert len(records) == 1
+                assert records[0][1]["text"] == "Only the primary body"
+                assert records[0][1]["mediaCount"] == 0
+
+
 @pytest.mark.parametrize("rename", [False, True])
 @pytest.mark.parametrize("uppercase_sort", [False, True])
 def test_mobile_complete_fetch_is_bounded_and_reads_beyond_the_marker(

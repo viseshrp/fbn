@@ -504,6 +504,8 @@ def test_monitor_alerts_on_layout_failure_and_clears_health(
     assert len(sent) == 1
     assert "LayoutChangedError" in sent[0].body
     assert "missing layout" in sent[0].body
+    assert "verify a copied post link" in sent[0].body
+    assert "no supported post structure" not in sent[0].body
     assert "bootstrap" not in sent[0].body
     assert not path.exists()
 

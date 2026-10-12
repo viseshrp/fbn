@@ -40,6 +40,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Keep the mobile body boundary at the post's first action row; never substitute
+  a reply's row while the real footer is incomplete or deferred. Wait for the
+  same permalink to finish rendering within its existing verification deadline.
+- Report exact, secret-free post-link comparison failures and distinguish them
+  from an unsupported feed in the stopped-monitor alert.
 - Use the verified canonical Facebook post ID as the only active post identity.
   Schema version 4 upgrades saved direct links, merges delivery receipts, and
   archives unresolved history without guessing IDs or dropping pending posts.

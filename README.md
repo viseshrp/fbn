@@ -165,6 +165,13 @@ the same author, body, and publication time and a canonical post URL for the ver
 group. A missing or mismatched link stops the check; mobile never substitutes
 the group feed or a previous clipboard value.
 
+The post's first action row is the body boundary, even when its painting is
+deferred. An incomplete row is not replaced with a later reply's action row.
+Link verification waits for the same document to finish rendering within its
+existing timeout, without reloading or accepting a different destination.
+Failures log the exact failed comparison (author, body, publication time, or
+primary-post count), text lengths and partial/media flags, never private content.
+
 Later checks scroll toward the saved notification marker and read at least one
 additional pass after finding it. Known publication times correct visible
 reordering; posts tied with the marker's coarse relative time are included
