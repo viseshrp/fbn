@@ -394,6 +394,52 @@ def test_mobile_verifies_permalink_with_author_inside_timestamp_component(
         ).endswith("/posts/301/")
 
 
+@pytest.mark.parametrize("wrong", [None, "author", "body", "age", "identity"])
+def test_mobile_relative_age_rollover_keeps_post_link_checks_strict(tmp_path, wrong):
+    source_html = mobile_fixture([("301", "Author", "Body")]).replace(
+        "Sunday, October 11, 2026 at 10:00 AM", "19 hours ago"
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(source_html)
+        with mobile_records(page) as records:
+            payload = records[0][1]
+        assert isinstance(payload["timestampObservedAt"], int)
+        target = context.new_page()
+        author = "Wrong" if wrong == "author" else "Author"
+        body = "Wrong" if wrong == "body" else "Body"
+        age = "21 hours ago" if wrong == "age" else "20 hours ago"
+        html = mobile_fixture([("301", author, body)]).replace(
+            "Sunday, October 11, 2026 at 10:00 AM", age
+        )
+        if wrong == "identity":
+            html += (
+                "<script>history.replaceState(null,'',"
+                "'/groups/contract-group/posts/999/')</script>"
+            )
+        target.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=html
+            ),
+        )
+
+        def resolve():
+            return resolve_post_link(
+                target,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                payload,
+                frozenset({"contract-group"}),
+                timeout_seconds=0.5,
+            )
+
+        if wrong is None:
+            assert resolve().endswith("/posts/301/")
+        else:
+            with pytest.raises(LayoutChangedError):
+                resolve()
+
+
 @pytest.mark.parametrize(
     "badge",
     ["All-star contributor", "Top contributor", "Rising contributor", "Group expert"],
@@ -736,7 +782,7 @@ def test_mobile_rejects_wrong_copied_link_destinations(tmp_path, wrong):
             )
 
 
-@pytest.mark.parametrize("changed_identity", [False, True])
+@pytest.mark.parametrize("changed_identity", [False, True, "before_render"])
 def test_mobile_waits_for_permalink_body_to_finish_rendering(
     tmp_path, changed_identity
 ):
@@ -760,6 +806,12 @@ def test_mobile_waits_for_permalink_body_to_finish_rendering(
         if changed_identity:
             html += """<script>setTimeout(() => history.replaceState(
               null, '', '/groups/contract-group/posts/888/'), 100);</script>"""
+        if changed_identity == "before_render":
+            html += """<script>
+              const footer = document.querySelector('[aria-label="Make a comment"]');
+              footer.hidden = true;
+              setTimeout(() => footer.hidden = false, 250);
+            </script>"""
         requests = []
 
         def serve(route):

@@ -11,6 +11,117 @@ from fbn.mobile import MobilePostSource, mobile_group_url, verified_group_keys
 from fbn.models import Post
 
 
+@pytest.mark.parametrize(
+    ("source_label", "target_label", "elapsed_ms", "matches"),
+    [
+        ("19 hours ago", "20 hours ago", 2000, True),
+        ("19h", "20 hours ago", 2000, True),
+        ("59 minutes ago", "1 hour ago", 2000, True),
+        ("23 hours ago", "1 day ago", 2000, True),
+        ("6 days ago", "1 week ago", 2000, True),
+        ("just now", "1 minute ago", 2000, True),
+        ("19 hours ago", "20 hours ago", 0, False),
+        ("19 hours ago", "21 hours ago", 2000, False),
+        ("19 hours ago", "18 hours ago", 2000, False),
+        ("19 hours ago", "20 hours ago", -1, False),
+        ("19 hours ago", "20 hours ago", 150001, False),
+        ("19h", "19 hours ago", 0, True),
+        ("26 Sep", "27 Sep", 2000, False),
+        ("yesterday at 10:00", "today at 10:00", 2000, False),
+    ],
+)
+def test_relative_publication_matches_only_overlapping_observed_age_ranges(
+    source_label, target_label, elapsed_ms, matches
+):
+    from fbn.mobile import _publication_matches
+
+    source = {
+        "author": "Author",
+        "timestampLabel": source_label,
+        "timestampObservedAt": 1791878400000,
+    }
+    target = {
+        **source,
+        "timestampLabel": target_label,
+        "timestampObservedAt": source["timestampObservedAt"] + elapsed_ms,
+    }
+    assert _publication_matches(target, source) is matches
+
+
+@pytest.mark.parametrize("observed", [None, True, "123", float("nan"), float("inf")])
+def test_relative_rollover_requires_valid_observation_times(observed):
+    from fbn.mobile import _publication_matches
+
+    source = {
+        "author": "Author",
+        "timestampLabel": "19 hours ago",
+        "timestampObservedAt": observed,
+    }
+    target = {
+        "author": "Author",
+        "timestampLabel": "20 hours ago",
+        "timestampObservedAt": 1791878402000,
+    }
+    assert not _publication_matches(target, source)
+    assert not _publication_matches(source, target)
+
+
+def test_relative_rollover_never_relaxes_author_or_body_checks():
+    from fbn.mobile import _primary_post_comparisons
+
+    source = {
+        "author": "Author",
+        "text": "Full body",
+        "mediaCount": 0,
+        "timestampLabel": "19 hours ago",
+        "timestampObservedAt": 1791878400000,
+    }
+    target = {
+        **source,
+        "timestampLabel": "20 hours ago",
+        "timestampObservedAt": 1791878402000,
+    }
+    assert all(_primary_post_comparisons(target, source).values())
+    for field in ("author", "text"):
+        assert not all(
+            _primary_post_comparisons({**target, field: "Wrong"}, source).values()
+        )
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_link_navigation_observer_is_always_removed(monkeypatch, fail):
+    from fbn import mobile
+
+    events = []
+    frame = SimpleNamespace(url="https://m.facebook.com/groups/test/posts/301/")
+    page = SimpleNamespace(
+        main_frame=frame,
+        on=lambda event, callback: events.append((event, callback)),
+        remove_listener=lambda event, callback: events.remove((event, callback)),
+    )
+
+    def resolve(target, copied, payload, groups, destinations, **kwargs):
+        callback = events[0][1]
+        callback(SimpleNamespace(url="https://m.facebook.com/groups/test/posts/999/"))
+        for _ in range(20):
+            callback(frame)
+        assert [link.post_id for link in destinations] == ["301"]
+        if fail:
+            raise mobile.LayoutChangedError("Synthetic failure")
+        return "Synthetic result"
+
+    monkeypatch.setattr(mobile, "_resolve_post_link", resolve)
+    if fail:
+        with pytest.raises(mobile.LayoutChangedError):
+            mobile.resolve_post_link(page, "unused", {}, frozenset(), timeout_seconds=1)
+    else:
+        assert (
+            mobile.resolve_post_link(page, "unused", {}, frozenset(), timeout_seconds=1)
+            == "Synthetic result"
+        )
+    assert events == []
+
+
 @pytest.mark.parametrize("field", ["author", "text", "timestampLabel", "count"])
 def test_primary_link_mismatch_identifies_failed_comparison_without_content(
     field, capsys
@@ -351,7 +462,13 @@ def test_link_navigation_and_render_share_one_timeout_budget(monkeypatch):
     monkeypatch.setattr(
         mobile, "wait_for_mobile_page", lambda page, **kw: waits.append(kw)
     )
-    page = SimpleNamespace(bring_to_front=lambda: None, goto=navigate, url=canonical)
+    page = SimpleNamespace(
+        bring_to_front=lambda: None,
+        goto=navigate,
+        url=canonical,
+        on=lambda *args: None,
+        remove_listener=lambda *args: None,
+    )
     assert mobile.resolve_post_link(
         page,
         "https://m.facebook.com/share/p/example/",
@@ -402,7 +519,13 @@ def test_canonical_panel_check_cannot_extend_the_original_budget(monkeypatch):
     monkeypatch.setattr(
         mobile, "wait_for_mobile_page", lambda page, **kw: waits.append(kw)
     )
-    page = SimpleNamespace(bring_to_front=lambda: None, goto=navigate, url=canonical)
+    page = SimpleNamespace(
+        bring_to_front=lambda: None,
+        goto=navigate,
+        url=canonical,
+        on=lambda *args: None,
+        remove_listener=lambda *args: None,
+    )
     mobile.resolve_post_link(
         page,
         "https://m.facebook.com/share/p/example/",

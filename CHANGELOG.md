@@ -40,6 +40,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Verify rounded relative publication ages using their observation times, so an
+  hour/day rollover during Copy link does not stop the monitor. Keep exact
+  author/body and canonical URL checks, and reject inconsistent or unproven ages.
+- Observe permalink identity from navigation onward, rejecting a router change
+  to a different post even when it occurs before the first readable render.
 - Keep the mobile body boundary at the post's first action row; never substitute
   a reply's row while the real footer is incomplete or deferred. Wait for the
   same permalink to finish rendering within its existing verification deadline.

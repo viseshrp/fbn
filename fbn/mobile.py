@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from collections.abc import Iterator
@@ -28,6 +29,7 @@ from .exceptions import (
 from .extractor import (
     _FACEBOOK_TIMESTAMP_RE,
     FACEBOOK_HOSTS,
+    PostLink,
     extract_posts,
     parse_facebook_timestamp,
     parse_group_ref,
@@ -70,6 +72,7 @@ MOBILE_SCAN_SCRIPT = r"""
     '[data-type="vscroller"]'
   ));
   const records = [];
+  const observedAt = Date.now();
   const tokens = window.__fbnMobileCardTokens ||= {next: 0, cards: new WeakMap()};
   const missing = new Set();
   let candidateCount = 0;
@@ -224,6 +227,7 @@ MOBILE_SCAN_SCRIPT = r"""
       records.push({card, menu, payload: {
         author: owner, text, timestamp: clean(timestamp.node.innerText),
         timestampLabel: timestamp.label,
+        timestampObservedAt: observedAt,
         cardToken: tokens.cards.get(card),
         actionToken: menu.getAttribute('data-action-id'),
         mediaCount, partial, position: records.length,
@@ -660,6 +664,54 @@ def _post_signature(payload: dict[str, Any]) -> tuple[str, str, str]:
     return (payload["author"], payload["text"], _publication_label(payload))
 
 
+def _relative_publication_window(
+    payload: dict[str, Any],
+) -> tuple[float, float] | None:
+    """A rounded relative age denotes a range, not an exact publication time."""
+
+    observed = payload.get("timestampObservedAt")
+    if (
+        isinstance(observed, bool)
+        or not isinstance(observed, (int, float))
+        or not math.isfinite(observed)
+    ):
+        return None
+    label = _publication_label(payload).lower()
+    if label == "just now":
+        count, unit = 0, "m"
+    else:
+        match = re.fullmatch(
+            r"([0-9]{1,9})\s*([smhdw])|"
+            r"([0-9]{1,9})\s+(seconds?|minutes?|hours?|days?|weeks?)\s+ago",
+            label,
+        )
+        if match is None:
+            return None
+        count = int(match[1] or match[3])
+        unit = (match[2] or match[4])[0]
+    resolution = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit]
+    newest = observed - count * resolution * 1000
+    return newest - resolution * 1000, newest
+
+
+def _publication_matches(item: dict[str, Any], source: dict[str, Any]) -> bool:
+    if _publication_label(item) == _publication_label(source):
+        return True
+    target_window = _relative_publication_window(item)
+    source_window = _relative_publication_window(source)
+    if target_window is None or source_window is None:
+        return False
+    # Only reconcile observations from this bounded scan. Missing timing proof,
+    # backwards clocks, stale snapshots and non-overlapping ages stay rejected.
+    elapsed = item["timestampObservedAt"] - source["timestampObservedAt"]
+    budget_ms = (MAX_SCAN_SECONDS + COPY_TIMEOUT_SECONDS + MAX_LINK_SECONDS) * 1000
+    if not 0 <= elapsed <= budget_ms:
+        return False
+    return max(source_window[0], target_window[0]) < min(
+        source_window[1], target_window[1]
+    )
+
+
 def _primary_post_comparisons(
     item: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, bool]:
@@ -667,7 +719,7 @@ def _primary_post_comparisons(
         "resolved_primary_author_matches_source": item["author"] == payload["author"],
         "resolved_primary_body_matches_source": item["text"] == payload["text"],
         "resolved_primary_publication_matches_source": (
-            _publication_label(item) == _publication_label(payload)
+            _publication_matches(item, payload)
         ),
         "resolved_primary_body_or_media": bool(item["text"]) or item["mediaCount"] > 0,
     }
@@ -692,6 +744,15 @@ def _verify_primary_post(
             publication_matches=comparisons[
                 "resolved_primary_publication_matches_source"
             ],
+            publication_labels_equal=(
+                _publication_label(item) == _publication_label(payload)
+            ),
+            source_relative_publication=(
+                _relative_publication_window(payload) is not None
+            ),
+            target_relative_publication=(
+                _relative_publication_window(item) is not None
+            ),
             source_body_chars=len(payload["text"]),
             target_body_chars=len(item["text"]),
             source_partial=payload.get("partial", False),
@@ -735,6 +796,41 @@ def resolve_post_link(
 ) -> str:
     """Resolve a Facebook-owned share link and match only primary target content."""
 
+    destinations: list[PostLink] = []
+
+    def record_navigation(frame):
+        if frame == target.main_frame:
+            link = parse_post_url(frame.url)
+            if (
+                link is not None
+                and len(destinations) <= 10
+                and (not destinations or destinations[-1] != link)
+            ):
+                destinations.append(link)
+
+    target.on("framenavigated", record_navigation)
+    try:
+        return _resolve_post_link(
+            target,
+            copied,
+            payload,
+            allowed_group_keys,
+            destinations,
+            timeout_seconds=timeout_seconds,
+        )
+    finally:
+        target.remove_listener("framenavigated", record_navigation)
+
+
+def _resolve_post_link(
+    target: Page,
+    copied: str,
+    payload: dict[str, Any],
+    allowed_group_keys: frozenset[str],
+    destinations: list[PostLink],
+    *,
+    timeout_seconds: float,
+) -> str:
     deadline = time.monotonic() + timeout_seconds
     if not _trusted_url(copied):
         raise _layout_failure("trusted_copied_post_link")
@@ -780,6 +876,13 @@ def resolve_post_link(
         raise _layout_failure("unchanged_direct_post_identity")
     checked_canonical = False
     while True:
+        # Capture router changes from navigation onward, including those that
+        # happen before the first readable post. Do not adopt a replacement ID.
+        if len(destinations) > 10 or any(
+            link.post_id != resolved.post_id or link.group_key not in allowed_group_keys
+            for link in destinations
+        ):
+            raise _layout_failure("unchanged_resolved_post_identity")
         if parse_post_url(target.url) != resolved:
             raise _layout_failure("unchanged_resolved_post_identity")
         with mobile_records(target, permalink=True) as records:
