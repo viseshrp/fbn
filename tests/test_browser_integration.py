@@ -35,6 +35,10 @@ from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
 from tests.mobile_fixtures import mobile_fixture
 
+# These cases assert DOM/identity behavior, not shared-runner navigation speed.
+# Deadline arithmetic and budget enforcement have separate deterministic tests.
+OFFLINE_NAVIGATION_SECONDS = 5
+
 
 @pytest.mark.parametrize(
     ("html", "error"),
@@ -104,13 +108,15 @@ def reader_contract(tmp_path: Path) -> Iterator[object]:
             try:
                 with mobile_records(page) as records:
                     for menu, payload in records:
-                        copied = copy_post_link(page, menu, timeout_seconds=1)
+                        copied = copy_post_link(
+                            page, menu, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+                        )
                         href = resolve_post_link(
                             target,
                             copied,
                             payload,
                             frozenset({group.key}),
-                            timeout_seconds=1,
+                            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
                         )
                         payloads.append({**payload, "href": href})
                 return extract_posts(payloads, group, observed_at, limit=50)
@@ -420,7 +426,7 @@ def test_permalink_verification_deadline_logs_current_missing_layout(
                 "https://m.facebook.com/groups/contract-group/posts/301/",
                 source,
                 frozenset({"contract-group"}),
-                timeout_seconds=0.5,
+                timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
     snapshots = [
         fields for message, fields in logged if message == "Mobile layout snapshot"
@@ -510,7 +516,7 @@ def test_permalink_terminal_state_after_initial_render_is_not_a_layout_error(
                 "https://m.facebook.com/groups/contract-group/posts/301/",
                 source,
                 frozenset({"contract-group"}),
-                timeout_seconds=0.5,
+                timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
     snapshots = [
         fields for message, fields in logged if message == "Mobile layout snapshot"
@@ -577,7 +583,7 @@ def test_permalink_temporary_missing_footer_recovers_without_reload_or_warning(
             "https://m.facebook.com/groups/contract-group/posts/301/",
             source,
             frozenset({"contract-group"}),
-            timeout_seconds=1,
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
     assert len(requests) == 1
     assert logged == []
@@ -642,7 +648,7 @@ def test_mobile_verifies_permalink_with_author_inside_timestamp_component(
             "https://m.facebook.com/groups/contract-group/posts/301/",
             payload,
             frozenset({"contract-group"}),
-            timeout_seconds=5,
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
 
 
@@ -682,7 +688,7 @@ def test_mobile_relative_age_rollover_keeps_post_link_checks_strict(tmp_path, wr
                 "https://m.facebook.com/groups/contract-group/posts/301/",
                 payload,
                 frozenset({"contract-group"}),
-                timeout_seconds=0.5,
+                timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
 
         if wrong is None:
@@ -804,7 +810,7 @@ def test_mobile_verifies_metadata_with_badges_before_or_after_author(
             "https://m.facebook.com/groups/contract-group/posts/301/",
             payload,
             frozenset({"contract-group"}),
-            timeout_seconds=2,
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
 
 
@@ -841,7 +847,7 @@ def test_mobile_verifies_older_post_with_date_only_publication(tmp_path, wrapper
             "https://m.facebook.com/groups/contract-group/posts/301/",
             payload,
             frozenset({"contract-group"}),
-            timeout_seconds=1,
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
 
 
@@ -887,7 +893,7 @@ def test_mobile_waits_for_short_link_client_side_canonical_navigation(tmp_path):
             "https://m.facebook.com/share/p/example/",
             payload,
             frozenset({"contract-group"}),
-            timeout_seconds=1,
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
 
 
@@ -1030,7 +1036,7 @@ def test_mobile_rejects_wrong_copied_link_destinations(tmp_path, wrong):
                 copied,
                 source_payload,
                 frozenset({"contract-group"}),
-                timeout_seconds=2,
+                timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
 
 
@@ -1078,7 +1084,7 @@ def test_mobile_waits_for_permalink_body_to_finish_rendering(
                 "https://m.facebook.com/share/p/999/",
                 source,
                 frozenset({"contract-group"}),
-                timeout_seconds=2,
+                timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
 
         if changed_identity:
@@ -1149,7 +1155,7 @@ def test_mobile_extra_panel_gets_one_strict_canonical_check(tmp_path, destinatio
                 "https://m.facebook.com/share/p/999/",
                 source,
                 frozenset({"contract-group"}),
-                timeout_seconds=2,
+                timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
 
         if destination == "matching":
