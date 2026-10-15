@@ -331,6 +331,255 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
     assert "facebook.com" not in str(logged)
 
 
+@pytest.mark.parametrize(
+    ("missing", "component"),
+    [
+        ("scroller", "unique_mobile_scroller"),
+        ("timestamp", "unique_primary_timestamp"),
+        ("footer", "primary_action_footer"),
+        ("hidden", "primary_mobile_card"),
+        ("body", "resolved_primary_body_matches_source"),
+        ("multiple", "unique_resolved_primary_post"),
+    ],
+)
+def test_permalink_verification_deadline_logs_current_missing_layout(
+    tmp_path, monkeypatch, missing, component
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type(
+            "Log",
+            (),
+            {"warning": lambda self, message, **kw: logged.append((message, kw))},
+        )(),
+    )
+    original_records = mobile.mobile_records
+    changed = False
+
+    @contextmanager
+    def records(page, **kwargs):
+        nonlocal changed
+        if not changed:
+            changed = True
+            if missing == "scroller":
+                page.evaluate(
+                    "document.querySelector('[data-type=vscroller]').remove()"
+                )
+            elif missing == "timestamp":
+                page.evaluate(
+                    "document.querySelector('[data-story] [aria-label]')"
+                    ".removeAttribute('aria-label')"
+                )
+            elif missing == "footer":
+                page.evaluate(
+                    "document.querySelector('[aria-label=\"Make a comment\"]').remove()"
+                )
+            elif missing == "multiple":
+                page.evaluate(
+                    "document.querySelector('[data-type=vscroller]').firstElementChild.remove();"
+                    "const n=document.querySelector('[data-story]');"
+                    "n.after(n.cloneNode(true))"
+                )
+            elif missing == "hidden":
+                page.evaluate(
+                    "document.querySelector('[data-story] button')"
+                    ".style.visibility='hidden'"
+                )
+        with original_records(page, **kwargs) as items:
+            yield items
+
+    monkeypatch.setattr(mobile, "mobile_records", records)
+    source = {
+        "author": "Synthetic private author",
+        "text": "Expected private body",
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+        "mediaCount": 0,
+    }
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_fixture(
+                    [("301", source["author"], "Different private body")]
+                ),
+            ),
+        )
+        with pytest.raises(LayoutChangedError, match=component):
+            resolve_post_link(
+                page,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                source,
+                frozenset({"contract-group"}),
+                timeout_seconds=0.5,
+            )
+    snapshots = [
+        fields for message, fields in logged if message == "Mobile layout snapshot"
+    ]
+    assert len(snapshots) == 1
+    assert snapshots[0]["phase"] == "post_verification"
+    assert snapshots[0]["verification_post_count"] == (
+        2 if missing == "multiple" else 1 if missing == "body" else 0
+    )
+    if missing in {"scroller", "timestamp", "footer", "hidden"}:
+        assert component in snapshots[0]["missing_components"]
+    if missing == "hidden":
+        assert snapshots[0]["visible_primary_menus"] < snapshots[0]["primary_menus"]
+    output = str(logged)
+    assert "private" not in output and "facebook.com" not in output
+    assert "October" not in output
+
+
+@pytest.mark.parametrize(
+    ("html", "error", "signal"),
+    [
+        ('<input name="email">', AuthenticationRequiredError, "has_login"),
+        (
+            '<input name="approvals_code">',
+            AccountActionRequiredError,
+            "has_account_action",
+        ),
+        (
+            "<main>Content isn't available</main>",
+            AccessDeniedError,
+            "has_access_denied",
+        ),
+        (
+            "<main>Temporarily blocked</main>",
+            TransientNavigationError,
+            "has_rate_limit",
+        ),
+    ],
+)
+def test_permalink_terminal_state_after_initial_render_is_not_a_layout_error(
+    tmp_path, monkeypatch, html, error, signal
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type(
+            "Log",
+            (),
+            {"warning": lambda self, message, **kw: logged.append((message, kw))},
+        )(),
+    )
+    original_records = mobile.mobile_records
+    changed = False
+
+    @contextmanager
+    def records(page, **kwargs):
+        nonlocal changed
+        if not changed:
+            changed = True
+            page.set_content(html + "Synthetic private content")
+        with original_records(page, **kwargs) as items:
+            yield items
+
+    monkeypatch.setattr(mobile, "mobile_records", records)
+    source = {
+        "author": "Author",
+        "text": "Expected body",
+        "mediaCount": 0,
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+    }
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_fixture([("301", "Author", "Body")]),
+            ),
+        )
+        with pytest.raises(error):
+            resolve_post_link(
+                page,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                source,
+                frozenset({"contract-group"}),
+                timeout_seconds=0.5,
+            )
+    snapshots = [
+        fields for message, fields in logged if message == "Mobile layout snapshot"
+    ]
+    assert snapshots[0][signal] is True
+    assert "Synthetic private content" not in str(logged)
+
+
+def test_permalink_temporary_missing_footer_recovers_without_reload_or_warning(
+    tmp_path, monkeypatch
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type(
+            "Log",
+            (),
+            {"warning": lambda self, message, **kw: logged.append((message, kw))},
+        )(),
+    )
+    original_records = mobile.mobile_records
+    changed = False
+
+    @contextmanager
+    def records(page, **kwargs):
+        nonlocal changed
+        if not changed:
+            changed = True
+            page.evaluate("""() => {
+                const footer = document.querySelector('[aria-label="Make a comment"]');
+                footer.setAttribute('aria-label', 'Loading');
+                setTimeout(() => {
+                    footer.setAttribute('aria-label', 'Make a comment');
+                }, 200);
+            }""")
+        with original_records(page, **kwargs) as items:
+            yield items
+
+    monkeypatch.setattr(mobile, "mobile_records", records)
+    source = {
+        "author": "Author",
+        "text": "Body",
+        "mediaCount": 0,
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+    }
+    requests = []
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+
+        def serve(route):
+            requests.append(route.request.url)
+            route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_fixture([("301", "Author", "Body")]),
+            )
+
+        context.route("**/*", serve)
+        assert resolve_post_link(
+            page,
+            "https://m.facebook.com/groups/contract-group/posts/301/",
+            source,
+            frozenset({"contract-group"}),
+            timeout_seconds=1,
+        ).endswith("/posts/301/")
+    assert len(requests) == 1
+    assert logged == []
+
+
 def test_mobile_defers_unrendered_cards_until_scrolling_makes_them_readable(tmp_path):
     with _local_context(tmp_path) as context:
         page = context.new_page()

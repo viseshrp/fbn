@@ -40,6 +40,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Log structural and terminal-state diagnostics when copied-link verification
+  expires after a readable render, including missing scrollers, timestamps and
+  action rows. Reclassify late login/account/access/rate-limit screens correctly;
+  keep the existing deadline and reject all unverified posts without retrying.
 - Verify rounded relative publication ages using their observation times, so an
   hour/day rollover during Copy link does not stop the monitor. Keep exact
   author/body and canonical URL checks, and reject inconsistent or unproven ages.

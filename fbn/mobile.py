@@ -18,7 +18,13 @@ from playwright.sync_api import BrowserContext, ElementHandle, Page, Response, R
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from .browser import BrowserSession, PageState, classify_page, read_page_signals
+from .browser import (
+    BrowserSession,
+    PageSignals,
+    PageState,
+    classify_page,
+    read_page_signals,
+)
 from .exceptions import (
     AccessDeniedError,
     BrowserUnavailableError,
@@ -458,7 +464,13 @@ def _action_phase(phase: str) -> Iterator[None]:
 
 
 def _log_layout_snapshot(
-    page: Page, result: dict[str, Any], *, permalink: bool
+    page: Page,
+    result: dict[str, Any],
+    *,
+    permalink: bool,
+    phase: str = "page_render",
+    verification_post_count: int | None = None,
+    signals: PageSignals | None = None,
 ) -> None:
     # Fixed structural counters only. Never log text, labels, URLs, or IDs.
     structure = page.evaluate(
@@ -472,18 +484,47 @@ def _log_layout_snapshot(
           primary_menus: document.querySelectorAll(
             '[role="button"][aria-label^="More options for "]'
           ).length,
+          visible_primary_menus: Array.from(document.querySelectorAll(
+            '[role="button"][aria-label^="More options for "]'
+          )).filter(node => node.checkVisibility({contentVisibilityAuto:true,
+            visibilityProperty:true,opacityProperty:true})).length,
           loading_indicators: document.querySelectorAll('[role="progressbar"]').length,
           dialogs: document.querySelectorAll('[role="dialog"]').length,
         })"""
     )
+    terminal_signals = (
+        {
+            name: getattr(signals, name)
+            for name in (
+                "has_login",
+                "has_account_action",
+                "has_access_denied",
+                "has_rate_limit",
+                "has_explicit_empty",
+            )
+        }
+        if signals is not None
+        else {}
+    )
     LOGGER.warning(
         "Mobile layout snapshot",
         page_kind="permalink" if permalink else "feed",
+        phase=phase,
+        verification_post_count=verification_post_count,
+        missing_components=",".join(_missing_mobile_components(result)),
         visible_scrollers=result.get("feedRootCount", 0),
         primary_candidates=result.get("itemCount", 0),
         valid_posts=result.get("postCount", 0),
+        **terminal_signals,
         **structure,
     )
+
+
+def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
+    missing = result.get("missing", [])
+    if not missing and result.get("postCount", 0) == 0:
+        missing = ["primary_mobile_card"]
+    return tuple(sorted(set(missing)))
 
 
 def wait_for_mobile_page(
@@ -726,13 +767,16 @@ def _primary_post_comparisons(
 
 
 def _verify_primary_post(
-    records: list[dict[str, Any]], payload: dict[str, Any]
+    records: list[dict[str, Any]],
+    payload: dict[str, Any],
+    *,
+    missing_components: tuple[str, ...] = (),
 ) -> None:
     """Require one matching post, reporting only safe comparison results."""
 
     if len(records) != 1:
         LOGGER.warning("Post link verification failed", primary_post_count=len(records))
-        raise _layout_failure("unique_resolved_primary_post")
+        raise _layout_failure("unique_resolved_primary_post", *missing_components)
     item = records[0]
     comparisons = _primary_post_comparisons(item, payload)
     missing = [name for name, matches in comparisons.items() if not matches]
@@ -767,6 +811,30 @@ def _verify_primary_post(
             target_body_controls=item.get("bodyControlCount"),
         )
         raise _layout_failure(*missing)
+
+
+def _verify_post_at_deadline(
+    page: Page, records: list[dict[str, Any]], payload: dict[str, Any]
+) -> None:
+    """Explain the final observed failure without saving content or retrying."""
+
+    signals = read_page_signals(page, dom_scan_script=MOBILE_PERMALINK_SCAN_SCRIPT)
+    result = page.evaluate(MOBILE_PERMALINK_SCAN_SCRIPT, False)
+    _log_layout_snapshot(
+        page,
+        result,
+        permalink=True,
+        phase="post_verification",
+        verification_post_count=len(records),
+        signals=signals,
+    )
+    # Account/access/loading state can change after the initial readable render.
+    # Preserve typed terminal errors; unknown layouts still fail closed below.
+    with suppress(LayoutChangedError):
+        classify_page(signals)
+    _verify_primary_post(
+        records, payload, missing_components=_missing_mobile_components(result)
+    )
 
 
 def _has_additional_body_panel(item: dict[str, Any], source: dict[str, Any]) -> bool:
@@ -925,7 +993,7 @@ def _resolve_post_link(
             )
             continue
         if time.monotonic() >= deadline:
-            _verify_primary_post(items, payload)
+            _verify_post_at_deadline(target, items, payload)
         target.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
     return resolved.url
 

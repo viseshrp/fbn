@@ -12,6 +12,33 @@ from fbn.models import Post
 
 
 @pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"postCount": 0, "missing": []}, ("primary_mobile_card",)),
+        ({"postCount": 1, "missing": []}, ()),
+        ({"postCount": 2, "missing": []}, ()),
+        (
+            {
+                "postCount": 0,
+                "missing": [
+                    "primary_action_footer",
+                    "unique_primary_timestamp",
+                    "primary_action_footer",
+                ],
+            },
+            ("primary_action_footer", "unique_primary_timestamp"),
+        ),
+    ],
+)
+def test_missing_mobile_components_name_absent_posts_without_page_content(
+    result, expected
+):
+    from fbn.mobile import _missing_mobile_components
+
+    assert _missing_mobile_components(result) == expected
+
+
+@pytest.mark.parametrize(
     ("source_label", "target_label", "elapsed_ms", "matches"),
     [
         ("19 hours ago", "20 hours ago", 2000, True),
