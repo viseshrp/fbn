@@ -9,6 +9,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Private, bounded error screenshots of the feed and failing post-link tab,
+  captured before tab cleanup with input masking and 10-event retention.
 - Playwright browser acquisition with a dedicated persistent local profile.
 - Fully headless `fbn bootstrap` from an explicit authentication file, with
   support for Playwright storage-state JSON, exported-cookie JSON arrays, and

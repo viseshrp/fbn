@@ -665,6 +665,33 @@ def test_post_target_always_closes_its_tab_and_guards_navigation(failure):
     assert events == ["abort", "close"]
 
 
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_post_target_captures_before_close_and_preserves_original_error(capture_fails):
+    from fbn import mobile
+
+    events = []
+    page = SimpleNamespace(
+        route=lambda *args: None, close=lambda: events.append("close")
+    )
+    error = mobile.LayoutChangedError("Synthetic mismatch")
+
+    def capture(target, failure):
+        assert target is page
+        assert failure is error
+        assert events == []
+        events.append("capture")
+        if capture_fails:
+            raise OSError("Synthetic full disk")
+
+    with (
+        pytest.raises(mobile.LayoutChangedError) as caught,
+        mobile._post_target(SimpleNamespace(new_page=lambda: page), on_error=capture),
+    ):
+        raise error
+    assert caught.value is error
+    assert events == ["capture", "close"]
+
+
 def test_copy_actions_share_budget_but_cleanup_has_its_own_budget(monkeypatch):
     from fbn import mobile
 

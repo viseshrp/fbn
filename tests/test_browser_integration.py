@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import stat
+import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -1309,6 +1312,160 @@ def _local_context(
     source = MobilePostSource(settings)
     with source._context(headless=True, timezone_id=timezone_id) as context:
         yield context
+
+
+@pytest.mark.parametrize(
+    "failure", ["feed", "post", "navigation", "unexpected", "auth", None]
+)
+def test_mobile_fetch_saves_only_failed_viewports_before_tabs_close(
+    tmp_path, monkeypatch, failure
+):
+    from fbn import mobile
+
+    with _local_context(tmp_path) as context:
+        original_pages = tuple(context.pages)
+        opened = []
+        context.on("page", lambda page: opened.append(page))
+
+        def routes(route):
+            html = mobile_fixture([("301", "Synthetic Author", "Synthetic body")])
+            if "/share/" in route.request.url:
+                html = (
+                    mobile_fixture([("301", "Synthetic Author", "Different body")])
+                    if failure == "post"
+                    else html
+                )
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            elif failure == "feed":
+                html = "<main>Synthetic unsupported layout</main>"
+            elif failure == "auth":
+                html = '<input name="email" value="SYNTHETIC_SECRET">'
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", routes)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        if failure in {"navigation", "unexpected"}:
+
+            def fail(*args, **kwargs):
+                if failure == "navigation":
+                    raise mobile.PlaywrightTimeoutError("Synthetic timeout")
+                raise ValueError("Synthetic unexpected failure")
+
+            monkeypatch.setattr(mobile, "select_new_posts", fail)
+        error = {
+            "feed": LayoutChangedError,
+            "post": LayoutChangedError,
+            "navigation": TransientNavigationError,
+            "unexpected": ValueError,
+            "auth": AuthenticationRequiredError,
+        }.get(failure)
+        if error:
+            with pytest.raises(error):
+                source.fetch_recent(
+                    parse_group_ref("contract-group"),
+                    ScanPolicy(
+                        sample_count=1, max_scrolls=0, navigation_timeout_seconds=0.5
+                    ),
+                )
+        else:
+            result = source.fetch_recent(
+                parse_group_ref("contract-group"),
+                ScanPolicy(sample_count=1, max_scrolls=0, navigation_timeout_seconds=1),
+            )
+            assert [post.post_id for post in result.posts] == ["301"]
+        assert tuple(context.pages) == original_pages
+        assert all(page.is_closed() for page in opened)
+        root = tmp_path / "failure-screenshots"
+        if failure in {None, "auth"}:
+            assert not root.exists()
+            return
+        events = tuple(root.iterdir())
+        assert len(events) == 1
+        event = events[0]
+        expected = (
+            {"post": "saved", "feed": "saved"}
+            if failure == "post"
+            else {"feed": "saved"}
+        )
+        assert json.loads((event / "metadata.json").read_text())["pages"] == expected
+        for role in expected:
+            image = event / f"{role}.png"
+            data = image.read_bytes()
+            assert data[:8] == b"\x89PNG\r\n\x1a\n"
+            width, height = struct.unpack(">II", data[16:24])
+            assert 0 < width <= 2_000
+            assert 0 < height <= 3_000
+            assert stat.S_IMODE(image.stat().st_mode) == 0o600
+
+
+def test_real_failure_screenshots_mask_input_and_editable_content(tmp_path):
+    from fbn.failure_screenshots import capture_failure_screenshots
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            "<style>body{margin:0} input,textarea,div {box-sizing:border-box;"
+            "width:200px;height:32px;display:block;border:0;padding:0;margin:0;"
+            "overflow:hidden;}</style>"
+            '<input value="Synthetic secret one">'
+            "<textarea>Synthetic secret two</textarea>"
+            '<div contenteditable="true">Synthetic secret three</div>'
+        )
+        capture_failure_screenshots(
+            tmp_path / "unused", LayoutChangedError("Synthetic"), {"feed": page}
+        )
+        first = next((tmp_path / "failure-screenshots").iterdir()) / "feed.png"
+        # Change values without mobile focus/zoom/scroll changing the viewport.
+        page.evaluate("""() => {
+            document.querySelector('input').value = 'Other secret one';
+            document.querySelector('textarea').value = 'Other secret two';
+            document.querySelector('[contenteditable]').textContent =
+                'Other secret three';
+        }""")
+        capture_failure_screenshots(
+            tmp_path / "unused", LayoutChangedError("Synthetic"), {"feed": page}
+        )
+        events = sorted((tmp_path / "failure-screenshots").iterdir())
+        assert len(events) == 2
+        assert first.read_bytes() == (events[-1] / "feed.png").read_bytes()
+
+
+def test_bootstrap_layout_failure_saves_private_feed_before_closing(tmp_path):
+    with _local_context(tmp_path) as context:
+        opened = []
+        context.on("page", lambda page: opened.append(page))
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body="<main>Synthetic unknown layout</main>",
+            ),
+        )
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        with pytest.raises(LayoutChangedError):
+            source._validate_authenticated_profile(
+                parse_group_ref("contract-group"), navigation_timeout_seconds=0.1
+            )
+        assert all(page.is_closed() for page in opened)
+        event = next((tmp_path / "failure-screenshots").iterdir())
+        assert (event / "feed.png").read_bytes().startswith(b"\x89PNG")
 
 
 def test_headless_browser_uses_configured_timezone(tmp_path: Path) -> None:

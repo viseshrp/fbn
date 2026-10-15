@@ -234,6 +234,17 @@ jobs:
           browser.close(); \
           runtime.stop()"
 
+      - name: Verify private failure screenshots using offline pages
+        run: |
+          docker run --rm \
+            --network none \
+            --shm-size 1gb \
+            --volume "${{ github.workspace }}/tests/mobile_fixtures.py:/fixtures/mobile_fixtures.py:ro" \
+            --volume "${{ github.workspace }}/tests/container_failure_screenshot_smoke.py:/fixtures/screenshot_smoke.py:ro" \
+            --entrypoint python \
+            fbn:ci \
+            /fixtures/screenshot_smoke.py
+
       - name: Verify profile and state survive container replacement
         run: |
           docker volume create fbn-ci-persistence

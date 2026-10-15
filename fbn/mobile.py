@@ -6,7 +6,7 @@ import json
 import math
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -41,6 +41,7 @@ from .extractor import (
     parse_group_ref,
     parse_post_url,
 )
+from .failure_screenshots import capture_failure_screenshots
 from .logging import get_logger
 from .models import GroupRef, Post, ScanPolicy, ScanResult
 
@@ -999,7 +1000,11 @@ def _resolve_post_link(
 
 
 @contextmanager
-def _post_target(context: BrowserContext) -> Iterator[Page]:
+def _post_target(
+    context: BrowserContext,
+    *,
+    on_error: Callable[[Page, Exception], None] | None = None,
+) -> Iterator[Page]:
     target = context.new_page()
 
     def guard(route: Route) -> None:
@@ -1012,6 +1017,11 @@ def _post_target(context: BrowserContext) -> Iterator[Page]:
     try:
         target.route("**/*", guard)
         yield target
+    except Exception as exc:
+        if on_error is not None:
+            with suppress(Exception):
+                on_error(target, exc)
+        raise
     finally:
         with suppress(PlaywrightError):
             target.close()
@@ -1081,14 +1091,25 @@ class MobilePostSource(BrowserSession):
                     )
                 return state
             except PlaywrightTimeoutError as exc:
+                capture_failure_screenshots(
+                    self.settings.profile_dir, exc, {"feed": page}
+                )
                 raise TransientNavigationError(
                     "Facebook group validation timed out during authentication "
                     "bootstrap."
                 ) from exc
             except PlaywrightError as exc:
+                capture_failure_screenshots(
+                    self.settings.profile_dir, exc, {"feed": page}
+                )
                 raise TransientNavigationError(
                     "Facebook group navigation failed during authentication bootstrap."
                 ) from exc
+            except Exception as exc:
+                capture_failure_screenshots(
+                    self.settings.profile_dir, exc, {"feed": page}
+                )
+                raise
             finally:
                 if page is not None:
                     with suppress(PlaywrightError):
@@ -1144,9 +1165,17 @@ class MobilePostSource(BrowserSession):
                     page, context, group, policy, aliases, boundary_post_id
                 )
             except PlaywrightError as exc:
+                capture_failure_screenshots(
+                    self.settings.profile_dir, exc, {"feed": page}
+                )
                 raise TransientNavigationError(
                     "Mobile acquisition failed; no immediate retry was attempted."
                 ) from exc
+            except Exception as exc:
+                capture_failure_screenshots(
+                    self.settings.profile_dir, exc, {"feed": page}
+                )
+                raise
             finally:
                 if page is not None:
                     with suppress(PlaywrightError):
@@ -1207,7 +1236,14 @@ class MobilePostSource(BrowserSession):
                     )
                     # Close each destination promptly so navigation history,
                     # decoded media and document heaps cannot grow across posts.
-                    with _post_target(context) as target:
+                    with _post_target(
+                        context,
+                        on_error=lambda target, error: capture_failure_screenshots(
+                            self.settings.profile_dir,
+                            error,
+                            {"post": target, "feed": page},
+                        ),
+                    ) as target:
                         href = resolve_post_link(
                             target,
                             copied,

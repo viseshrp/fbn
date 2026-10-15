@@ -259,6 +259,20 @@ Useful options include:
 
 Use `fbn COMMAND --help` for the complete command-specific options.
 
+Feed/layout and post-link failures automatically save private viewport screenshots
+before closing the failing tabs. Find them in `failure-screenshots/` beside the
+profile directory (Docker default: `/home/fbn/.local/share/fbn/failure-screenshots/`
+inside the persistent data volume). Each timestamped folder contains `feed.png`,
+and `post.png` when a post-link tab failed, plus secret-free `metadata.json`.
+The log identifies the folder and whether capture succeeded. Only the latest 10
+failure folders are retained, with at most two 5 MiB images per folder.
+Directories are owner-only and files are owner-readable/writable. Inputs and
+editable fields are masked; images can still contain private group content, so
+they are never sent through notifications or included in Git/Docker builds.
+Known login/checkpoint failures are excluded for privacy. Screenshot capture is
+best effort, takes at most 3 seconds per tab, and never replaces the original
+error; a closed or crashed browser may leave only metadata.
+
 ## Docker deployment
 
 The included image is based on Ubuntu 24.04, installs Playwright 1.61.0 and its
