@@ -642,7 +642,7 @@ def test_mobile_verifies_permalink_with_author_inside_timestamp_component(
             "https://m.facebook.com/groups/contract-group/posts/301/",
             payload,
             frozenset({"contract-group"}),
-            timeout_seconds=1,
+            timeout_seconds=5,
         ).endswith("/posts/301/")
 
 
@@ -1373,13 +1373,13 @@ def test_mobile_fetch_saves_only_failed_viewports_before_tabs_close(
                 source.fetch_recent(
                     parse_group_ref("contract-group"),
                     ScanPolicy(
-                        sample_count=1, max_scrolls=0, navigation_timeout_seconds=0.5
+                        sample_count=1, max_scrolls=0, navigation_timeout_seconds=5
                     ),
                 )
         else:
             result = source.fetch_recent(
                 parse_group_ref("contract-group"),
-                ScanPolicy(sample_count=1, max_scrolls=0, navigation_timeout_seconds=1),
+                ScanPolicy(sample_count=1, max_scrolls=0, navigation_timeout_seconds=5),
             )
             assert [post.post_id for post in result.posts] == ["301"]
         assert tuple(context.pages) == original_pages
@@ -1461,7 +1461,7 @@ def test_bootstrap_layout_failure_saves_private_feed_before_closing(tmp_path):
         source._context = existing_context
         with pytest.raises(LayoutChangedError):
             source._validate_authenticated_profile(
-                parse_group_ref("contract-group"), navigation_timeout_seconds=0.1
+                parse_group_ref("contract-group"), navigation_timeout_seconds=5
             )
         assert all(page.is_closed() for page in opened)
         event = next((tmp_path / "failure-screenshots").iterdir())

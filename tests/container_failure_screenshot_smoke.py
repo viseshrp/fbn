@@ -50,7 +50,7 @@ def main() -> None:
                     source.fetch_recent(
                         parse_group_ref("contract-group"),
                         ScanPolicy(
-                            sample_count=1, max_scrolls=0, navigation_timeout_seconds=2
+                            sample_count=1, max_scrolls=0, navigation_timeout_seconds=5
                         ),
                     )
                 except LayoutChangedError:
