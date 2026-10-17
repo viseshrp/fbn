@@ -589,6 +589,65 @@ def test_link_navigation_and_render_share_one_timeout_budget(monkeypatch):
     assert waits[0]["timeout_seconds"] == 22
 
 
+@pytest.mark.parametrize("navigation_seconds,expected_budget", [(8, 15), (26, 2)])
+def test_resolved_preview_expansion_uses_original_link_budget_and_live_menu(
+    monkeypatch, navigation_seconds, expected_budget
+):
+    from contextlib import contextmanager
+
+    from fbn import mobile
+
+    clock = [0.0]
+    active = [False]
+    expansion_calls = []
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+    source = {
+        "author": "Author",
+        "text": "Prefix. Full body.",
+        "timestampLabel": "2 hours ago",
+        "mediaCount": 0,
+        "partial": False,
+    }
+    canonical = "https://m.facebook.com/groups/test-group/posts/301/"
+    menu = object()
+
+    def navigate(*args, **kwargs):
+        clock[0] += navigation_seconds
+        return SimpleNamespace(status=200)
+
+    def wait(*args, **kwargs):
+        clock[0] += 2
+
+    @contextmanager
+    def records(*args, **kwargs):
+        active[0] = True
+        try:
+            yield [(menu, {**source, "text": "Prefix.", "partial": True})]
+        finally:
+            active[0] = False
+
+    def expand(page, handle, payload, **kwargs):
+        assert active[0] and handle is menu
+        expansion_calls.append(kwargs)
+        return source
+
+    monkeypatch.setattr(mobile, "mobile_records", records)
+    monkeypatch.setattr(mobile, "wait_for_mobile_page", wait)
+    monkeypatch.setattr(mobile, "expand_post_preview", expand)
+    page = SimpleNamespace(
+        bring_to_front=lambda: None,
+        goto=navigate,
+        url=canonical,
+        on=lambda *args: None,
+        remove_listener=lambda *args: None,
+    )
+    assert mobile.resolve_post_link(
+        page, canonical, source, frozenset({"test-group"}), timeout_seconds=30
+    ).endswith("/posts/301/")
+    assert expansion_calls == [{"timeout_seconds": expected_budget, "permalink": True}]
+    assert not active[0]
+
+
 def test_canonical_panel_check_cannot_extend_the_original_budget(monkeypatch):
     from contextlib import contextmanager
 

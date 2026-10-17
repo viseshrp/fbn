@@ -64,8 +64,9 @@ def test_mobile_preview_marker_is_partial_and_not_post_content(
 
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
 @pytest.mark.parametrize("behavior", ["expand", "replace_card", "footer_loading"])
+@pytest.mark.parametrize("target_preview", [False, True])
 def test_mobile_fetch_expands_inline_preview_and_verifies_the_full_body(
-    tmp_path, component, behavior
+    tmp_path, component, behavior, target_preview
 ):
     full = "Synthetic preview. Full continuation that was hidden in the group feed."
     with _local_context(tmp_path) as context:
@@ -75,7 +76,13 @@ def test_mobile_fetch_expands_inline_preview_and_verifies_the_full_body(
             is_post = "/share/" in route.request.url
             requests.append(is_post)
             html = (
-                mobile_fixture([("301", "Synthetic Author", full)])
+                (
+                    mobile_preview_fixture(
+                        "Synthetic preview.", full, component=component, delay_ms=120
+                    )
+                    if target_preview
+                    else mobile_fixture([("301", "Synthetic Author", full)])
+                )
                 if is_post
                 else mobile_preview_fixture(
                     "Synthetic preview.",
@@ -116,6 +123,56 @@ def test_mobile_fetch_expands_inline_preview_and_verifies_the_full_body(
         assert not result.posts[0].partial
         assert requests == [False, True]
         assert not (tmp_path / "failure-screenshots").exists()
+
+
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize("matching", [False, True])
+def test_mobile_permalink_preview_expands_within_scroller_and_requires_full_equality(
+    tmp_path, component, matching
+):
+    full = "Synthetic prefix. Full source body."
+    target_body = full if matching else "Synthetic prefix. Wrong full target body."
+    html = mobile_preview_fixture("Synthetic prefix.", target_body, component=component)
+    # Real single-post views can put sections directly in the scroller.
+    html += (
+        "<script>const root=document.querySelector('[data-type=vscroller]');"
+        "root.firstElementChild.remove();"
+        "const card=root.querySelector('[data-story]');"
+        "card.firstElementChild.remove();"
+        "card.replaceWith(...card.childNodes);</script>"
+    )
+    with _local_context(tmp_path) as context:
+        source = context.new_page()
+        source.set_content(mobile_fixture([("301", "Synthetic Author", full)]))
+        with mobile_records(source) as records:
+            payload = records[0][1]
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=html
+            ),
+        )
+        target = context.new_page()
+        if matching:
+            assert resolve_post_link(
+                target,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                payload,
+                frozenset({"contract-group"}),
+                timeout_seconds=5,
+            ).endswith("/posts/301/")
+        else:
+            with pytest.raises(
+                LayoutChangedError, match="resolved_primary_body_matches_source"
+            ):
+                resolve_post_link(
+                    target,
+                    "https://m.facebook.com/groups/contract-group/posts/301/",
+                    payload,
+                    frozenset({"contract-group"}),
+                    timeout_seconds=5,
+                )
+        assert target.evaluate("window.previewClicks") == 1
 
 
 @pytest.mark.parametrize("action_region", [False, True])

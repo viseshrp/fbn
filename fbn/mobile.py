@@ -681,6 +681,7 @@ def expand_post_preview(
     payload: dict[str, Any],
     *,
     timeout_seconds: float,
+    permalink: bool = False,
 ) -> dict[str, Any]:
     """Expand this card, then require the same owner, date, and preview prefix."""
 
@@ -689,6 +690,7 @@ def expand_post_preview(
     if payload.get("previewControlCount") != 1:
         raise _layout_failure("unique_primary_preview_control")
     deadline = time.monotonic() + timeout_seconds
+    script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
     original_url = page.url
     expansion = None
     completed = None
@@ -697,7 +699,7 @@ def expand_post_preview(
         menu.evaluate("node => node.scrollIntoView({block:'center',inline:'nearest'})")
         with _action_phase("find_primary_preview"):
             expansion = page.wait_for_function(
-                f"menu => ({MOBILE_SCAN_SCRIPT})(true).records"
+                f"menu => ({script})(true).records"
                 ".find(record => record.menu === menu)?.expand || null",
                 arg=menu,
                 timeout=_remaining_seconds(deadline, "find_primary_preview") * 1_000,
@@ -715,7 +717,7 @@ def expand_post_preview(
         with _action_phase("expanded_primary_preview_render"):
             completed = page.wait_for_function(
                 "arg => {if (!arg.menu.isConnected) return {missing: true};"
-                f"const record = ({MOBILE_SCAN_SCRIPT})(true).records"
+                f"const record = ({script})(true).records"
                 ".find(record => record.menu === arg.menu);"
                 "if (!record) return false;"
                 "return !record.payload.partial && record.payload.text !== arg.text"
@@ -1060,6 +1062,7 @@ def _resolve_post_link(
     if direct is not None and direct.post_id != resolved.post_id:
         raise _layout_failure("unchanged_direct_post_identity")
     checked_canonical = False
+    expanded_preview = False
     while True:
         # Capture router changes from navigation onward, including those that
         # happen before the first readable post. Do not adopt a replacement ID.
@@ -1072,6 +1075,42 @@ def _resolve_post_link(
             raise _layout_failure("unchanged_resolved_post_identity")
         with mobile_records(target, permalink=True) as records:
             items = [item for _, item in records]
+            if (
+                not expanded_preview
+                and len(records) == 1
+                and items[0].get("partial")
+                and not payload.get("partial")
+                and items[0]["author"] == payload["author"]
+                and _publication_matches(items[0], payload)
+                and items[0]["text"]
+                and payload["text"].startswith(items[0]["text"])
+            ):
+                # The permalink can be shortened too. Expand only this
+                # matching preview, inside the original link deadline, and
+                # still require full equality and unchanged canonical identity.
+                items = [
+                    expand_post_preview(
+                        target,
+                        records[0][0],
+                        items[0],
+                        timeout_seconds=min(
+                            MAX_EXPANSION_SECONDS,
+                            _remaining_seconds(deadline, "expand_resolved_preview"),
+                        ),
+                        permalink=True,
+                    )
+                ]
+                expanded_preview = True
+                if (
+                    parse_post_url(target.url) != resolved
+                    or len(destinations) > 10
+                    or any(
+                        link.post_id != resolved.post_id
+                        or link.group_key not in allowed_group_keys
+                        for link in destinations
+                    )
+                ):
+                    raise _layout_failure("unchanged_resolved_post_identity")
         # A supported header/footer can arrive before the body finishes
         # rendering. Re-read within the original deadline without relaxing
         # matching or logging every poll.
