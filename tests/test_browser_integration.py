@@ -63,7 +63,10 @@ def test_mobile_preview_marker_is_partial_and_not_post_content(
 
 
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
-@pytest.mark.parametrize("behavior", ["expand", "replace_card", "footer_loading"])
+@pytest.mark.parametrize(
+    "behavior",
+    ["expand", "replace_card", "footer_loading", "action_refresh", "reuse_menu"],
+)
 @pytest.mark.parametrize("target_preview", [False, True])
 def test_mobile_fetch_expands_inline_preview_and_verifies_the_full_body(
     tmp_path, component, behavior, target_preview
@@ -74,11 +77,19 @@ def test_mobile_fetch_expands_inline_preview_and_verifies_the_full_body(
 
         def routes(route):
             is_post = "/share/" in route.request.url
+            if is_post:
+                assert route.request.url.endswith("/share/p/301/")
             requests.append(is_post)
             html = (
                 (
                     mobile_preview_fixture(
-                        "Synthetic preview.", full, component=component, delay_ms=120
+                        "Synthetic preview.",
+                        full,
+                        component=component,
+                        delay_ms=120,
+                        behavior="action_refresh"
+                        if behavior == "action_refresh"
+                        else "expand",
                     )
                     if target_preview
                     else mobile_fixture([("301", "Synthetic Author", full)])

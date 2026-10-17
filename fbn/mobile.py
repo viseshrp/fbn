@@ -727,24 +727,41 @@ def expand_post_preview(
                 * 1_000,
             )
         expanded = completed.json_value()
-        if (
-            page.url != original_url
-            or expanded.get("actionToken") != payload["actionToken"]
-            or expanded.get("author") != payload["author"]
-            or not _publication_matches(expanded, payload)
-        ):
-            raise _layout_failure("unchanged_expanded_primary_post")
-        if (
-            expanded.get("partial")
-            or not payload["text"]
-            or not expanded["text"].startswith(payload["text"])
-            or len(expanded["text"]) <= len(payload["text"])
-        ):
-            raise _layout_failure("complete_expanded_primary_body")
+        comparisons = {
+            "expanded_primary_menu_preserved": not expanded.get("missing", False),
+            "expanded_primary_url_unchanged": page.url == original_url,
+            "expanded_primary_author_matches_source": (
+                expanded.get("author") == payload["author"]
+            ),
+            "expanded_primary_publication_matches_source": (
+                not expanded.get("missing", False)
+                and _publication_matches(expanded, payload)
+            ),
+            "expanded_primary_body_complete": (
+                not expanded.get("missing", False) and not expanded.get("partial", False)
+            ),
+            "expanded_primary_body_preserves_preview": bool(payload["text"])
+            and expanded.get("text", "").startswith(payload["text"]),
+            "expanded_primary_body_grew": (
+                len(expanded.get("text", "")) > len(payload["text"])
+            ),
+        }
+        missing = [name for name, matches in comparisons.items() if not matches]
+        if missing:
+            LOGGER.warning(
+                "Mobile preview comparison failed",
+                **comparisons,
+                source_body_chars=len(payload["text"]),
+                expanded_body_chars=len(expanded.get("text", "")),
+            )
+            raise _layout_failure(*missing)
         LOGGER.debug(
             "Mobile post preview expanded",
             source_body_chars=len(payload["text"]),
             expanded_body_chars=len(expanded["text"]),
+            menu_action_refreshed=(
+                expanded.get("actionToken") != payload.get("actionToken")
+            ),
         )
         return expanded
     except PlaywrightError as exc:
@@ -1383,6 +1400,16 @@ class MobilePostSource(BrowserSession):
                             accumulated, scrolls, True, boundary_post_id
                         )
                     preview_signature = signature
+                    # Bind the link to the original menu before expansion can
+                    # refresh Bloks action IDs or recycle a menu action. Full
+                    # destination equality still verifies this original link.
+                    copied = copy_post_link(
+                        page,
+                        menu,
+                        timeout_seconds=min(
+                            COPY_TIMEOUT_SECONDS, policy.navigation_timeout_seconds
+                        ),
+                    )
                     if payload.get("partial"):
                         payload = expand_post_preview(
                             page,
@@ -1401,13 +1428,6 @@ class MobilePostSource(BrowserSession):
                             payload["actionToken"],
                             *_post_signature(payload),
                         )
-                    copied = copy_post_link(
-                        page,
-                        menu,
-                        timeout_seconds=min(
-                            COPY_TIMEOUT_SECONDS, policy.navigation_timeout_seconds
-                        ),
-                    )
                     # Close each destination promptly so navigation history,
                     # decoded media and document heaps cannot grow across posts.
                     with _post_target(

@@ -134,7 +134,10 @@ def test_matching_preview_text_is_not_accepted_as_a_complete_verified_post(
     assert not checks["resolved_primary_body_complete"]
 
 
-def test_preview_expansion_shares_one_timeout_budget_and_disposes_handles(monkeypatch):
+@pytest.mark.parametrize("action_refresh", [False, True])
+def test_preview_expansion_shares_one_timeout_budget_and_disposes_handles(
+    monkeypatch, action_refresh
+):
     from fbn import mobile
 
     clock = [0.0]
@@ -156,6 +159,7 @@ def test_preview_expansion_shares_one_timeout_budget_and_disposes_handles(monkey
         "text": "Prefix. Full body.",
         "partial": False,
         "cardToken": 2,
+        "actionToken": "refreshed-action" if action_refresh else source["actionToken"],
     }
 
     def click(**kwargs):

@@ -47,6 +47,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Wait for complete text,
   preserve the original post menu/author/date and visible preview prefix, then
   require full equality with the copied-link destination before saving a post.
+  Capture the original menu's link before expansion; temporary Bloks action-ID
+  refreshes do not change post identity. Log individual expansion comparisons
+  on failure without exposing content or action IDs.
 - Log structural and terminal-state diagnostics when copied-link verification
   expires after a readable render, including missing scrollers, timestamps and
   action rows. Reclassify late login/account/access/rate-limit screens correctly;
