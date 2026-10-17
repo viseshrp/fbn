@@ -738,7 +738,8 @@ def expand_post_preview(
                 and _publication_matches(expanded, payload)
             ),
             "expanded_primary_body_complete": (
-                not expanded.get("missing", False) and not expanded.get("partial", False)
+                not expanded.get("missing", False)
+                and not expanded.get("partial", False)
             ),
             "expanded_primary_body_preserves_preview": bool(payload["text"])
             and expanded.get("text", "").startswith(payload["text"]),
