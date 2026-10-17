@@ -115,6 +115,89 @@ def test_relative_rollover_never_relaxes_author_or_body_checks():
         )
 
 
+@pytest.mark.parametrize("partial_side", ["source", "target"])
+def test_matching_preview_text_is_not_accepted_as_a_complete_verified_post(
+    partial_side,
+):
+    from fbn.mobile import _primary_post_comparisons
+
+    source = {
+        "author": "Author",
+        "text": "Same preview",
+        "timestampLabel": "2h",
+        "mediaCount": 0,
+    }
+    target = dict(source)
+    (source if partial_side == "source" else target)["partial"] = True
+    checks = _primary_post_comparisons(target, source)
+    assert checks["resolved_primary_body_matches_source"]
+    assert not checks["resolved_primary_body_complete"]
+
+
+def test_preview_expansion_shares_one_timeout_budget_and_disposes_handles(monkeypatch):
+    from fbn import mobile
+
+    clock = [0.0]
+    waits = []
+    clicks = []
+    disposed = []
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+    source = {
+        "author": "Author",
+        "text": "Prefix.",
+        "timestampLabel": "2h",
+        "cardToken": 1,
+        "actionToken": "menu-301",
+        "partial": True,
+        "previewControlCount": 1,
+    }
+    expanded = {
+        **source,
+        "text": "Prefix. Full body.",
+        "partial": False,
+        "cardToken": 2,
+    }
+
+    def click(**kwargs):
+        clicks.append(kwargs["timeout"])
+        clock[0] += 3
+
+    control = SimpleNamespace(evaluate=lambda *args: None, click=click)
+    expansion = SimpleNamespace(
+        as_element=lambda: control, dispose=lambda: disposed.append("expansion")
+    )
+    result = SimpleNamespace(
+        json_value=lambda: expanded, dispose=lambda: disposed.append("result")
+    )
+
+    def wait(script, **kwargs):
+        waits.append(kwargs["timeout"])
+        if len(waits) == 1:
+            clock[0] += 2
+            return expansion
+        return result
+
+    menu = SimpleNamespace(evaluate=lambda *args: None)
+    page = SimpleNamespace(
+        url="https://m.facebook.com/groups/test/",
+        bring_to_front=lambda: None,
+        wait_for_function=wait,
+    )
+    assert (
+        mobile.expand_post_preview(page, menu, source, timeout_seconds=10) is expanded
+    )
+    assert waits == [10_000, 5_000]
+    assert clicks == [8_000]
+    assert disposed == ["result", "expansion"]
+
+
+def test_complete_mobile_post_does_not_trigger_expansion():
+    from fbn.mobile import expand_post_preview
+
+    payload = {"partial": False}
+    assert expand_post_preview(None, None, payload, timeout_seconds=1) is payload
+
+
 @pytest.mark.parametrize("fail", [False, True])
 def test_link_navigation_observer_is_always_removed(monkeypatch, fail):
     from fbn import mobile

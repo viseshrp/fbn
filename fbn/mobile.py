@@ -49,6 +49,7 @@ LOGGER = get_logger("mobile")
 MAX_SCAN_SECONDS = 90.0
 COPY_TIMEOUT_SECONDS = 30.0
 MAX_LINK_SECONDS = 30.0
+MAX_EXPANSION_SECONDS = 15.0
 
 # Bloks cards are direct children of a vscroller. The contextual menu belongs
 # to the primary header; its author must agree with that header's visible link.
@@ -191,6 +192,7 @@ MOBILE_SCAN_SCRIPT = r"""
       const end = footerIndex(sections, start);
       if (end < start) { missing.add('primary_action_footer'); continue; }
       const texts = [];
+      const expanders = [];
       let mediaCount = 0;
       let partial = false;
       let bodyControlCount = 0;
@@ -202,6 +204,24 @@ MOBILE_SCAN_SCRIPT = r"""
         }
         const own = node => !node.closest(excludedSelector)
           && !excluded.some(nested => nested.contains(node));
+        // Bloks can render truncation as a plain inline span inside an
+        // actionable TextArea, with no button role. Never treat its UI label
+        // as post content or mistake the preview for a complete body.
+        const candidates = Array.from(section.querySelectorAll(
+          'span,button,[role="button"]'
+        )).filter(node => visible(node) && own(node)
+          && (/^(?:\.{3}|…)\s*see more$/i.test(clean(node.innerText))
+            || (/^see more$/i.test(clean(node.innerText))
+              && node.closest('button,[role="button"]')))
+          && !node.closest('a,[role="link"]')
+          && section.contains(node.closest('button,[role="button"],'
+            + '[data-mcomponent="TextArea"][data-action-id],'
+            + '[data-mcomponent="ServerTextArea"][data-action-id]')));
+        const controlsToExpand = candidates.filter(node => !candidates.some(
+          other => other !== node && node.contains(other)
+        ));
+        expanders.push(...controlsToExpand);
+        excluded.push(...controlsToExpand);
         const textNodes = [section, ...section.querySelectorAll(textSelector)]
           .filter(node => node.matches(textSelector) && visible(node) && own(node)
             && !node.parentElement.closest(textSelector));
@@ -226,12 +246,25 @@ MOBILE_SCAN_SCRIPT = r"""
         const controls = Array.from(section.querySelectorAll('[role="button"]'))
           .filter(node => own(node));
         bodyControlCount += controls.filter(visible).length;
-        partial ||= controls.some(node => clean(node.innerText) === 'See more');
+        partial ||= controlsToExpand.length > 0;
       }
       const text = clean(texts.join(' '));
       if (!text && !mediaCount) { missing.add('primary_body_or_media'); continue; }
       if (!tokens.cards.has(card)) tokens.cards.set(card, ++tokens.next);
-      records.push({card, menu, payload: {
+      let expand = expanders.length === 1 ? expanders[0].closest(
+        'button,[role="button"],[data-mcomponent="TextArea"][data-action-id],'
+        + '[data-mcomponent="ServerTextArea"][data-action-id]'
+      ) : null;
+      // Bloks text can have pointer-events:none. Its enclosing body action
+      // region owns the click and can have a different action ID.
+      const actionRegion = expand?.closest(
+        '[data-mcomponent="MContainer"][data-action-id]'
+      );
+      if (actionRegion && sections.slice(start, end).some(
+        section => section.contains(actionRegion)
+      )) expand = actionRegion;
+      records.push({card, menu, expand,
+        payload: {
         author: owner, text, timestamp: clean(timestamp.node.innerText),
         timestampLabel: timestamp.label,
         timestampObservedAt: observedAt,
@@ -240,6 +273,7 @@ MOBILE_SCAN_SCRIPT = r"""
         mediaCount, partial, position: records.length,
         bodyControlCount, bodyTextPartCount: texts.length,
         bodyTextLengths: texts.slice(0, 32).map(text => text.length),
+        previewControlCount: expanders.length,
       }});
     }
   }
@@ -641,6 +675,85 @@ def mobile_records(
             root.dispose()
 
 
+def expand_post_preview(
+    page: Page,
+    menu: ElementHandle,
+    payload: dict[str, Any],
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Expand this card, then require the same owner, date, and preview prefix."""
+
+    if not payload.get("partial"):
+        return payload
+    if payload.get("previewControlCount") != 1:
+        raise _layout_failure("unique_primary_preview_control")
+    deadline = time.monotonic() + timeout_seconds
+    original_url = page.url
+    expansion = None
+    completed = None
+    try:
+        page.bring_to_front()
+        menu.evaluate("node => node.scrollIntoView({block:'center',inline:'nearest'})")
+        with _action_phase("find_primary_preview"):
+            expansion = page.wait_for_function(
+                f"menu => ({MOBILE_SCAN_SCRIPT})(true).records"
+                ".find(record => record.menu === menu)?.expand || null",
+                arg=menu,
+                timeout=_remaining_seconds(deadline, "find_primary_preview") * 1_000,
+            )
+        control = expansion.as_element()
+        if control is None:
+            raise _layout_failure("actionable_primary_preview_control")
+        control.evaluate(
+            "node => node.scrollIntoView({block:'center',inline:'nearest'})"
+        )
+        with _action_phase("expand_primary_preview"):
+            control.click(
+                timeout=_remaining_seconds(deadline, "expand_primary_preview") * 1_000
+            )
+        with _action_phase("expanded_primary_preview_render"):
+            completed = page.wait_for_function(
+                "arg => {if (!arg.menu.isConnected) return {missing: true};"
+                f"const record = ({MOBILE_SCAN_SCRIPT})(true).records"
+                ".find(record => record.menu === arg.menu);"
+                "if (!record) return false;"
+                "return !record.payload.partial && record.payload.text !== arg.text"
+                " ? record.payload : false;}",
+                arg={"menu": menu, "text": payload["text"]},
+                timeout=_remaining_seconds(deadline, "expanded_primary_preview_render")
+                * 1_000,
+            )
+        expanded = completed.json_value()
+        if (
+            page.url != original_url
+            or expanded.get("actionToken") != payload["actionToken"]
+            or expanded.get("author") != payload["author"]
+            or not _publication_matches(expanded, payload)
+        ):
+            raise _layout_failure("unchanged_expanded_primary_post")
+        if (
+            expanded.get("partial")
+            or not payload["text"]
+            or not expanded["text"].startswith(payload["text"])
+            or len(expanded["text"]) <= len(payload["text"])
+        ):
+            raise _layout_failure("complete_expanded_primary_body")
+        LOGGER.debug(
+            "Mobile post preview expanded",
+            source_body_chars=len(payload["text"]),
+            expanded_body_chars=len(expanded["text"]),
+        )
+        return expanded
+    except PlaywrightError as exc:
+        raise _layout_failure("complete_expanded_primary_body") from exc
+    finally:
+        for handle in (completed, expansion):
+            if handle is not None:
+                with suppress(PlaywrightError):
+                    handle.dispose()
+
+
 def copy_post_link(page: Page, menu: ElementHandle, *, timeout_seconds: float) -> str:
     """Capture one fresh clipboard write while the identified card owns the menu."""
 
@@ -760,6 +873,9 @@ def _primary_post_comparisons(
     return {
         "resolved_primary_author_matches_source": item["author"] == payload["author"],
         "resolved_primary_body_matches_source": item["text"] == payload["text"],
+        "resolved_primary_body_complete": not (
+            item.get("partial", False) or payload.get("partial", False)
+        ),
         "resolved_primary_publication_matches_source": (
             _publication_matches(item, payload)
         ),
@@ -1227,6 +1343,25 @@ class MobilePostSource(BrowserSession):
                         return self._scan_result(
                             accumulated, scrolls, True, boundary_post_id
                         )
+                    preview_signature = signature
+                    if payload.get("partial"):
+                        payload = expand_post_preview(
+                            page,
+                            menu,
+                            payload,
+                            timeout_seconds=min(
+                                MAX_EXPANSION_SECONDS,
+                                policy.navigation_timeout_seconds,
+                                _remaining_seconds(
+                                    started + MAX_SCAN_SECONDS, "expand_primary_preview"
+                                ),
+                            ),
+                        )
+                        signature = (
+                            payload["cardToken"],
+                            payload["actionToken"],
+                            *_post_signature(payload),
+                        )
                     copied = copy_post_link(
                         page,
                         menu,
@@ -1273,6 +1408,7 @@ class MobilePostSource(BrowserSession):
                         or posts[0].published_at,
                     )
                     seen.add(signature)
+                    seen.add(preview_signature)
                     if post.post_id in seen_ids:
                         continue
                     seen_ids.add(post.post_id)

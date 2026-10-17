@@ -89,3 +89,68 @@ def mobile_fixture(
         'document.getElementById("sort-label").textContent="New posts";}'
         "</script></body></html>"
     )
+
+
+def mobile_preview_fixture(
+    preview: str,
+    complete: str,
+    *,
+    component: str = "TextArea",
+    button: bool = False,
+    behavior: str = "expand",
+    delay_ms: int = 0,
+    action_region: bool = True,
+) -> str:
+    """Synthetic inline Bloks truncation; no production content or attributes."""
+    html = mobile_fixture([("301", "Synthetic Author", preview)])
+    label = (
+        '<button role="button">See more</button>'
+        if button
+        else "<span>...see more</span>"
+    )
+    body = (
+        f'<div data-mcomponent="{component}" data-action-id="expand-301" '
+        + (
+            'style="pointer-events:none"'
+            if action_region
+            else 'onclick="expandPreview(this)"'
+        )
+        + f"><div>{escape(preview)} {label}</div></div>"
+    )
+    if action_region:
+        body = (
+            '<div data-mcomponent="MContainer" data-action-id="body-action-301" '
+            'onclick="expandPreview(this.firstElementChild)">' + body + "</div>"
+        )
+    html = html.replace(
+        f'<div data-mcomponent="ServerTextArea">{escape(preview)}</div>', body, 1
+    )
+    return html + (
+        "<script>function expandPreview(node) {"
+        "window.previewClicks=(window.previewClicks||0)+1;"
+        "setTimeout(() => {"
+        f"const behavior={json.dumps(behavior)};"
+        "if(behavior==='never')return;"
+        f"node.textContent={json.dumps(complete)};"
+        "node.removeAttribute('onclick');"
+        "if(behavior==='author'){"
+        "const header=document.querySelector('[data-story]').children[1];"
+        "header.querySelector('[role=link]').textContent='Other Author';"
+        "header.querySelector('button').setAttribute('aria-label',"
+        "'More options for Other Author');}"
+        "if(behavior==='publication'){"
+        "document.querySelector('[data-story] [aria-label]')"
+        ".setAttribute('aria-label','Monday, October 12, 2026 at 10:00 AM');}"
+        "if(behavior==='replace_menu'){"
+        "const menu=document.querySelector('[data-story] button');"
+        "menu.replaceWith(menu.cloneNode(true));}"
+        "if(behavior==='replace_card'){"
+        "const old=document.querySelector('[data-story]');"
+        "const next=old.cloneNode(false); next.append(...old.childNodes);"
+        "old.replaceWith(next);}"
+        "if(behavior==='footer_loading'){"
+        "const footer=document.querySelector('[aria-label=\"Make a comment\"]');"
+        "footer.hidden=true; setTimeout(()=>footer.hidden=false,150);}"
+        f"}}, {delay_ms});"
+        "}</script>"
+    )

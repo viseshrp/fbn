@@ -42,6 +42,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Expand shortened mobile feed posts through their own Bloks action region,
+  including inline non-button "see more" controls. Wait for complete text,
+  preserve the original post menu/author/date and visible preview prefix, then
+  require full equality with the copied-link destination before saving a post.
 - Log structural and terminal-state diagnostics when copied-link verification
   expires after a readable render, including missing scrollers, timestamps and
   action rows. Reclassify late login/account/access/rate-limit screens correctly;

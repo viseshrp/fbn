@@ -26,6 +26,7 @@ from fbn.extractor import extract_posts, parse_group_ref
 from fbn.mobile import (
     MobilePostSource,
     copy_post_link,
+    expand_post_preview,
     mobile_records,
     resolve_post_link,
     select_new_posts,
@@ -33,11 +34,225 @@ from fbn.mobile import (
 )
 from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
-from tests.mobile_fixtures import mobile_fixture
+from tests.mobile_fixtures import mobile_fixture, mobile_preview_fixture
 
 # These cases assert DOM/identity behavior, not shared-runner navigation speed.
 # Deadline arithmetic and budget enforcement have separate deterministic tests.
 OFFLINE_NAVIGATION_SECONDS = 5
+
+
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize("button", [False, True])
+def test_mobile_preview_marker_is_partial_and_not_post_content(
+    tmp_path, component, button
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic preview.",
+                "Synthetic preview. Full continuation.",
+                component=component,
+                button=button,
+            )
+        )
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert records[0][1]["partial"] is True
+            assert records[0][1]["text"] == "Synthetic preview."
+
+
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize("behavior", ["expand", "replace_card", "footer_loading"])
+def test_mobile_fetch_expands_inline_preview_and_verifies_the_full_body(
+    tmp_path, component, behavior
+):
+    full = "Synthetic preview. Full continuation that was hidden in the group feed."
+    with _local_context(tmp_path) as context:
+        requests = []
+
+        def routes(route):
+            is_post = "/share/" in route.request.url
+            requests.append(is_post)
+            html = (
+                mobile_fixture([("301", "Synthetic Author", full)])
+                if is_post
+                else mobile_preview_fixture(
+                    "Synthetic preview.",
+                    full,
+                    component=component,
+                    delay_ms=120,
+                    behavior=behavior,
+                )
+            )
+            if is_post:
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", routes)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        result = source.fetch_recent(
+            parse_group_ref("contract-group"),
+            ScanPolicy(
+                sample_count=1,
+                max_scrolls=1,
+                navigation_timeout_seconds=5,
+                settle_seconds=0,
+            ),
+            boundary_post_id="301",
+        )
+        assert len(result.posts) == 1
+        assert result.posts[0].text == full
+        assert result.posts[0].post_id == "301"
+        assert not result.posts[0].partial
+        assert requests == [False, True]
+        assert not (tmp_path / "failure-screenshots").exists()
+
+
+@pytest.mark.parametrize("action_region", [False, True])
+def test_mobile_expansion_waits_for_complete_body_without_fixed_sleep(
+    tmp_path, action_region
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic prefix.",
+                "Synthetic prefix. Complete body.",
+                action_region=action_region,
+                delay_ms=150,
+            )
+        )
+        with mobile_records(page) as records:
+            menu, preview = records[0]
+            expanded = expand_post_preview(page, menu, preview, timeout_seconds=5)
+        assert expanded["text"] == "Synthetic prefix. Complete body."
+        assert not expanded["partial"]
+        assert page.evaluate("window.previewClicks") == 1
+
+
+@pytest.mark.parametrize(
+    "behavior,complete",
+    [
+        ("author", "Synthetic prefix. Full body."),
+        ("publication", "Synthetic prefix. Full body."),
+        ("replace_menu", "Synthetic prefix. Full body."),
+        ("expand", "Unrelated complete body."),
+        ("expand", ""),
+        ("never", "Synthetic prefix. Full body."),
+    ],
+)
+def test_mobile_expansion_rejects_changed_owner_date_menu_body_or_incomplete_render(
+    tmp_path, behavior, complete
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture("Synthetic prefix.", complete, behavior=behavior)
+        )
+        with mobile_records(page) as records, pytest.raises(LayoutChangedError):
+            expand_post_preview(page, *records[0], timeout_seconds=2)
+        assert page.evaluate("window.previewClicks") == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '<div data-mcomponent="ServerTextArea">Normal text saying see more.</div>',
+        '<div data-mcomponent="TextArea" data-action-id="literal">'
+        "<span>See more</span></div>",
+        '<div data-mcomponent="ServerTextArea">Normal text. '
+        '<a href="https://example.invalid/">...see more</a></div>',
+        '<div role="article"><div data-mcomponent="TextArea" data-action-id="quoted">'
+        "Quoted preview <button>See more</button></div></div>",
+        '<div aria-label="Comment by Someone"><div data-mcomponent="TextArea" '
+        'data-action-id="comment">Reply preview <span>...see more</span></div></div>',
+    ],
+)
+def test_mobile_preview_detection_ignores_post_words_links_quotes_and_replies(
+    tmp_path, body
+):
+    html = mobile_fixture([("301", "Author", "Primary body")]).replace(
+        '<div data-mcomponent="ServerTextArea">Primary body</div>',
+        '<div data-mcomponent="ServerTextArea">Primary body</div>' + body,
+        1,
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert not records[0][1]["partial"]
+            assert records[0][1]["previewControlCount"] == 0
+
+
+def test_mobile_expansion_requires_one_control_before_clicking(tmp_path):
+    html = mobile_preview_fixture(
+        "Synthetic prefix.", "Synthetic prefix. Complete body."
+    )
+    html = html.replace(
+        "<span>...see more</span>", "<span>...see more</span><span>...see more</span>"
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            assert records[0][1]["previewControlCount"] == 2
+            with pytest.raises(
+                LayoutChangedError, match="unique_primary_preview_control"
+            ):
+                expand_post_preview(page, *records[0], timeout_seconds=2)
+        assert page.evaluate("window.previewClicks || 0") == 0
+
+
+def test_mobile_full_target_must_match_expanded_source_not_only_preview_prefix(
+    tmp_path,
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic prefix.", "Synthetic prefix. Full source body."
+            )
+        )
+        with mobile_records(page) as records:
+            expanded = expand_post_preview(page, *records[0], timeout_seconds=5)
+        target = context.new_page()
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_fixture(
+                    [
+                        (
+                            "301",
+                            "Synthetic Author",
+                            "Synthetic prefix. Wrong full target body.",
+                        )
+                    ]
+                ),
+            ),
+        )
+        with pytest.raises(
+            LayoutChangedError, match="resolved_primary_body_matches_source"
+        ):
+            resolve_post_link(
+                target,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                expanded,
+                frozenset({"contract-group"}),
+                timeout_seconds=2,
+            )
 
 
 @pytest.mark.parametrize(
