@@ -1,0 +1,58 @@
+[
+  {
+    "case": "app_prompt_blocks_sort",
+    "evidence_date": "2026-10-16",
+    "expected_blocks": ["message"],
+    "outcome": "dismiss_known_prompt_then_verify_sort",
+    "tests": ["test_known_app_prompt_is_dismissed_once_before_sorting"]
+  },
+  {
+    "case": "source_preview_destination_complete",
+    "evidence_date": "2026-10-17",
+    "expected_blocks": ["message"],
+    "outcome": "expand_then_require_full_equality",
+    "tests": ["test_layout_grid_preserves_content_link_receipts_and_restart"]
+  },
+  {
+    "case": "scan_budget_expires_after_copy",
+    "evidence_date": "2026-10-17",
+    "expected_blocks": ["message"],
+    "outcome": "retain_verified_work_preserve_boundary",
+    "tests": ["test_budget_keeps_verified_work_but_layout_failure_commits_nothing", "test_copy_cleanup_runs_after_scan_expiry_and_restores_interception"]
+  },
+  {
+    "case": "destination_preview_and_feedback_panel",
+    "evidence_date": "2026-10-17",
+    "expected_blocks": ["message", "interface_panel", "discussion"],
+    "outcome": "partition_then_expand_then_verify",
+    "tests": ["test_layout_grid_preserves_content_link_receipts_and_restart", "test_unknown_interactive_body_never_qualifies_as_authored_content"]
+  },
+  {
+    "case": "photo_listing_poll_link_video",
+    "evidence_date": null,
+    "expected_blocks": ["message", "attachment"],
+    "outcome": "exclude_attachment_controls_and_preview_text",
+    "tests": ["test_owned_attachments_do_not_become_message_text_or_actions", "test_media_only_destination_requires_stable_owned_attachment_id"]
+  },
+  {
+    "case": "comments_replies_quotes_and_reactions",
+    "evidence_date": "2026-10-17",
+    "expected_blocks": ["message", "discussion", "footer"],
+    "outcome": "exclude_discussion_and_never_borrow_footer",
+    "tests": ["test_mobile_never_uses_a_reply_action_row_as_the_post_footer", "test_mobile_excludes_discussion_nested_inside_the_body_text_component"]
+  },
+  {
+    "case": "unknown_blocking_dialog",
+    "evidence_date": null,
+    "expected_blocks": ["unknown"],
+    "outcome": "stop_without_dismissal_or_state_commit",
+    "tests": ["test_unknown_app_like_dialog_is_not_dismissed"]
+  },
+  {
+    "case": "inline_text_and_repeated_paragraphs",
+    "evidence_date": null,
+    "expected_blocks": ["message"],
+    "outcome": "preserve_authored_text_without_string_deduplication",
+    "tests": ["test_message_normalization_preserves_inline_text_node_boundaries", "test_layout_roles_exclude_panel_media_and_preserve_repeated_paragraphs"]
+  }
+]

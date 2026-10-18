@@ -11,6 +11,12 @@ from fbn.mobile import MobilePostSource, mobile_group_url, verified_group_keys
 from fbn.models import Post
 
 
+@pytest.fixture(autouse=True)
+def no_app_prompt_in_unit_page_doubles(monkeypatch):
+    # Prompt ownership/actionability is tested with a real offline browser.
+    monkeypatch.setattr("fbn.mobile._dismiss_app_prompt", lambda *args: False)
+
+
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
@@ -275,31 +281,6 @@ def test_primary_link_mismatch_identifies_failed_comparison_without_content(
         assert "source text parts=[12]" in output
         assert "target text parts=[12, 32, 10, 14]" in output
         assert "target body controls=2" in output
-
-
-@pytest.mark.parametrize(
-    "changed", [None, "author", "timestampLabel", "partial", "bodyControlCount", "text"]
-)
-def test_extra_body_panel_cannot_relax_post_identity(changed):
-    from fbn.mobile import _has_additional_body_panel
-
-    source = {
-        "author": "Author",
-        "text": "Body",
-        "timestampLabel": "2 hours ago",
-        "bodyControlCount": 0,
-        "mediaCount": 0,
-    }
-    target = {**source, "text": "Body Extra panel First Second", "bodyControlCount": 2}
-    if changed in {"author", "timestampLabel", "text"}:
-        target[changed] = "Different"
-    elif changed == "partial":
-        target[changed] = True
-    elif changed == "bodyControlCount":
-        target[changed] = 1
-    assert _has_additional_body_panel(target, source) is (changed is None)
-    assert not _has_additional_body_panel(target, {**source, "partial": True})
-    assert not _has_additional_body_panel(target, {**source, "bodyControlCount": 1})
 
 
 def test_mobile_launch_failure_is_redacted(tmp_path):
@@ -650,67 +631,6 @@ def test_resolved_preview_expansion_uses_original_link_budget_and_live_menu(
     ).endswith("/posts/301/")
     assert expansion_calls == [{"timeout_seconds": expected_budget, "permalink": True}]
     assert not active[0]
-
-
-def test_canonical_panel_check_cannot_extend_the_original_budget(monkeypatch):
-    from contextlib import contextmanager
-
-    from fbn import mobile
-
-    clock = [0.0]
-    waits = []
-    navigations = []
-    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
-    source = {
-        "author": "Author",
-        "text": "Body",
-        "timestampLabel": "2 hours ago",
-        "mediaCount": 0,
-        "bodyControlCount": 0,
-    }
-    canonical = "https://m.facebook.com/groups/test-group/posts/301/"
-
-    def navigate(url, **kwargs):
-        navigations.append((url, kwargs["timeout"]))
-        clock[0] += 8
-        return SimpleNamespace(status=200)
-
-    @contextmanager
-    def records(*args, **kwargs):
-        target = (
-            source
-            if len(navigations) == 2
-            else {
-                **source,
-                "text": "Body Extra panel First Second",
-                "bodyControlCount": 2,
-            }
-        )
-        yield [(None, target)]
-
-    monkeypatch.setattr(mobile, "mobile_records", records)
-    monkeypatch.setattr(
-        mobile, "wait_for_mobile_page", lambda page, **kw: waits.append(kw)
-    )
-    page = SimpleNamespace(
-        bring_to_front=lambda: None,
-        goto=navigate,
-        url=canonical,
-        on=lambda *args: None,
-        remove_listener=lambda *args: None,
-    )
-    mobile.resolve_post_link(
-        page,
-        "https://m.facebook.com/share/p/example/",
-        source,
-        frozenset({"test-group"}),
-        timeout_seconds=30,
-    )
-    assert navigations == [
-        ("https://m.facebook.com/share/p/example/", 30_000),
-        (canonical, 22_000),
-    ]
-    assert [wait["timeout_seconds"] for wait in waits] == [22, 22, 14]
 
 
 def test_expired_mobile_budget_fails_without_starting_another_action(monkeypatch):

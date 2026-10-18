@@ -26,6 +26,11 @@ class FakePage:
     def is_closed(self):
         return self.closed
 
+    def evaluate(self, script):
+        if script == screenshots.AUTH_SCREEN_SCRIPT:
+            return False
+        return {"nodes": [{"parent": -1, "tag": "BODY"}], "truncated": False}
+
     def locator(self, selector):
         self.selectors.append(selector)
         return "masked-inputs"
@@ -56,6 +61,8 @@ def test_capture_is_private_masked_bounded_and_has_no_secret_metadata(tmp_path):
         "post.png",
         "feed.png",
         "metadata.json",
+        "post-layout.json",
+        "feed-layout.json",
     }
     for path in event.iterdir():
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -87,6 +94,53 @@ def test_same_failure_is_captured_once_even_when_propagated(tmp_path):
         )
     assert len(_events(tmp_path)) == 1
     assert len(page.options) == 1
+
+
+def test_structural_snapshot_cannot_serialize_content_identifiers_or_unknown_values():
+    raw = {
+        "nodes": [
+            {
+                "parent": -1,
+                "tag": "SYNTHETIC_SECRET",
+                "component": "https://private.invalid/",
+                "role": "password",
+                "text": "SYNTHETIC_SECRET",
+                "href": "https://private.invalid/",
+                "actionId": "SYNTHETIC_SECRET",
+                "textChars": 9999999,
+            }
+        ],
+        "truncated": False,
+        "cookies": "SYNTHETIC_SECRET",
+    }
+    data = screenshots._safe_structure(raw)
+    assert b"SYNTHETIC_SECRET" not in data and b"https://" not in data
+    decoded = json.loads(data)
+    assert decoded["nodes"][0]["tag"] == "other"
+    assert decoded["nodes"][0]["textChars"] == 100000
+    assert len(data) <= screenshots.MAX_STRUCTURE_BYTES
+
+
+def test_structural_snapshot_is_node_bounded():
+    data = screenshots._safe_structure(
+        {"nodes": [{"parent": -1, "tag": "BODY"}] * 1001, "truncated": False}
+    )
+    decoded = json.loads(data)
+    assert len(decoded["nodes"]) == 1000 and decoded["truncated"]
+
+
+def test_late_authentication_screen_is_private_even_for_timeout_errors(tmp_path):
+    class LateAuth(FakePage):
+        def evaluate(self, script):
+            assert script == screenshots.AUTH_SCREEN_SCRIPT
+            return True
+
+    page = LateAuth()
+    screenshots.capture_failure_screenshots(
+        tmp_path / "profile", TimeoutError(), {"feed": page}
+    )
+    assert not (tmp_path / "failure-screenshots").exists()
+    assert not page.options
 
 
 @pytest.mark.parametrize("status", ["closed", "failed", "too_large"])

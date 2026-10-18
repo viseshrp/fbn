@@ -34,7 +34,12 @@ from fbn.mobile import (
 )
 from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
-from tests.mobile_fixtures import mobile_fixture, mobile_preview_fixture
+from tests.mobile_fixtures import (
+    app_prompt_fixture,
+    mobile_fixture,
+    mobile_layout_fixture,
+    mobile_preview_fixture,
+)
 
 # These cases assert DOM/identity behavior, not shared-runner navigation speed.
 # Deadline arithmetic and budget enforcement have separate deterministic tests.
@@ -60,6 +65,311 @@ def test_mobile_preview_marker_is_partial_and_not_post_content(
             assert len(records) == 1
             assert records[0][1]["partial"] is True
             assert records[0][1]["text"] == "Synthetic preview."
+
+
+@pytest.mark.parametrize("source_partial", [False, True])
+@pytest.mark.parametrize("target_partial", [False, True])
+@pytest.mark.parametrize("panel_location", ["neither", "source", "target", "both"])
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize("flat", [False, True])
+@pytest.mark.parametrize("button", [False, True])
+def test_layout_grid_preserves_content_link_receipts_and_restart(
+    tmp_path, source_partial, target_partial, panel_location, component, flat, button
+):
+    from fbn.monitor import MonitorService
+
+    full = "Synthetic preview. Full continuation."
+    group = parse_group_ref("contract-group")
+    requests = []
+    notifications = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            target = "/share/" in route.request.url
+            requests.append(target)
+            html = mobile_layout_fixture(
+                partial=target_partial if target else source_partial,
+                panel=panel_location
+                in ({"target", "both"} if target else {"source", "both"}),
+                component=component,
+                button=button,
+                flat=flat and target,
+            )
+            if target:
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        sink = type(
+            "RecordingSink",
+            (),
+            {"send": lambda self, value: notifications.append(value)},
+        )()
+        policy = ScanPolicy(
+            sample_count=1,
+            max_scrolls=0,
+            navigation_timeout_seconds=5,
+            settle_seconds=0,
+        )
+        state_path = tmp_path / "layout.sqlite3"
+        with SQLiteStateRepository(state_path) as state:
+            result = MonitorService(source, state, sink).run_once(
+                group, policy, notify_initial=True
+            )
+            assert result.delivered == 1 and result.pending == 0
+            assert not state.pending(group)
+        # A new repository instance represents a process restart; delivery
+        # receipts must suppress a second notification of the same GUID.
+        with SQLiteStateRepository(state_path) as state:
+            result = MonitorService(source, state, sink).run_once(group, policy)
+            assert result.delivered == 0 and result.pending == 0
+        assert len(notifications) == 1
+        assert notifications[0].body == (
+            "Synthetic Author\n"
+            + full
+            + "\nhttps://www.facebook.com/groups/contract-group/posts/301/"
+        )
+        assert requests == [False, True, False, True]
+        assert not (tmp_path / "failure-screenshots").exists()
+
+
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+def test_layout_roles_exclude_panel_media_and_preserve_repeated_paragraphs(
+    tmp_path, component
+):
+    html = mobile_layout_fixture(panel=True, component=component)
+    html = html.replace(
+        "Synthetic preview. Full continuation.</div>",
+        'Same paragraph.</div><div data-mcomponent="TextArea">Same paragraph.</div>',
+        1,
+    )
+    html = html.replace(
+        'class="feedback-panel">',
+        'class="feedback-panel"><img src="data:image/png;base64,iVBORw0KGgo=">',
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            payload = records[0][1]
+            assert payload["text"] == "Same paragraph. Same paragraph."
+            assert payload["mediaCount"] == 0
+            assert [b["role"] for b in payload["blocks"]].count("interface_panel") == 1
+
+
+@pytest.mark.parametrize(
+    "unknown", ["button", "feedback_variant", "ambiguous_heading", "hidden_heading"]
+)
+def test_unknown_interactive_body_never_qualifies_as_authored_content(
+    tmp_path, unknown
+):
+    html = mobile_layout_fixture(panel=True)
+    if unknown == "button":
+        html = html.replace("Not interested", "Different action")
+    elif unknown == "feedback_variant":
+        html = html.replace("Are you interested in this post?", "Different heading")
+    elif unknown == "hidden_heading":
+        html = html.replace(
+            '<div data-mcomponent="ServerTextArea">Are you interested',
+            '<div data-mcomponent="ServerTextArea" style="display:none">'
+            "Are you interested",
+        )
+    else:
+        html = html.replace(
+            'class="feedback-panel">',
+            'class="feedback-panel"><div data-mcomponent="TextArea">'
+            "Unclassified extra content</div>",
+        )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_known_app_prompt_is_dismissed_once_before_sorting(tmp_path):
+    html = (
+        mobile_fixture([("301", "Author", "Body")], sorted_feed=False)
+        + app_prompt_fixture()
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        page.get_by_role("dialog").wait_for(state="visible")
+        wait_for_mobile_page(page, timeout_seconds=5)
+        select_new_posts(page, timeout_seconds=5)
+        assert page.evaluate("window.promptDismissals") == 1
+        page.evaluate(
+            "document.body.insertAdjacentHTML('beforeend', "
+            "'<h2>Facebook is better on the app</h2>')"
+        )
+        assert page.evaluate("window.promptDismissals") == 1
+
+
+def test_unknown_app_like_dialog_is_not_dismissed(tmp_path):
+    import time
+
+    from fbn.mobile import _dismiss_app_prompt
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_fixture([("301", "Author", "Body")])
+            + app_prompt_fixture(known=False)
+        )
+        page.get_by_role("dialog").wait_for(state="visible")
+        assert not _dismiss_app_prompt(page, time.monotonic() + 5)
+        assert page.evaluate("window.promptDismissals || 0") == 0
+        with pytest.raises(LayoutChangedError, match="supported_blocking_dialog"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize("kind", ["photo", "video", "link_preview", "listing", "poll"])
+def test_owned_attachments_do_not_become_message_text_or_actions(tmp_path, kind):
+    caption = "Original authored caption."
+    html = mobile_fixture([("301", "Synthetic Author", caption)])
+    image = (
+        '<img style="width:32px;height:32px" '
+        'src="https://scontent.example.fbcdn.net/123456_234567_345_n.jpg">'
+    )
+    if kind == "photo":
+        attachment = (
+            '<a href="https://m.facebook.com/photo/?fbid=44001">' + image + "</a>"
+        )
+    elif kind == "video":
+        attachment = (
+            '<a href="https://m.facebook.com/watch/?v=44001">'
+            '<video style="width:32px;height:32px"></video></a>'
+        )
+    elif kind == "link_preview":
+        attachment = (
+            '<a href="https://example.invalid/article">'
+            + image
+            + '<div data-mcomponent="TextArea">Automatic link preview, '
+            "not the author message</div></a>"
+        )
+    elif kind == "listing":
+        attachment = (
+            '<div role="link" href="https://m.facebook.com/marketplace/item/44001/">'
+            + image
+            + '<div data-mcomponent="TextArea">Item title and price</div>'
+            '<button role="button">Message</button></div>'
+        )
+    else:
+        attachment = (
+            '<div role="radiogroup"><div data-mcomponent="TextArea">Poll options</div>'
+            '<button role="button">First choice</button>'
+            '<button role="button">Second choice</button></div>'
+        )
+    marker = (
+        '</div><div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like,'
+    )
+    html = html.replace(
+        marker,
+        '</div><div data-mcomponent="MContainer">' + attachment + "</div>" + marker[6:],
+        1,
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(html)
+        wait_for_mobile_page(page, timeout_seconds=0.5)
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert records[0][1]["text"] == caption
+            assert records[0][1]["previewControlCount"] == 0
+            assert any(
+                block["role"] == "attachment" for block in records[0][1]["blocks"]
+            )
+
+
+@pytest.mark.parametrize("wrong", [False, True])
+def test_media_only_destination_requires_stable_owned_attachment_id(tmp_path, wrong):
+    def html(identifier):
+        value = mobile_fixture([("301", "Synthetic Author", "")])
+        return value.replace(
+            '<div data-mcomponent="ServerTextArea"></div>',
+            '<a href="https://m.facebook.com/photo/?fbid='
+            + str(identifier)
+            + '"><img style="width:32px;height:32px" '
+            'src="data:image/png;base64,iVBORw0KGgo="></a>',
+            1,
+        )
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html(44001))
+        with mobile_records(page) as records:
+            source = records[0][1]
+            assert source["text"] == "" and source["mediaKeys"] == ["attachment:44001"]
+        target = context.new_page()
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=html(44002 if wrong else 44001),
+            ),
+        )
+        if wrong:
+            with pytest.raises(
+                LayoutChangedError, match="resolved_primary_media_matches_source"
+            ):
+                resolve_post_link(
+                    target,
+                    "https://m.facebook.com/groups/contract-group/posts/301/",
+                    source,
+                    frozenset({"contract-group"}),
+                    timeout_seconds=0.5,
+                )
+        else:
+            assert resolve_post_link(
+                target,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                source,
+                frozenset({"contract-group"}),
+                timeout_seconds=5,
+            ).endswith("/posts/301/")
+
+
+def test_header_is_owned_by_boundaries_not_a_fixed_child_number(tmp_path):
+    html = mobile_fixture([("301", "Synthetic Author", "Body")])
+    marker = '<div data-mcomponent="ServerImageArea" style="height:1px"></div>'
+    html = html.replace(marker, marker * 4, 1)
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            assert len(records) == 1 and records[0][1]["text"] == "Body"
+
+
+def test_message_normalization_preserves_inline_text_node_boundaries(tmp_path):
+    html = mobile_preview_fixture(
+        "Synthetic preview.", "Synthetic preview. Full continuation."
+    )
+    html = html.replace(
+        "Synthetic preview. <span>", "Synthetic <b>pre</b>view. <span>", 1
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            menu, before = records[0]
+            assert before["text"] == "Synthetic preview."
+            after = expand_post_preview(page, menu, before, timeout_seconds=5)
+            assert after["text"] == "Synthetic preview. Full continuation."
 
 
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
@@ -1382,7 +1692,9 @@ def test_mobile_waits_for_permalink_body_to_finish_rendering(
     "destination",
     ["matching", "wrong_body", "wrong_identity", "account_action", "persistent_panel"],
 )
-def test_mobile_extra_panel_gets_one_strict_canonical_check(tmp_path, destination):
+def test_mobile_known_panel_is_partitioned_without_canonical_reload(
+    tmp_path, destination
+):
     source = {
         "author": "Author",
         "text": "Expected body",
@@ -1393,10 +1705,10 @@ def test_mobile_extra_panel_gets_one_strict_canonical_check(tmp_path, destinatio
     }
     panel = (
         '<div data-mcomponent="MContainer">'
-        '<div data-mcomponent="ServerTextArea">Synthetic interface panel</div>'
-        '<button role="button"><span data-mcomponent="TextArea">First</span>'
+        '<div data-mcomponent="ServerTextArea">Are you interested in this post?</div>'
+        '<button role="button"><span data-mcomponent="TextArea">Interested</span>'
         '</button><button role="button"><span data-mcomponent="TextArea">'
-        "Second</span></button></div>"
+        "Not interested</span></button></div>"
     )
     canonical = "https://m.facebook.com/groups/contract-group/posts/999/"
     requests = []
@@ -1405,21 +1717,19 @@ def test_mobile_extra_panel_gets_one_strict_canonical_check(tmp_path, destinatio
 
         def serve(route):
             requests.append(route.request.url)
-            share = "/share/" in route.request.url
             body = "Expected body"
-            if not share and destination == "wrong_body":
+            if destination == "wrong_body":
                 body += " Different continuation"
             html = mobile_fixture([("999", "Author", body)])
-            if share or destination == "persistent_panel":
-                footer = (
-                    '</div><div data-mcomponent="MContainer">'
-                    '<button role="button" aria-label="Like,'
-                )
-                html = html.replace(footer, "</div>" + panel + footer[6:])
+            footer = (
+                '</div><div data-mcomponent="MContainer">'
+                '<button role="button" aria-label="Like,'
+            )
+            html = html.replace(footer, "</div>" + panel + footer[6:])
             path = "/groups/contract-group/posts/999/"
-            if not share and destination == "wrong_identity":
+            if destination == "wrong_identity":
                 path = "/groups/contract-group/posts/888/"
-            if not share and destination == "account_action":
+            if destination == "account_action":
                 path = "/checkpoint/"
                 html = '<input name="approvals_code">'
             html += f"<script>history.replaceState(null,'','{path}')</script>"
@@ -1435,18 +1745,18 @@ def test_mobile_extra_panel_gets_one_strict_canonical_check(tmp_path, destinatio
         def resolve():
             return resolve_post_link(
                 page,
-                "https://m.facebook.com/share/p/999/",
+                canonical,
                 source,
                 frozenset({"contract-group"}),
                 timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
             )
 
-        if destination == "matching":
+        if destination in {"matching", "persistent_panel"}:
             assert resolve() == canonical.replace("m.facebook.com", "www.facebook.com")
         else:
             with pytest.raises(error):
                 resolve()
-        assert requests == ["https://m.facebook.com/share/p/999/", canonical]
+        assert requests == [canonical]
 
 
 @pytest.mark.parametrize("footer_state", ["incomplete", "virtualized", "loading"])

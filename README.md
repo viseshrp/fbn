@@ -165,13 +165,19 @@ the same author, body, and publication time and a canonical post URL for the ver
 group. A missing or mismatched link stops the check; mobile never substitutes
 the group feed or a previous clipboard value.
 
-The post's first action row is the body boundary, even when its painting is
-deferred. An incomplete row is not replaced with a later reply's action row.
-Link verification waits for the same document to finish rendering within its
-existing timeout. If a share page adds a separate panel with extra body controls,
-it opens that already-verified canonical mobile URL once and again requires an
-exact author, body, and publication match. This shares the original deadline;
-it never accepts a prefix match or retries an authentication/account failure.
+The post's first action row is the outer content boundary, even when its painting
+is deferred. An incomplete row is not replaced with a later reply's action row.
+Within that boundary the reader separately identifies authored message blocks,
+attachments, interface panels, and discussion. A recognized interest-feedback
+panel is excluded before preview expansion and comparison, even when it persists
+on the canonical page. Unknown interactive blocks stop the check; a generic
+extra-controls count never permits discarding content or reloading to hide it.
+Inline formatting and repeated paragraphs are preserved. Attachment previews,
+poll choices, sale-card actions, avatars, and interface images are not message
+text. Media-only links require matching stable attachment identifiers rather
+than image counts. Link verification waits for the same document to finish
+rendering and still requires exact complete message equality and matching author,
+publication, group, and canonical post identity.
 Failures log the exact failed comparison (author, body, publication time, or
 primary-post count), text-part lengths, control counts and partial/media flags,
 never private content.
@@ -182,7 +188,11 @@ reordering; posts tied with the marker's coarse relative time are included
 conservatively. A missing marker, unknown time, or exhausted scan limit leaves
 the old marker in place so a later check can keep catching up. Scrolling is
 bounded by `--max-scrolls`, the catch-up sample limit, and a 90-second scan
-budget. None of this guarantees recovery of a post Facebook never displays.
+budget. Every post action shares that budget in addition to its own limit. If
+it expires during a post, only previously verified posts are returned, with the
+old marker preserved; the unfinished post is neither saved nor notified. Genuine
+layout/identity failures still abort the entire check before observation or
+delivery. None of this guarantees recovery of a post Facebook never displays.
 
 Numeric group IDs may become readable slugs through an HTTP redirect or the
 initial group document's history API. The latter is accepted only with
@@ -201,6 +211,11 @@ screens, total/visible scrollers, post menus, loading indicators, and dialogs),
 never page text, links, or account data. A timeout does not trigger a reload.
 Each destination opens in a fresh tab that closes immediately after verification,
 including on failure, to limit retained browser memory between posts.
+The recognized app-install prompt may be dismissed once through its own
+**Not now** action after account-state checks. Unknown blocking dialogs stop
+the check; no app-install, engagement, message, or account action is clicked.
+Scroll settling waits for DOM progress instead of sleeping unconditionally;
+`--settle-seconds` bounds an idle wait and never establishes rendering readiness.
 Opening a post menu and copying its link share the configured timeout, capped
 at 30 seconds. Closing the menu has a separate cleanup budget of at most five
 seconds; clipboard interception is always removed, including after a timeout.
@@ -264,6 +279,12 @@ before closing the failing tabs. Find them in `failure-screenshots/` beside the
 profile directory (Docker default: `/home/fbn/.local/share/fbn/failure-screenshots/`
 inside the persistent data volume). Each timestamped folder contains `feed.png`,
 and `post.png` when a post-link tab failed, plus secret-free `metadata.json`.
+Version 2 metadata also records the failed action phase, remaining scan budget,
+and structural-capture
+status. `feed-layout.json` and `post-layout.json` contain sanitized component
+ancestry, selected/excluded block roles, visibility, and character counts. These
+snapshots contain no post text, authors, URLs, action IDs, HTML, or input values;
+each is limited to 1,000 nodes, 20 levels, and 256 KiB, with truncation reported.
 The log identifies the folder and whether capture succeeded. Only the latest 10
 failure folders are retained, with at most two 5 MiB images per folder.
 Directories are owner-only and files are owner-readable/writable. Inputs and

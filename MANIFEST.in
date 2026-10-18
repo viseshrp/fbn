@@ -3,4 +3,4 @@ include CHANGELOG.md
 include Dockerfile
 include compose.yaml
 recursive-include docs *.md
-recursive-include tests/fixtures *.html
+recursive-include tests *.py *.json *.yaml

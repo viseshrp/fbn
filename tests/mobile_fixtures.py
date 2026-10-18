@@ -158,3 +158,65 @@ def mobile_preview_fixture(
         f"}}, {delay_ms});"
         "}</script>"
     )
+
+
+def mobile_layout_fixture(
+    *,
+    partial: bool = False,
+    panel: bool = False,
+    component: str = "TextArea",
+    button: bool = False,
+    flat: bool = False,
+) -> str:
+    """Independent preview/panel switches reproduce the combined failure."""
+    preview = "Synthetic preview."
+    full = "Synthetic preview. Full continuation."
+    html = (
+        mobile_preview_fixture(preview, full, component=component, button=button)
+        if partial
+        else mobile_fixture([("301", "Synthetic Author", full)])
+    )
+    if panel:
+        feedback = (
+            '<div data-mcomponent="MContainer" class="feedback-panel">'
+            '<div data-mcomponent="ServerTextArea">'
+            "Are you interested in this post?</div>"
+            '<div data-mcomponent="MContainer">'
+            '<button role="button" aria-label="Interested">'
+            '<span data-mcomponent="TextArea">Interested</span></button>'
+            '<button role="button" aria-label="Not interested">'
+            '<span data-mcomponent="TextArea">Not interested</span></button>'
+            "</div></div>"
+        )
+        marker = (
+            '</div><div data-mcomponent="MContainer">'
+            '<button role="button" aria-label="Like,'
+        )
+        html = html.replace(marker, "</div>" + feedback + marker[6:], 1)
+    if flat:
+        html += (
+            '<script>const layoutRoot=document.querySelector("[data-type=vscroller]");'
+            "layoutRoot.firstElementChild.remove();"
+            'const layoutCard=layoutRoot.querySelector("[data-story]");'
+            "layoutCard.firstElementChild.remove();"
+            "layoutCard.replaceWith(...layoutCard.childNodes);</script>"
+        )
+    return html
+
+
+def app_prompt_fixture(*, known: bool = True, delay_ms: int = 0) -> str:
+    """A blocking app prompt; no navigation or account action is allowed."""
+    heading = "Facebook is better on the app" if known else "Unknown blocking dialog"
+    content = (
+        "<h2>" + heading + "</h2><button role=button>Get app</button>"
+        '<button role=button onclick="this.parentElement.remove();'
+        'window.promptDismissals=(window.promptDismissals||0)+1">Not now</button>'
+    )
+    return (
+        '<script>setTimeout(() => {const modal=document.createElement("div");'
+        'modal.setAttribute("role","dialog");'
+        'modal.style="position:fixed;inset:0;background:white;z-index:99999";'
+        f"modal.innerHTML={json.dumps(content)};"
+        "document.body.append(modal);"
+        f"}}, {delay_ms});</script>"
+    )

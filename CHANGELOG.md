@@ -9,6 +9,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Content-free, bounded DOM ancestry and block-role snapshots alongside failure
+  images, with action phases and late-authentication privacy checks.
+- A 128-case preview/panel pipeline matrix plus attachment, dialog, normalization,
+  deadline, state-commit, and receipt/restart regression coverage.
+
 - Private, bounded error screenshots of the feed and failing post-link tab,
   captured before tab cleanup with input masking and 10-event retention.
 - Playwright browser acquisition with a dedicated persistent local profile.
@@ -42,6 +47,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Partition mobile authored messages, attachments, feedback panels, and discussion
+  before expansion and verification, replacing the extra-controls reload workaround.
+- Keep verified work and the old catch-up marker when the shared scan budget ends.
+  Unknown layouts and identity mismatches still stop the whole observation.
+- Dismiss only the recognized app-install prompt through Not now, and wait for
+  scroll DOM progress instead of sleeping unconditionally.
+
 - Expand shortened mobile feed posts through their own Bloks action region,
   including inline non-button "see more" controls in feeds and post pages.
   Wait for complete text,
@@ -64,8 +76,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same permalink to finish rendering within its existing verification deadline.
 - Report exact, secret-free post-link comparison failures and distinguish them
   from an unsupported feed in the stopped-monitor alert.
-- Recheck the same canonical mobile URL once when a share page appends extra
-  interface controls, retaining exact post matching and the original deadline.
 - Use the verified canonical Facebook post ID as the only active post identity.
   Schema version 4 upgrades saved direct links, merges delivery receipts, and
   archives unresolved history without guessing IDs or dropping pending posts.
