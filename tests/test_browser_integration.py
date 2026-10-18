@@ -295,6 +295,73 @@ def test_owned_attachments_do_not_become_message_text_or_actions(tmp_path, kind)
             )
 
 
+@pytest.mark.parametrize("section_root", [False, True])
+@pytest.mark.parametrize("has_media", [False, True])
+def test_image_card_owns_its_preview_controls_not_the_authored_message(
+    tmp_path, section_root, has_media
+):
+    from fbn.mobile_dom import STRUCTURE_SNAPSHOT_SCRIPT
+
+    caption = "Synthetic authored caption outside the image card."
+    media = (
+        '<div data-mcomponent="ImageArea"><img style="width:32px;height:32px" '
+        'src="https://scontent.example.fbcdn.net/123456_234567_345_n.jpg"></div>'
+        if has_media
+        else ""
+    )
+    attachment = (
+        '<div data-mcomponent="MContainer" role="img" aria-label="Image card">'
+        + media
+        + '<div data-mcomponent="MContainer" data-action-id="synthetic-preview">'
+        '<div data-mcomponent="TextArea">Preview price</div>'
+        '<div data-mcomponent="TextArea" role="button">Preview title action</div>'
+        '<div data-mcomponent="TextArea">Preview location</div></div></div>'
+    )
+    if not section_root:
+        attachment = '<div data-mcomponent="MContainer">' + attachment + "</div>"
+    html = mobile_fixture([("301", "Synthetic Author", caption)])
+    marker = (
+        '</div><div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like,'
+    )
+    html = html.replace(marker, "</div>" + attachment + marker[6:], 1)
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(html)
+        if not has_media:
+            with pytest.raises(
+                LayoutChangedError, match="supported_primary_body_controls"
+            ):
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+            snapshot = page.evaluate(STRUCTURE_SNAPSHOT_SCRIPT)
+            assert any(node["block"] == "unknown" for node in snapshot["nodes"])
+            return
+        wait_for_mobile_page(page, timeout_seconds=0.5)
+        with mobile_records(page) as records:
+            source = records[0][1]
+            assert source["text"] == caption
+            assert source["bodyControlCount"] == 0
+            assert source["mediaKeys"] == ["image:123456_234567_345"]
+        target = context.new_page()
+        context.unroute("**/*")
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=html.replace("Preview title action", "Different preview title"),
+            ),
+        )
+        assert resolve_post_link(
+            target,
+            "https://m.facebook.com/groups/contract-group/posts/301/",
+            source,
+            frozenset({"contract-group"}),
+            timeout_seconds=0.5,
+        ).endswith("/posts/301/")
+
+
 @pytest.mark.parametrize("wrong", [False, True])
 def test_media_only_destination_requires_stable_owned_attachment_id(tmp_path, wrong):
     def html(identifier):

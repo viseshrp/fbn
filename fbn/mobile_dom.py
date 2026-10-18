@@ -134,12 +134,20 @@ MOBILE_SCAN_SCRIPT = r"""
         && !excluded.some(root => root.contains(node));
       const messageOwn = node => own(node)
         && !attachments.some(root => root.contains(node));
-      for (const node of section.querySelectorAll(
-        '[role="radiogroup"],[role="group"][aria-label="Poll"],a[href],[role="link"][href]'
-      )) {
+      const attachmentSelector = '[role="radiogroup"],'
+        + '[role="group"][aria-label="Poll"],[role="img"],a[href],[role="link"][href]';
+      for (const node of [section, ...section.querySelectorAll(attachmentSelector)]
+        .filter(node => node.matches(attachmentSelector))) {
         if (!visible(node) || !own(node) || node.closest(textSelector)) continue;
         let attachment = node.matches(
           '[role="radiogroup"],[role="group"][aria-label="Poll"]');
+        // Bloks image cards can own preview text and action controls without
+        // any href. Require actual image content in this isolated image region;
+        // a role label alone must never hide an unknown interactive message.
+        if (node.matches('[role="img"]') && !node.querySelector(menuSelector)
+          && Array.from(node.querySelectorAll(
+            'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
+          )).some(visible)) attachment = true;
         if (!attachment && node.querySelector(
           'img,[data-mcomponent="ServerImageArea"]')) {
           try {
@@ -235,6 +243,7 @@ MOBILE_SCAN_SCRIPT = r"""
         }
         unsupported = true;
         describe('unknown', node);
+        excluded.push(node);
       }
       excluded.push(...controls);
       const textNodes = [section, ...section.querySelectorAll(textSelector)]

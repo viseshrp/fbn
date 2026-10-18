@@ -35,6 +35,13 @@
     "tests": ["test_owned_attachments_do_not_become_message_text_or_actions", "test_media_only_destination_requires_stable_owned_attachment_id"]
   },
   {
+    "case": "image_card_owns_preview_action",
+    "evidence_date": "2026-10-18",
+    "expected_blocks": ["message", "attachment"],
+    "outcome": "exclude_image_card_preview_controls_require_actual_image",
+    "tests": ["test_image_card_owns_its_preview_controls_not_the_authored_message"]
+  },
+  {
     "case": "comments_replies_quotes_and_reactions",
     "evidence_date": "2026-10-17",
     "expected_blocks": ["message", "discussion", "footer"],

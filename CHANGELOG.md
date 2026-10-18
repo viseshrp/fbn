@@ -49,6 +49,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Partition mobile authored messages, attachments, feedback panels, and discussion
   before expansion and verification, replacing the extra-controls reload workaround.
+- Recognize image-backed Bloks cards that own preview text and controls without
+  a link, while rejecting interactive image-role regions without actual media.
 - Keep verified work and the old catch-up marker when the shared scan budget ends.
   Unknown layouts and identity mismatches still stop the whole observation.
 - Dismiss only the recognized app-install prompt through Not now, and wait for
