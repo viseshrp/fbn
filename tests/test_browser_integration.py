@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from fbn.browser import PageState
 from fbn.config import BrowserSettings
@@ -1624,8 +1625,13 @@ def test_mobile_failed_copy_cleans_up_and_cannot_reuse_a_previous_link(tmp_path)
         )
         with mobile_records(page) as records:
             assert len(records) == 1
-            with pytest.raises(Exception, match="Timeout"):
-                copy_post_link(page, records[0][0], timeout_seconds=0.1)
+            # Either Playwright's wait or our shared action deadline can expire
+            # first. Assert the typed failure and cleanup, not library wording
+            # or how much of a 100ms budget a particular runner spent clicking.
+            with pytest.raises((PlaywrightTimeoutError, TransientNavigationError)):
+                copy_post_link(
+                    page, records[0][0], timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+                )
         assert not page.locator("#post-menu").is_visible()
         assert page.evaluate("!window.__fbnCopyCapture")
         assert page.evaluate("!Object.hasOwn(navigator,'clipboard')")
