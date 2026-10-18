@@ -47,6 +47,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Recover an unreachable archived legacy marker once from the latest delivered
+  canonical receipt (schema version 5), preserving the archive and keeping the
+  recovered marker fixed across incomplete scans.
+- Reuse an already verified destination within a scan only after freshly copying
+  the same link and matching the full post again. Log the exact coverage stop
+  reason without retaining post content or identities.
 - Partition mobile authored messages, attachments, feedback panels, and discussion
   before expansion and verification, replacing the extra-controls reload workaround.
 - Recognize image-backed Bloks cards that own preview text and controls without

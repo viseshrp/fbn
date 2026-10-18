@@ -1200,7 +1200,13 @@ class MobilePostSource(BrowserSession):
                 post_count=len(accumulated),
                 scroll_count=progress[0],
             )
-            return self._scan_result(accumulated, progress[0], True, boundary_post_id)
+            return self._scan_result(
+                accumulated,
+                progress[0],
+                True,
+                boundary_post_id,
+                stop_reason="scan_budget",
+            )
         finally:
             _SCAN_DEADLINE.reset(token)
 
@@ -1219,6 +1225,7 @@ class MobilePostSource(BrowserSession):
         observed_at = datetime.now(timezone.utc)
         seen: set[tuple] = set()
         seen_ids: set[str] = set()
+        verified_links: dict[str, tuple[dict[str, Any], str]] = {}
         marker_pass = None
         stagnant = 0
         scrolls = 0
@@ -1250,7 +1257,13 @@ class MobilePostSource(BrowserSession):
                         or time.monotonic() - started >= MAX_SCAN_SECONDS
                     ):
                         return self._scan_result(
-                            accumulated, scrolls, True, boundary_post_id
+                            accumulated,
+                            scrolls,
+                            True,
+                            boundary_post_id,
+                            stop_reason="post_limit"
+                            if len(accumulated) >= post_limit
+                            else "scan_budget",
                         )
                     preview_signature = signature
                     # Bind the link to the original menu before expansion can
@@ -1281,25 +1294,36 @@ class MobilePostSource(BrowserSession):
                             payload["actionToken"],
                             *_post_signature(payload),
                         )
-                    # Close each destination promptly so navigation history,
-                    # decoded media and document heaps cannot grow across posts.
-                    with _post_target(
-                        context,
-                        on_error=lambda target, error: capture_failure_screenshots(
-                            self.settings.profile_dir,
-                            error,
-                            {"post": target, "feed": page},
-                        ),
-                    ) as target:
-                        href = resolve_post_link(
-                            target,
-                            copied,
-                            payload,
-                            aliases,
-                            timeout_seconds=min(
-                                MAX_LINK_SECONDS, policy.navigation_timeout_seconds
+                    cached = verified_links.get(copied)
+                    if cached is not None and all(
+                        _primary_post_comparisons(payload, cached[0]).values()
+                    ):
+                        # Re-rendered cards have new action/DOM tokens. Reuse a
+                        # result only after freshly copying the SAME link and
+                        # matching the complete source again. Never deduplicate
+                        # by text/author or a temporary action ID alone.
+                        href = cached[1]
+                        LOGGER.debug("Verified copied link reused within scan")
+                    else:
+                        # Close destinations promptly: at most feed + one post.
+                        with _post_target(
+                            context,
+                            on_error=lambda target, error: capture_failure_screenshots(
+                                self.settings.profile_dir,
+                                error,
+                                {"post": target, "feed": page},
                             ),
-                        )
+                        ) as target:
+                            href = resolve_post_link(
+                                target,
+                                copied,
+                                payload,
+                                aliases,
+                                timeout_seconds=min(
+                                    MAX_LINK_SECONDS, policy.navigation_timeout_seconds
+                                ),
+                            )
+                        verified_links[copied] = (payload.copy(), href)
                     posts = extract_posts(
                         [{**payload, "href": href}],
                         group,
@@ -1330,8 +1354,19 @@ class MobilePostSource(BrowserSession):
             stagnant = stagnant + 1 if len(accumulated) == before else 0
             # Read at least one further pass after the marker, for overlap.
             if marker_pass is not None and scan_index > marker_pass:
-                return self._scan_result(accumulated, scrolls, False, boundary_post_id)
+                return self._scan_result(
+                    accumulated,
+                    scrolls,
+                    False,
+                    boundary_post_id,
+                    stop_reason="marker_overlap_complete",
+                )
             if stagnant >= policy.stagnant_scrolls or scan_index == policy.max_scrolls:
+                stop_reason = (
+                    "stagnant_feed"
+                    if stagnant >= policy.stagnant_scrolls
+                    else "scroll_limit"
+                )
                 break
             page.bring_to_front()
             page.evaluate(
@@ -1340,7 +1375,9 @@ class MobilePostSource(BrowserSession):
             scrolls += 1
             progress[0] = scrolls
             self._wait_for_scroll_progress(page, policy, scroll_signature)
-        return self._scan_result(accumulated, scrolls, True, boundary_post_id)
+        return self._scan_result(
+            accumulated, scrolls, True, boundary_post_id, stop_reason=stop_reason
+        )
 
     @staticmethod
     def _wait_for_scroll_progress(
@@ -1370,6 +1407,8 @@ class MobilePostSource(BrowserSession):
         scrolls: int,
         bounded: bool,
         boundary_post_id: str | None,
+        *,
+        stop_reason: str = "unspecified",
     ) -> ScanResult:
         # Mobile can promote a story in the visible list. Order by the full
         # accessible publication time when every card provides a parsed time.
@@ -1388,6 +1427,7 @@ class MobilePostSource(BrowserSession):
             )
         elif boundary_post_id:
             bounded = True
+            stop_reason = "unknown_publication_time"
             LOGGER.warning(
                 "Mobile post order uncertain",
                 missing_components="publication_time",
@@ -1395,6 +1435,14 @@ class MobilePostSource(BrowserSession):
             )
         posts = [replace(post, position=index) for index, post in enumerate(posts)]
         marker_found = any(post.post_id == boundary_post_id for post in posts)
+        LOGGER.info(
+            "Mobile scan coverage",
+            stop_reason=stop_reason,
+            marker_found=marker_found,
+            post_count=len(posts),
+            scroll_count=scrolls,
+            bounded=bounded,
+        )
         if boundary_post_id and (not marker_found or bounded):
             LOGGER.warning(
                 "Mobile catch-up coverage incomplete",

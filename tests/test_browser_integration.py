@@ -1963,6 +1963,141 @@ def test_mobile_fetch_allows_post_menu_to_load_beyond_old_three_second_cap(tmp_p
         assert tuple(context.pages) == original_pages
 
 
+@pytest.mark.parametrize("changed_body", [False, True])
+def test_remounted_overlap_reuses_only_fresh_copied_link_with_matching_body(
+    tmp_path, monkeypatch, changed_body
+):
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "MAX_LINK_SECONDS", 1)
+    stories = [("302", "Author", "Identical body"), ("301", "Author", "Identical body")]
+    visited = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            url = route.request.url
+            target = "/share/" in url
+            key = url.rstrip("/").split("/")[-1]
+            if target:
+                visited.append(key)
+            html = mobile_fixture(
+                [next(p for p in stories if p[0] == key)] if target else stories
+            )
+            if target:
+                html += (
+                    "<script>history.replaceState(null,'','/groups/"
+                    f"contract-group/posts/{key}/')</script>"
+                )
+            else:
+                html += (
+                    """<script>window.scrollBy=()=>{
+                    for(const card of document.querySelectorAll('[data-story]')){
+                        const fresh=card.cloneNode(true);
+                        fresh.querySelector('[data-action-id]').setAttribute('data-action-id','remounted-'+fresh.dataset.story);
+                        card.replaceWith(fresh);
+                    }
+                """
+                    + (
+                        "document.querySelector('[data-story=\"302\"]')"
+                        ".children[2].firstElementChild.textContent='Changed body';"
+                        if changed_body
+                        else ""
+                    )
+                    + "};</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        if changed_body:
+            with pytest.raises(LayoutChangedError):
+                source.fetch_recent(
+                    parse_group_ref("contract-group"),
+                    ScanPolicy(max_scrolls=2, settle_seconds=0),
+                    boundary_post_id="301",
+                )
+            assert visited == ["302", "301", "302"]
+        else:
+            result = source.fetch_recent(
+                parse_group_ref("contract-group"),
+                ScanPolicy(max_scrolls=2, settle_seconds=0),
+                boundary_post_id="301",
+            )
+            assert not result.bounded
+            assert [p.post_id for p in result.posts] == ["302", "301"]
+            assert visited == ["302", "301"]
+
+
+def test_archived_marker_mobile_catchup_delivers_and_does_not_repeat(tmp_path):
+    from fbn.monitor import MonitorService
+    from tests.test_identity_migration import legacy_database
+    from tests.test_state import GROUP, T0, post
+
+    path = tmp_path / "state.sqlite3"
+    legacy_database(path, url=GROUP.url)
+    with SQLiteStateRepository(path) as state:
+        state.observe(GROUP, [post("301")])
+        state.mark_delivered([p.event_id for p in state.pending(GROUP)])
+        state._require_connection().execute("PRAGMA user_version=4")
+    notifications = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            url = route.request.url
+            key = url.rstrip("/").split("/")[-1]
+            target = "/share/" in url
+            stories = [
+                ("302", "Author", "New body"),
+                ("301", "Author", "Delivered body"),
+            ]
+            html = mobile_fixture(
+                [p for p in stories if p[0] == key] if target else stories,
+                group=GROUP.key,
+            )
+            if target:
+                html += (
+                    "<script>history.replaceState(null,'','/groups/"
+                    f"{GROUP.key}/posts/{key}/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        with SQLiteStateRepository(path, clock=lambda: T0) as state:
+            assert state.notification_boundary(GROUP) == "301"
+            from types import SimpleNamespace
+
+            service = MonitorService(
+                source, state, SimpleNamespace(send=notifications.append)
+            )
+            result = service.run_once(
+                GROUP, ScanPolicy(max_scrolls=2, settle_seconds=0)
+            )
+            assert result.delivered == 1
+            assert len(notifications) == 1
+            assert GROUP.url + "posts/302/" in notifications[0].body
+            assert GROUP.url + "posts/301/" not in notifications[0].body
+            assert not state.pending(GROUP)
+            assert state.notification_boundary(GROUP) == "302"
+        with SQLiteStateRepository(path) as state:
+            result = MonitorService(
+                source, state, SimpleNamespace(send=notifications.append)
+            ).run_once(GROUP, ScanPolicy(max_scrolls=2, settle_seconds=0))
+            assert result.delivered == 0 and len(notifications) == 1
+
+
 @contextmanager
 def _local_context(
     tmp_path: Path,

@@ -8,11 +8,73 @@ import uuid
 
 from .exceptions import ConfigurationError
 from .extractor import parse_post_url
+from .logging import get_logger
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+LOGGER = get_logger("state")
 
 
 def migrate(connection: sqlite3.Connection) -> None:
+    """Upgrade canonical identities, then repair unreachable archived markers."""
+
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:
+        raise ConfigurationError("The state database requires a newer FBN version.")
+    if version < 4:
+        _migrate_canonical(connection)
+    if version == SCHEMA_VERSION:
+        return
+    connection.execute("BEGIN IMMEDIATE")
+    recovered = 0
+    try:
+        groups = connection.execute(
+            "SELECT groups.group_key, archive.record_json FROM groups "
+            "JOIN identity_archive AS archive ON archive.group_key=groups.group_key "
+            "AND archive.previous_post_id=groups.notification_boundary_post_id "
+            "WHERE NOT EXISTS (SELECT 1 FROM posts WHERE "
+            "posts.group_key=groups.group_key AND "
+            "posts.post_id=groups.notification_boundary_post_id)"
+        ).fetchall()
+        for group in groups:
+            archive = json.loads(group["record_json"])
+            old_receipt = archive.get("outbox")
+            if not old_receipt or not old_receipt.get("delivered_at"):
+                continue
+            receipts = connection.execute(
+                "SELECT outbox.post_id, posts.canonical_url FROM outbox JOIN posts "
+                "ON posts.group_key=outbox.group_key AND posts.post_id=outbox.post_id "
+                "WHERE outbox.group_key=? AND outbox.delivered_at IS NOT NULL "
+                "AND outbox.created_at>=? "
+                "ORDER BY outbox.created_at DESC,outbox.position,outbox.event_id",
+                (group["group_key"], old_receipt["created_at"]),
+            )
+            for receipt in receipts:
+                link = parse_post_url(receipt["canonical_url"])
+                if link is None or link.post_id != receipt["post_id"]:
+                    continue
+                # Repair once, to an actual delivered post. Future partial scans
+                # must retain this same anchor until they reach it and overlap.
+                # Keep the original unmappable history in identity_archive.
+                connection.execute(
+                    "UPDATE groups SET notification_boundary_post_id=? "
+                    "WHERE group_key=?",
+                    (receipt["post_id"], group["group_key"]),
+                )
+                recovered += 1
+                break
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    if recovered:
+        LOGGER.warning(
+            "Archived notification marker recovered from delivered canonical receipt",
+            recovered_group_count=recovered,
+        )
+
+
+def _migrate_canonical(connection: sqlite3.Connection) -> None:
     """Upgrade atomically, retaining original records for every changed identity.
 
     Unlinked delivered/baseline history is archived, never guessed. An unresolved
@@ -21,9 +83,9 @@ def migrate(connection: sqlite3.Connection) -> None:
     """
 
     version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if version > SCHEMA_VERSION:
+    if version > 4:
         raise ConfigurationError("The state database requires a newer FBN version.")
-    if version == SCHEMA_VERSION:
+    if version == 4:
         return
     connection.execute("PRAGMA foreign_keys=OFF")
     connection.execute("BEGIN IMMEDIATE")
@@ -147,7 +209,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         )
         if connection.execute("PRAGMA foreign_key_check").fetchall():
             raise ConfigurationError("State migration failed its relationship check.")
-        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        connection.execute("PRAGMA user_version=4")
         connection.commit()
     except BaseException:
         connection.rollback()

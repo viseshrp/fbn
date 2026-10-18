@@ -113,9 +113,13 @@ deterministic notification ordering.
 rekeys prior direct-link records and merges their outbox receipts; a delivered
 receipt suppresses a pending duplicate. Original changed records are kept in
 `identity_archive`. Unlinked delivered/baseline history is archived, while an
-unlinked pending event blocks migration. An unresolved coverage marker stays
-open. No active acquisition or observation path generates temporary IDs or
-matches posts by their text. Archived unlinked history cannot be reliably
+unlinked pending event blocks migration. Schema version 5 repairs a missing,
+archived delivered marker once to the latest later canonical delivery receipt.
+It preserves the original archive, never selects pending events, and leaves
+the gap open if no such receipt exists. Bounded scans retain the recovered
+marker; recovery does not establish the identity of archived posts or their
+historical coverage. No active acquisition or observation path generates
+temporary IDs or matches posts by their text. Archived unlinked history cannot be reliably
 matched to a later observation without additional evidence.
 
 ### `ScanResult`

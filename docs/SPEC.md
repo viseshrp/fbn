@@ -250,7 +250,11 @@ the same run.
   and content-fingerprint matching are removed.
 - Schema version 4 merges recoverable historical aliases without resending
   delivered posts. Unresolved history is archived and unresolved pending
-  events block migration. An unresolved coverage marker remains open.
+  events block migration. Schema version 5 repairs an archived delivered marker
+  absent from active posts using the latest later canonical delivery receipt,
+  never a pending event. This recovery runs once; incomplete scans cannot move
+  the recovered marker. The original archive remains unchanged. Without that
+  evidence an unresolved marker stays open; historical coverage is not inferred.
 
 ### FR-6: notification
 

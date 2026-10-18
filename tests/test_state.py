@@ -407,7 +407,7 @@ def test_version_one_state_is_migrated_from_latest_outbox_batch(
         )
 
     assert row["notification_boundary_post_id"] == "latesttop"
-    assert version == 4
+    assert version == 5
     with sqlite3.connect(state_path) as migrated:
         post_columns = {
             row[1] for row in migrated.execute("PRAGMA table_info(posts)").fetchall()

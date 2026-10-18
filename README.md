@@ -193,6 +193,9 @@ it expires during a post, only previously verified posts are returned, with the
 old marker preserved; the unfinished post is neither saved nor notified. Genuine
 layout/identity failures still abort the entire check before observation or
 delivery. None of this guarantees recovery of a post Facebook never displays.
+Logs distinguish the scan budget, scroll/post limits, idle feed, unknown dates,
+and successful marker-plus-overlap completion. Re-rendered cards reuse a link
+verification only within that scan, after a fresh Copy link and complete match.
 
 Numeric group IDs may become readable slugs through an HTTP redirect or the
 initial group document's history API. The latter is accepted only with
@@ -229,7 +232,11 @@ seen history and outbox receipts atomically. A delivered alias wins over a
 pending duplicate. Original changed records are retained in `identity_archive`.
 Historical entries without direct links are archived, not assigned guessed IDs;
 FBN cannot reliably identify those old entries if Facebook shows them again.
-An unresolved coverage marker remains open rather than skipping ahead. An
+Schema version 5 repairs an archived, unreachable delivered marker once using
+the latest later canonical delivery receipt. It keeps that real marker fixed
+until catch-up reaches it; the original archive is unchanged. This does not map
+the old ID or prove coverage of unmappable historical posts. Without a later
+verified delivery receipt, an unresolved marker remains open. An
 unresolved pending delivery stops migration so it cannot be silently dropped.
 Keep a private database backup before upgrading; rollback requires both the old
 image and the old database. The obsolete fingerprint column and index are removed.

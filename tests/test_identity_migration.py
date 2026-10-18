@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 
@@ -13,7 +14,7 @@ from tests.test_state import GROUP, T0, post
 
 
 def legacy_database(path, *, delivered=True, canonical_exists=False, url=None):
-    with SQLiteStateRepository(path) as state:
+    with SQLiteStateRepository(path, clock=lambda: T0) as state:
         state.observe(GROUP, (post("123"),), notify_initial=True)
         if delivered:
             state.mark_delivered([item.event_id for item in state.pending(GROUP)])
@@ -61,7 +62,7 @@ def test_upgrade_rekeys_receipts_and_boundary_without_resending(
             assert "fallback_key" not in {
                 row[1] for row in connection.execute("PRAGMA table_info(posts)")
             }
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_upgrade_preserves_pending_body_and_attempts(tmp_path):
@@ -97,6 +98,81 @@ def test_unresolvable_history_is_archived_and_open_boundary_preserved(tmp_path):
         record = json.loads(archive[0])
         assert record["post"]["post_id"] == "content-old"
         assert record["outbox"]["delivered_at"]
+        assert state.notification_boundary(GROUP) == "content-old"
+
+
+@pytest.mark.parametrize("version", [3, 4])
+def test_archived_marker_recovers_to_last_delivered_canonical_receipt(
+    tmp_path, version
+):
+    path = tmp_path / "state.sqlite3"
+    legacy_database(path, url=GROUP.url)
+    with SQLiteStateRepository(path) as state:
+        # Simulate canonical receipts retained after the mobile identity upgrade.
+        state.observe(GROUP, [post("301")], observed_at=T0 + timedelta(days=1))
+        state.mark_delivered([item.event_id for item in state.pending(GROUP)])
+        state.observe(
+            GROUP,
+            [post("303", position=0), post("302", position=1)],
+            observed_at=T0 + timedelta(days=2),
+        )
+        state.mark_delivered([item.event_id for item in state.pending(GROUP)])
+        state.observe(GROUP, [post("304")], observed_at=T0 + timedelta(days=3))
+        connection = state._require_connection()
+        connection.execute(f"PRAGMA user_version={version}")
+        archive = connection.execute(
+            "SELECT record_json FROM identity_archive"
+        ).fetchone()[0]
+
+    with SQLiteStateRepository(path) as state:
+        assert state.notification_boundary(GROUP) == "303"
+        assert [item.post_id for item in state.pending(GROUP)] == ["304"]
+        partial = state.observe(
+            GROUP,
+            [post("305")],
+            preserve_boundary=True,
+            observed_at=T0 + timedelta(days=4),
+        )
+        state.mark_delivered([item.event_id for item in partial.pending])
+        assert state.notification_boundary(GROUP) == "303"
+    with SQLiteStateRepository(path) as state:
+        # A later partial delivery must not change the recovery anchor on restart.
+        assert state.notification_boundary(GROUP) == "303"
+        complete = state.observe(
+            GROUP,
+            [
+                post("305", position=0),
+                post("306", position=1),
+                post("303", position=2),
+                post("older", position=3),
+            ],
+        )
+        assert [item.post_id for item in complete.pending] == ["306"]
+        assert state.notification_boundary(GROUP) == "305"
+        assert (
+            state._require_connection()
+            .execute("SELECT record_json FROM identity_archive")
+            .fetchone()[0]
+            == archive
+        )
+        assert (
+            not state._require_connection()
+            .execute("PRAGMA foreign_key_check")
+            .fetchall()
+        )
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_marker_recovery_never_uses_pending_or_unarchived_history(tmp_path, archived):
+    path = tmp_path / "state.sqlite3"
+    legacy_database(path, url=GROUP.url)
+    with SQLiteStateRepository(path) as state:
+        state.observe(GROUP, [post("301")])
+        if not archived:
+            state.mark_delivered([item.event_id for item in state.pending(GROUP)])
+            state._require_connection().execute("DELETE FROM identity_archive")
+        state._require_connection().execute("PRAGMA user_version=4")
+    with SQLiteStateRepository(path) as state:
         assert state.notification_boundary(GROUP) == "content-old"
 
 
