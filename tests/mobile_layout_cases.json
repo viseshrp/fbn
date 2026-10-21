@@ -1,5 +1,12 @@
 [
   {
+    "case": "normalized_owned_dom_variation_families",
+    "evidence_date": "2026-10-21",
+    "expected_blocks": ["message", "attachment", "discussion"],
+    "outcome": "preserve_semantic_content_under_generated_presentation_changes_reject_unowned_actions_and_unclaimed_text",
+    "tests": ["test_normalization_generated_presentations_preserve_post_content", "test_normalization_generated_preview_expansion_keeps_same_owner_and_body", "test_normalization_card_and_section_wrappers_keep_distinct_ownership", "test_normalization_preserves_multiple_posts_with_identical_authors_and_prefixes", "test_normalization_unknown_interactive_or_unclaimed_content_rejects_body", "test_normalization_limits_reject_excessive_depth_without_acceptance", "test_normalization_discussion_is_opaque_to_body_node_budget", "test_normalization_reference_comparison_same_dom_is_content_free_and_fail_closed"]
+  },
+  {
     "case": "split_bloks_link_preview_caption",
     "evidence_date": "2026-10-20",
     "expected_blocks": ["message", "attachment"],

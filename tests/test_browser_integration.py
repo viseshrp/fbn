@@ -33,8 +33,11 @@ from fbn.mobile import (
     select_new_posts,
     wait_for_mobile_page,
 )
+from fbn.mobile_compare import parser_reference
+from fbn.mobile_dom import MOBILE_SCAN_SCRIPT
 from fbn.models import ScanPolicy
 from fbn.state import SQLiteStateRepository
+from tests.dom_variations import DOM_VARIATION_SCRIPT
 from tests.mobile_fixtures import (
     app_prompt_fixture,
     mobile_fixture,
@@ -47,6 +50,286 @@ from tests.mobile_fixtures import (
 # These cases assert DOM/identity behavior, not shared-runner navigation speed.
 # Deadline arithmetic and budget enforcement have separate deterministic tests.
 OFFLINE_NAVIGATION_SECONDS = 5
+
+
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "body_wrappers",
+        "branch_wrappers",
+        "display_contents",
+        "split_text",
+        "empty_decorations",
+        "discussion_wrappers",
+    ],
+)
+def test_normalization_generated_presentations_preserve_post_content(
+    tmp_path, component, kind
+):
+    full = "Original authored body. EXAMPLE.INVALID remains part of this sentence."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        for depth in (0, 1, 2, 7, 31, 63):
+            page.set_content(
+                mobile_split_link_preview_fixture(
+                    "Original authored body.",
+                    full,
+                    component=component,
+                    partial=False,
+                    body_wrappers=0,
+                )
+            )
+            page.evaluate(DOM_VARIATION_SCRIPT, {"kind": kind, "depth": depth})
+            with mobile_records(page) as records:
+                assert len(records) == 1, (kind, depth)
+                payload = records[0][1]
+                assert payload["text"] == full, (kind, depth)
+                assert payload["partial"] is False
+                assert payload["mediaKeys"] == ["image:123456_234567_345"]
+                assert payload["normalization"]["version"] == 1
+                assert {item["name"] for item in payload["recognizers"]} >= {
+                    "discussion",
+                    "attachments",
+                    "split_preview",
+                    "unknown_controls",
+                }
+
+
+@pytest.mark.parametrize(
+    "kind", ["body_wrappers", "display_contents", "empty_decorations"]
+)
+def test_normalization_generated_preview_expansion_keeps_same_owner_and_body(
+    tmp_path, kind
+):
+    full = "Original prefix. Full authored continuation."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        for depth in (0, 2, 8, 32):
+            page.set_content(
+                mobile_split_link_preview_fixture("Original prefix.", full)
+            )
+            page.evaluate(DOM_VARIATION_SCRIPT, {"kind": kind, "depth": depth})
+            with mobile_records(page) as records:
+                menu, payload = records[0]
+                assert payload["text"] == "Original prefix."
+                expanded = expand_post_preview(page, menu, payload, timeout_seconds=3)
+                assert expanded["text"] == full
+                assert expanded["author"] == payload["author"]
+
+
+@pytest.mark.parametrize(
+    "injection",
+    [
+        "button",
+        "input",
+        "unknown_link",
+        "unclassified_text",
+        "mixed_caption_control",
+        "empty_action",
+    ],
+)
+def test_normalization_unknown_interactive_or_unclaimed_content_rejects_body(
+    tmp_path, injection
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_split_link_preview_fixture("Prefix.", "Prefix. Full body.")
+        )
+        page.evaluate(
+            r"""kind => {
+          const body = document.querySelector('[data-story]').children[2];
+          const node = document.createElement(kind === 'input' ? 'input' : 'div');
+          if (kind === 'button') node.setAttribute('role','button');
+          if (kind === 'unknown_link') {node.setAttribute('role','link');
+            node.setAttribute('data-action-id','synthetic-unknown');}
+          if (kind !== 'input') node.textContent = 'Synthetic unknown region';
+          if (kind === 'empty_action') {node.textContent='';
+            node.setAttribute('data-action-id','synthetic-unowned-action');}
+          if (kind === 'mixed_caption_control') {
+            node.setAttribute('role','button');
+            document.querySelector('[data-action-id="caption-link"]').append(node);
+          } else body.prepend(node);
+        }""",
+            injection,
+        )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records == []
+
+
+def test_normalization_preserves_multiple_posts_with_identical_authors_and_prefixes(
+    tmp_path,
+):
+    bodies = ["Same prefix. First distinct body.", "Same prefix. Second distinct body."]
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_fixture(
+                [
+                    ("301", "Synthetic Author", bodies[0]),
+                    ("302", "Synthetic Author", bodies[1]),
+                ]
+            )
+        )
+        page.evaluate(DOM_VARIATION_SCRIPT, {"kind": "branch_wrappers", "depth": 16})
+        with mobile_records(page) as records:
+            assert [payload["text"] for _, payload in records] == bodies
+            assert [payload["actionToken"] for _, payload in records] == [
+                "menu-301",
+                "menu-302",
+            ]
+
+
+def test_normalization_limits_reject_excessive_depth_without_acceptance(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_fixture([("301", "Synthetic Author", "Original body")]))
+        page.evaluate(DOM_VARIATION_SCRIPT, {"kind": "body_wrappers", "depth": 210})
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize(
+    "location", ["outside_card", "all_sections", "header", "footer"]
+)
+def test_normalization_card_and_section_wrappers_keep_distinct_ownership(
+    tmp_path, location
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_fixture(
+                [
+                    ("301", "Synthetic Author", "First authored body"),
+                    ("302", "Synthetic Author", "Second authored body"),
+                ]
+            )
+        )
+        page.evaluate(
+            r"""location => {
+          for (const card of document.querySelectorAll('[data-story]')) {
+            let target = location === 'header' ? card.children[1]
+              : location === 'footer' ? card.children[3] : card;
+            if (location === 'all_sections') {
+              const inner = document.createElement('div');
+              inner.setAttribute('data-mcomponent','MContainer');
+              inner.append(...card.childNodes); card.append(inner); target = inner;
+            }
+            for (let depth = 0; depth < 16; depth++) {
+              const wrap = document.createElement('div');
+              wrap.setAttribute('data-mcomponent','MContainer');
+              target.replaceWith(wrap); wrap.append(target); target = wrap;
+            }
+          }
+        }""",
+            location,
+        )
+        with mobile_records(page) as records:
+            assert [payload["text"] for _, payload in records] == [
+                "First authored body",
+                "Second authored body",
+            ]
+            assert [payload["actionToken"] for _, payload in records] == [
+                "menu-301",
+                "menu-302",
+            ]
+
+
+def test_normalization_reference_comparison_same_dom_is_content_free_and_fail_closed(
+    tmp_path,
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_fixture([("301", "Synthetic Author", "Private synthetic body")])
+        )
+        with parser_reference(MOBILE_SCAN_SCRIPT), mobile_records(page) as records:
+            assert len(records) == 1
+        mismatch = MOBILE_SCAN_SCRIPT.replace(
+            "author: owner,", "author: 'Different synthetic author',"
+        )
+        with (
+            parser_reference(mismatch),
+            pytest.raises(LayoutChangedError, match="reference_parser_agreement"),
+            mobile_records(page),
+        ):
+            pytest.fail("Reference disagreement accepted")
+
+
+def test_normalization_discussion_is_opaque_to_body_node_budget(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_fixture([("301", "Synthetic Author", "Authored body")]))
+        with mobile_records(page) as records:
+            initial = records[0][1]["normalization"]["nodes"]
+        page.evaluate(r"""() => {
+          const comment = document.querySelector('[aria-label^="Comment by "]');
+          for (let index=0; index<2000; index++) {
+            const text = document.createElement('div');
+            text.setAttribute('data-mcomponent','TextArea');
+            text.textContent = 'Synthetic discussion text'; comment.append(text);
+          }
+        }""")
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == "Authored body"
+            assert records[0][1]["normalization"]["nodes"] == initial
+
+
+@pytest.mark.parametrize("style", ["display:none", "visibility:hidden", "opacity:0"])
+def test_normalization_card_wrapper_cannot_expose_hidden_post(tmp_path, style):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_fixture([("301", "Synthetic Author", "Hidden body")]))
+        page.evaluate(
+            r"""style => {
+          const card=document.querySelector('[data-story]');
+          const wrap=document.createElement('div'); wrap.style.cssText=style;
+          card.replaceWith(wrap); wrap.append(card);
+        }""",
+            style,
+        )
+        with mobile_records(page) as records:
+            assert records == []
+
+
+def test_normalization_publication_label_can_be_accessible_without_timestamp_text(
+    tmp_path,
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_fixture([("301", "Synthetic Author", "Authored body")]))
+        page.locator('[aria-label="Sunday, October 11, 2026 at 10:00 AM"]').evaluate(
+            "node => {node.textContent='';node.style='width:32px;height:24px'}"
+        )
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert records[0][1]["timestamp"] == ""
+            assert records[0][1]["timestampLabel"].startswith("Sunday, October 11")
+
+
+def test_normalization_node_budget_is_explicit_and_does_not_accept_truncated_body(
+    tmp_path,
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_fixture([("301", "Synthetic Author", "Original body")]))
+        page.evaluate(r"""() => {
+          const body=document.querySelector('[data-story]').children[2];
+          const fragment=document.createDocumentFragment();
+          for(let index=0;index<13000;index++) {
+            const text=document.createElement('div');
+            text.setAttribute('data-mcomponent','TextArea');
+            text.textContent='Synthetic paragraph'; fragment.append(text);
+          }
+          body.append(fragment);
+        }""")
+        with pytest.raises(LayoutChangedError, match="body_normalization_budget"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records == []
 
 
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
@@ -545,6 +828,14 @@ def test_split_link_preview_requires_owned_image_domain_and_caption_action(
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(html)
+        if mutation in {"text_only_link", "nested_action"}:
+            # An unowned interactive link is an explicit rejection now, rather
+            # than treating its caption as authored content or hiding the link.
+            with pytest.raises(
+                LayoutChangedError, match="supported_primary_body_controls"
+            ):
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+            return
         with mobile_records(page) as records:
             assert "Automatic preview title" in records[0][1]["text"]
 

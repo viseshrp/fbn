@@ -9,6 +9,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Ownership-preserving DOM normalization, named body/header/footer recognizers,
+  independent `PostView` validation and opt-in same-DOM reference comparison.
+- Generated wrapper, text-fragment, decoration and discussion variations, with
+  explicit rejection tests for unclaimed text, unknown controls and depth limits.
 - Content-free, bounded DOM ancestry and block-role snapshots alongside failure
   images, with action phases and late-authentication privacy checks.
 - A 128-case preview/panel pipeline matrix plus attachment, dialog, normalization,
@@ -47,6 +51,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Parse normalized body trees before extracting authored text. Collapse only
+  presentation wrappers, retain branching/action/ARIA boundaries, prune owned
+  discussion and reject unknown meaningful content without changing identity,
+  source/destination, catch-up or notification-delivery rules.
 - Resolve split preview captions in owned-section DOM order through inert
   wrappers, while refusing to cross discussion, other links, or controls.
   Exclude nested discussion menus at their own boundary rather than discarding

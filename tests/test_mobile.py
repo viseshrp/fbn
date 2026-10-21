@@ -9,6 +9,7 @@ from fbn.exceptions import AccessDeniedError, ConfigurationError
 from fbn.extractor import parse_facebook_timestamp, parse_group_ref, parse_post_url
 from fbn.mobile import MobilePostSource, mobile_group_url, verified_group_keys
 from fbn.models import Post
+from tests.mobile_fixtures import post_view_fixture
 
 
 @pytest.fixture(autouse=True)
@@ -196,9 +197,12 @@ def test_preview_expansion_shares_one_timeout_budget_and_disposes_handles(
         "previewControlCount": 1,
     }
     expanded = {
+        **post_view_fixture("Prefix. Full body."),
         **source,
         "text": "Prefix. Full body.",
         "partial": False,
+        "bodyState": "complete",
+        "previewControlCount": 0,
         "cardToken": 2,
         "actionToken": "refreshed-action" if action_refresh else source["actionToken"],
     }

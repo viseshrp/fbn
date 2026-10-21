@@ -6,6 +6,47 @@ import json
 from html import escape
 
 
+def post_view_fixture(text: str = "Synthetic body") -> dict[str, object]:
+    """A complete synthetic parser/application boundary, without a browser."""
+
+    return {
+        "author": "Synthetic Author",
+        "text": text,
+        "timestamp": "2h",
+        "timestampLabel": "2h",
+        "timestampObservedAt": 1,
+        "cardToken": 1,
+        "actionToken": "synthetic-action",
+        "mediaCount": 0,
+        "position": 0,
+        "bodyControlCount": 0,
+        "bodyTextPartCount": 1,
+        "previewControlCount": 0,
+        "partial": False,
+        "bodyState": "complete",
+        "parserVersion": 1,
+        "mediaKeys": [],
+        "bodyTextLengths": [len(text)],
+        "blocks": [
+            {"role": "message", "textChars": len(text), "component": "TextArea"}
+        ],
+        "normalization": {"version": 1, "nodes": 4, "collapsed": 0},
+        "recognizers": [
+            {"name": name, "status": "absent"}
+            for name in (
+                "discussion",
+                "attachments",
+                "split_preview",
+                "interface_panel",
+                "expander",
+                "media",
+                "action_ownership",
+                "unknown_controls",
+            )
+        ],
+    }
+
+
 def mobile_loading_shell_fixture(*, accessible_spinner: bool = False) -> str:
     """Synthetic empty boot screen, including invisible fallback UI.
 

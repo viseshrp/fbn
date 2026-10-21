@@ -42,6 +42,7 @@ from .extractor import (
 )
 from .failure_screenshots import capture_failure_screenshots
 from .logging import get_logger
+from .mobile_compare import comparison_script
 from .mobile_dom import (
     APP_PROMPT_SCRIPT,
     MOBILE_PERMALINK_SCAN_SCRIPT,
@@ -49,6 +50,7 @@ from .mobile_dom import (
     RENDER_SNAPSHOT_SCRIPT,
     PostView,
 )
+from .mobile_view import post_view_issues
 from .models import GroupRef, Post, ScanPolicy, ScanResult
 
 LOGGER = get_logger("mobile")
@@ -510,9 +512,22 @@ def mobile_records(
     page: Page, *, permalink: bool = False
 ) -> Iterator[list[tuple[ElementHandle, PostView]]]:
     script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
-    root = page.evaluate_handle(script, True)
+    root = page.evaluate_handle(comparison_script(script, permalink=permalink), True)
     handles = []
     try:
+        comparison = root.get_property("comparison")
+        handles.append(comparison)
+        comparison_value = comparison.json_value()
+        if comparison_value is not None:
+            LOGGER.info(
+                "Mobile parser comparison",
+                page_kind="permalink" if permalink else "feed",
+                **comparison_value,
+            )
+            if comparison_value.get("matched") is not True:
+                raise _layout_failure(
+                    "reference_parser_agreement", phase="parser_comparison"
+                )
         result = root.get_property("records")
         handles.append(result)
         records = []
@@ -525,7 +540,11 @@ def mobile_records(
             handles.extend([menu_handle, payload_handle])
             menu = menu_handle.as_element()
             if menu is not None:
-                records.append((menu, payload_handle.json_value()))
+                payload = payload_handle.json_value()
+                issues = post_view_issues(payload)
+                if issues:
+                    raise _layout_failure(*issues, phase="post_view_validation")
+                records.append((menu, payload))
         yield records
     finally:
         for handle in reversed(handles):
@@ -588,6 +607,10 @@ def expand_post_preview(
                 * 1_000,
             )
         expanded = completed.json_value()
+        if not isinstance(expanded, dict) or not expanded.get("missing"):
+            issues = post_view_issues(expanded)
+            if issues:
+                raise _layout_failure(*issues, phase="post_view_validation")
         comparisons = {
             "expanded_primary_menu_preserved": not expanded.get("missing", False),
             "expanded_primary_url_unchanged": page.url == original_url,

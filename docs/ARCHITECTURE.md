@@ -84,6 +84,38 @@ class NotificationSink(Protocol):
 random source, and notifier dependencies are injected so tests do not contact
 Facebook or external notification services.
 
+### Mobile parsing boundaries
+
+1. `mobile_dom` establishes the card, primary menu and action-footer boundaries;
+   `mobile_structure` recognizes the matching author and publication metadata.
+2. `mobile_normalize` builds an ordered tree inside each owned body section.
+   Unary presentation wrappers can collapse, but branching, action, ARIA, link,
+   text and media boundaries remain. The complete owned-section wrapper may
+   collapse without crossing sections. Text nodes and block separators retain
+   their original order. `display:contents` wrappers do not hide readable children.
+3. `mobile_components` runs named discussion, attachment, split-preview, panel,
+   expander, media, action-ownership and unknown-control recognizers. Claims record ownership and
+   fixed-name outcomes. Conflicting claims, unknown controls, unclaimed meaningful
+   text or the 12,000-node/192-depth budget reject the body. Owned discussion is
+   opaque, so a large comment tree is neither parsed as content nor expanded.
+4. `mobile_view.post_view_issues` validates required content/evidence fields and
+   completeness before crossing into application code. Expansion and permalink
+   checks independently require preserved identity and matching full content.
+
+`mobile_compare.parser_reference` is an explicitly injected rollout/test context,
+not a fallback parser. It evaluates trusted reference and candidate code
+synchronously on the same page and compares menu ownership, post counts, missing
+signals and semantic post fields. Only counts, fixed field names, booleans and
+durations leave the comparison. A disagreement blocks acceptance. There is no
+default reference, additional navigation, second publisher or retained historical
+parser in the package; a rollout supplies its immutable reference separately.
+
+Generated presentation tests vary wrapper depth, card/header/footer placement,
+inline text fragmentation, empty decorations and discussion placement. Semantic
+post content and identity must remain unchanged. Unknown interactivity and
+unclassified text must still reject. These tests complement, rather than replace,
+the complete acquisition/state/delivery/restart and copied-link regression suite.
+
 Mobile body partitioning also recognizes a split Bloks link preview: an owned
 linked image is followed, in the same section, by a separate action containing
 only a domain and title. Empty media decorations may intervene, but authored
