@@ -445,8 +445,11 @@ def test_message_normalization_preserves_inline_text_node_boundaries(tmp_path):
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
 @pytest.mark.parametrize("source_partial", [False, True])
 @pytest.mark.parametrize("target_partial", [False, True])
+@pytest.mark.parametrize(
+    "body_wrappers,image_wrapped", [(0, False), (1, False), (3, True)]
+)
 def test_split_link_preview_expands_and_verifies_only_authored_message(
-    tmp_path, component, source_partial, target_partial
+    tmp_path, component, source_partial, target_partial, body_wrappers, image_wrapped
 ):
     preview = "Synthetic message."
     full = preview + " Visit https://example.invalid/signup for the full details."
@@ -454,7 +457,12 @@ def test_split_link_preview_expands_and_verifies_only_authored_message(
         page = context.new_page()
         page.set_content(
             mobile_split_link_preview_fixture(
-                preview, full, component=component, partial=source_partial
+                preview,
+                full,
+                component=component,
+                partial=source_partial,
+                body_wrappers=body_wrappers,
+                image_wrapped=image_wrapped,
             )
         )
         with mobile_records(page) as records:
@@ -479,6 +487,8 @@ def test_split_link_preview_expands_and_verifies_only_authored_message(
                     component=component,
                     partial=target_partial,
                     caption="Different automatic destination preview title",
+                    body_wrappers=body_wrappers,
+                    image_wrapped=image_wrapped,
                 )
                 + "<script>history.replaceState(null,'',"
                 "'/groups/contract-group/posts/301/')</script>",
@@ -498,6 +508,8 @@ def test_split_link_preview_expands_and_verifies_only_authored_message(
         "not_a_domain",
         "intervening_message",
         "nested_action",
+        "discussion",
+        "text_only_link",
     ],
 )
 def test_split_link_preview_requires_owned_image_domain_and_caption_action(
@@ -515,11 +527,20 @@ def test_split_link_preview_requires_owned_image_domain_and_caption_action(
             '<div data-mcomponent="ImageArea" style="height:1px"></div>',
             '<div data-mcomponent="TextArea">Another authored paragraph.</div>',
         )
-    else:
+    elif mutation == "nested_action":
         html = html.replace(
             "Automatic preview title</div>",
             'Automatic preview title</div><div data-mcomponent="MContainer" '
             'data-action-id="unknown"></div>',
+        )
+    else:
+        barrier = (
+            '<div role="article"><div data-mcomponent="TextArea">Reply.</div></div>'
+            if mutation == "discussion"
+            else '<div role="link" data-action-id="other">Other link</div>'
+        )
+        html = html.replace(
+            '<div data-mcomponent="ImageArea" style="height:1px"></div>', barrier
         )
     with _local_context(tmp_path) as context:
         page = context.new_page()
@@ -554,6 +575,36 @@ def test_split_link_preview_never_hides_unknown_caption_controls(
         page.set_content(html)
         with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
             wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize("unlabelled_menu", [False, True])
+def test_split_link_preview_nested_discussion_never_erases_the_primary_body(
+    tmp_path, unlabelled_menu
+):
+    full = "Prefix. Full authored body."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_split_link_preview_fixture("Prefix.", full, body_wrappers=0)
+        )
+        page.evaluate(
+            "() => {const section=document.querySelector('[data-story]').children[2];"
+            "const wrap=document.createElement('div');"
+            "wrap.setAttribute('data-mcomponent','MContainer');"
+            "wrap.append(...section.childNodes);section.append(wrap);}"
+        )
+        if unlabelled_menu:
+            page.locator('[role="article"]').evaluate(
+                "node => {node.removeAttribute('role');"
+                "node.removeAttribute('aria-label')}"
+            )
+            with pytest.raises(LayoutChangedError, match="unique_primary_menu"):
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+        else:
+            with mobile_records(page) as records:
+                assert len(records) == 1 and records[0][1]["text"] == "Prefix."
+                expanded = expand_post_preview(page, *records[0], timeout_seconds=3)
+            assert expanded["text"] == full
 
 
 def test_split_link_preview_keeps_strict_message_and_destination_checks(tmp_path):

@@ -3,8 +3,8 @@
     "case": "split_bloks_link_preview_caption",
     "evidence_date": "2026-10-20",
     "expected_blocks": ["message", "attachment"],
-    "outcome": "exclude_owned_split_domain_title_caption_before_strict_expansion_and_destination_equality",
-    "tests": ["test_split_link_preview_expands_and_verifies_only_authored_message", "test_split_link_preview_requires_owned_image_domain_and_caption_action", "test_split_link_preview_never_hides_unknown_caption_controls", "test_split_link_preview_keeps_strict_message_and_destination_checks", "test_split_link_preview_delivery_restart_and_rejection_are_atomic"]
+    "outcome": "follow_owned_dom_order_across_inert_wrappers_exclude_only_caption_and_discussion_then_require_strict_equality",
+    "tests": ["test_split_link_preview_expands_and_verifies_only_authored_message", "test_split_link_preview_requires_owned_image_domain_and_caption_action", "test_split_link_preview_never_hides_unknown_caption_controls", "test_split_link_preview_nested_discussion_never_erases_the_primary_body", "test_split_link_preview_keeps_strict_message_and_destination_checks", "test_split_link_preview_delivery_restart_and_rejection_are_atomic"]
   },
   {
     "case": "permalink_blank_boot_spinner",

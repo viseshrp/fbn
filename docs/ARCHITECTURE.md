@@ -87,7 +87,10 @@ Facebook or external notification services.
 Mobile body partitioning also recognizes a split Bloks link preview: an owned
 linked image is followed, in the same section, by a separate action containing
 only a domain and title. Empty media decorations may intervene, but authored
-text or unknown controls cannot. Only the caption action is excluded, never its
+text, discussion, other links or unknown controls cannot. DOM order within that
+section, rather than direct-child positions, supports inert wrapper changes.
+Known nested discussion menus are excluded at their own discussion boundary.
+Only the caption action is excluded, never its
 whole section. This keeps attachment text out of the strict preview-prefix and
 full source/destination comparisons while preserving authored URLs and wording.
 

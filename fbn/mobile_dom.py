@@ -127,8 +127,11 @@ MOBILE_SCAN_SCRIPT = r"""
         }
       }
       for (const menu of section.querySelectorAll(menuSelector)) {
-        const nested = branch(section, menu);
-        if (nested) excluded.push(nested);
+        // Known discussion owns its own exclusion. A wrapper containing both
+        // message and quoted menu must not make the whole message disappear.
+        if (menu.closest(excludedSelector)) continue;
+        unsupported = true;
+        describe('unknown', menu);
       }
       const own = node => !node.closest(excludedSelector)
         && !excluded.some(root => root.contains(node));
@@ -174,16 +177,31 @@ MOBILE_SCAN_SCRIPT = r"""
       for (const link of section.querySelectorAll('[role="link"][data-action-id]')) {
         if (!visible(link) || !own(link) || clean(link.innerText)
           || !attachments.includes(link)) continue;
-        const imageBranch = branch(section, link);
-        if (!imageBranch) continue;
-        let captionBranch = imageBranch.nextElementSibling;
-        while (captionBranch && !clean(captionBranch.innerText)) {
-          if (captionBranch.matches(excludedSelector)
-            || captionBranch.querySelector(excludedSelector + ',button,[role="button"],'
-              + '[role="link"],a[href]')) break;
-          captionBranch = captionBranch.nextElementSibling;
+        // Bloks can add arbitrary inert wrappers around the message/media.
+        // Follow DOM order within this owned section, never section-level
+        // siblings or a fixed nesting depth. The first text must be the domain;
+        // crossing discussion, another link, or an unknown control is forbidden.
+        const follows = node => !link.contains(node) && Boolean(
+          link.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const firstText = Array.from(section.querySelectorAll(textSelector))
+          .find(node => visible(node) && messageOwn(node) && clean(node.innerText)
+            && !node.querySelector(textSelector) && follows(node));
+        const captionBranch = firstText?.closest(
+          '[data-mcomponent="MContainer"][data-action-id]');
+        if (!captionBranch || !section.contains(captionBranch)) continue;
+        if (Array.from(section.querySelectorAll(excludedSelector
+          + ',button,[role="button"],[role="link"],a[href]')).some(node =>
+          visible(node) && follows(node) && (node === firstText || Boolean(
+            node.compareDocumentPosition(firstText)
+              & Node.DOCUMENT_POSITION_FOLLOWING)))) {
+          continue;
         }
-        if (!captionBranch || !own(captionBranch)) continue;
+        let owner = captionBranch.parentElement, ambiguous = false;
+        while (owner && section.contains(owner) && !owner.contains(link)) {
+          if (owner.hasAttribute('data-action-id')) { ambiguous = true; break; }
+          owner = owner.parentElement;
+        }
+        if (ambiguous || !owner || !section.contains(owner)) continue;
         const parts = Array.from(captionBranch.querySelectorAll(textSelector))
           .filter(node => visible(node) && own(node) && clean(node.innerText)
             && !node.querySelector(textSelector));

@@ -47,6 +47,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Resolve split preview captions in owned-section DOM order through inert
+  wrappers, while refusing to cross discussion, other links, or controls.
+  Exclude nested discussion menus at their own boundary rather than discarding
+  an enclosing primary-message wrapper.
 - Exclude a split Bloks link-preview caption only when a linked image precedes
   its separately clickable domain/title block in the same message section.
   Preserve authored URLs and text, strict preview-prefix and full-destination

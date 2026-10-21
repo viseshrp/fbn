@@ -184,6 +184,8 @@ def mobile_split_link_preview_fixture(
     component: str = "TextArea",
     partial: bool = True,
     caption: str = "Automatic preview title",
+    body_wrappers: int = 1,
+    image_wrapped: bool = False,
 ) -> str:
     """Bloks puts linked media and its clickable caption in sibling branches."""
     html = (
@@ -191,13 +193,17 @@ def mobile_split_link_preview_fixture(
         if partial
         else mobile_fixture([("301", "Synthetic Author", complete)])
     )
-    attachment = (
+    image = (
         '<div data-mcomponent="MContainer" role="link" data-action-id="image-link">'
         '<div data-mcomponent="ImageArea" style="width:32px;height:32px">'
         '<img width="32" height="32" '
         'src="https://scontent.example.fbcdn.net/123456_234567_345_n.jpg">'
         "</div></div>"
-        '<div data-mcomponent="ImageArea" style="height:1px"></div>'
+    )
+    if image_wrapped:
+        image = '<div data-mcomponent="MContainer">' + image + "</div>"
+    attachment = (
+        image + '<div data-mcomponent="ImageArea" style="height:1px"></div>'
         '<div data-mcomponent="MContainer"><div data-mcomponent="MContainer" '
         'data-action-id="caption-link">'
         f'<div data-mcomponent="{component}">EXAMPLE.INVALID</div>'
@@ -208,7 +214,16 @@ def mobile_split_link_preview_fixture(
         '</div><div data-mcomponent="MContainer">'
         '<button role="button" aria-label="Like,'
     )
-    return html.replace(marker, attachment + marker, 1)
+    html = html.replace(marker, attachment + marker, 1)
+    return html + (
+        "<script>(()=>{const body=document.querySelector('[data-story]').children[2];"
+        f"for(let i=0;i<{body_wrappers};i++){{"
+        "const inner=document.createElement('div');"
+        "inner.setAttribute('data-mcomponent','MContainer');"
+        "const primary=Array.from(body.children).filter(node=>!node.matches("
+        '\'[aria-label="Shared post"],[aria-label^="Comment by "]\'));'
+        "inner.append(...primary);body.prepend(inner);}})()</script>"
+    )
 
 
 def mobile_layout_fixture(
