@@ -539,12 +539,19 @@ def _photo_action_shell(page, *, component="ImageArea", depth=0, count=1, extra=
             shell.append(image);
           }
           if (options.extra) {
-            const el = document.createElement(options.extra === 'input' ? 'input' : 'div');
-            if (options.extra === 'plain_text') el.textContent='Unowned synthetic words';
+            const tag = options.extra === 'input' ? 'input' : 'div';
+            const el = document.createElement(tag);
+            if (options.extra === 'plain_text') {
+              el.textContent='Unowned synthetic words';
+            }
             if (options.extra === 'button') el.setAttribute('role','button');
             if (options.extra === 'link') el.setAttribute('role','link');
-            if (options.extra === 'empty_action') el.setAttribute('data-action-id','unknown-action');
-            if (options.extra === 'menu') el.setAttribute('aria-label','More options for Synthetic');
+            if (options.extra === 'empty_action') {
+              el.setAttribute('data-action-id','unknown-action');
+            }
+            if (options.extra === 'menu') {
+              el.setAttribute('aria-label','More options for Synthetic');
+            }
             el.style.cssText='width:32px;height:32px';
             shell.append(el);
           }
