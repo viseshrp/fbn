@@ -41,6 +41,7 @@ from tests.mobile_fixtures import (
     mobile_layout_fixture,
     mobile_loading_shell_fixture,
     mobile_preview_fixture,
+    mobile_split_link_preview_fixture,
 )
 
 # These cases assert DOM/identity behavior, not shared-runner navigation speed.
@@ -439,6 +440,227 @@ def test_message_normalization_preserves_inline_text_node_boundaries(tmp_path):
             assert before["text"] == "Synthetic preview."
             after = expand_post_preview(page, menu, before, timeout_seconds=5)
             assert after["text"] == "Synthetic preview. Full continuation."
+
+
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize("source_partial", [False, True])
+@pytest.mark.parametrize("target_partial", [False, True])
+def test_split_link_preview_expands_and_verifies_only_authored_message(
+    tmp_path, component, source_partial, target_partial
+):
+    preview = "Synthetic message."
+    full = preview + " Visit https://example.invalid/signup for the full details."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_split_link_preview_fixture(
+                preview, full, component=component, partial=source_partial
+            )
+        )
+        with mobile_records(page) as records:
+            menu, before = records[0]
+            assert before["text"] == (preview if source_partial else full)
+            assert before["bodyTextPartCount"] == 1
+            assert any(
+                b["role"] == "attachment" and b["textChars"] for b in before["blocks"]
+            )
+            copied = copy_post_link(page, menu, timeout_seconds=5)
+            expanded = expand_post_preview(page, menu, before, timeout_seconds=5)
+        assert expanded["text"] == full
+        assert not expanded["partial"]
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_split_link_preview_fixture(
+                    preview,
+                    full,
+                    component=component,
+                    partial=target_partial,
+                    caption="Different automatic destination preview title",
+                )
+                + "<script>history.replaceState(null,'',"
+                "'/groups/contract-group/posts/301/')</script>",
+            ),
+        )
+        target = context.new_page()
+        assert resolve_post_link(
+            target, copied, expanded, frozenset({"contract-group"}), timeout_seconds=5
+        ).endswith("/posts/301/")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "no_linked_media",
+        "no_caption_action",
+        "not_a_domain",
+        "intervening_message",
+        "nested_action",
+    ],
+)
+def test_split_link_preview_requires_owned_image_domain_and_caption_action(
+    tmp_path, mutation
+):
+    html = mobile_split_link_preview_fixture("Prefix.", "Prefix. Full body.")
+    if mutation == "no_linked_media":
+        html = html.replace('role="link" data-action-id="image-link"', 'role="group"')
+    elif mutation == "no_caption_action":
+        html = html.replace('data-action-id="caption-link"', "")
+    elif mutation == "not_a_domain":
+        html = html.replace("EXAMPLE.INVALID", "Authored sentence")
+    elif mutation == "intervening_message":
+        html = html.replace(
+            '<div data-mcomponent="ImageArea" style="height:1px"></div>',
+            '<div data-mcomponent="TextArea">Another authored paragraph.</div>',
+        )
+    else:
+        html = html.replace(
+            "Automatic preview title</div>",
+            'Automatic preview title</div><div data-mcomponent="MContainer" '
+            'data-action-id="unknown"></div>',
+        )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with mobile_records(page) as records:
+            assert "Automatic preview title" in records[0][1]["text"]
+
+
+@pytest.mark.parametrize("root_control", [False, True])
+def test_split_link_preview_never_hides_unknown_caption_controls(
+    tmp_path, root_control
+):
+    html = mobile_split_link_preview_fixture("Prefix.", "Prefix. Full body.")
+    if root_control:
+        html = html.replace(
+            '<div data-mcomponent="MContainer"><div data-mcomponent="MContainer" '
+            'data-action-id="caption-link">',
+            '<div data-mcomponent="MContainer" data-action-id="caption-link" '
+            'role="button">',
+        ).replace(
+            "Automatic preview title</div></div></div>",
+            "Automatic preview title</div></div>",
+            1,
+        )
+    else:
+        html = html.replace(
+            "Automatic preview title</div>",
+            "Automatic preview title</div><button>Unknown action</button>",
+        )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_split_link_preview_keeps_strict_message_and_destination_checks(tmp_path):
+    full = "Prefix. Authored full body mentioning EXAMPLE.INVALID and preview title."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_split_link_preview_fixture("Prefix.", "Changed body."))
+        with (
+            mobile_records(page) as records,
+            pytest.raises(
+                LayoutChangedError, match="expanded_primary_body_preserves_preview"
+            ),
+        ):
+            expand_post_preview(page, *records[0], timeout_seconds=2)
+        page.set_content(mobile_split_link_preview_fixture("Prefix.", full))
+        with mobile_records(page) as records:
+            menu, before = records[0]
+            expanded = expand_post_preview(page, menu, before, timeout_seconds=5)
+        assert expanded["text"] == full
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_split_link_preview_fixture(
+                    "Prefix.", "Prefix. Different full body.", partial=False
+                ),
+            ),
+        )
+        with pytest.raises(
+            LayoutChangedError, match="resolved_primary_body_matches_source"
+        ):
+            resolve_post_link(
+                context.new_page(),
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                expanded,
+                frozenset({"contract-group"}),
+                timeout_seconds=2,
+            )
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_split_link_preview_delivery_restart_and_rejection_are_atomic(
+    tmp_path, mismatch
+):
+    from fbn.monitor import MonitorService
+
+    full = "Prefix. Full authored body with https://example.invalid/signup."
+    group = parse_group_ref("contract-group")
+    notifications = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            target = "/share/" in route.request.url
+            body = "Prefix. Wrong complete body." if target and mismatch else full
+            html = mobile_split_link_preview_fixture("Prefix.", body)
+            if target:
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        sink = type(
+            "RecordingSink", (), {"send": lambda self, n: notifications.append(n)}
+        )()
+        policy = ScanPolicy(
+            sample_count=1,
+            max_scrolls=0,
+            navigation_timeout_seconds=3,
+            settle_seconds=0,
+        )
+        path = tmp_path / "split.sqlite3"
+        with SQLiteStateRepository(path) as state:
+            monitor = MonitorService(source, state, sink)
+            if mismatch:
+                with pytest.raises(
+                    LayoutChangedError, match="resolved_primary_body_matches_source"
+                ):
+                    monitor.run_once(group, policy, notify_initial=True)
+                assert not state.pending(group) and not notifications
+                assert (
+                    state._connection.execute("SELECT COUNT(*) FROM posts").fetchone()[
+                        0
+                    ]
+                    == 0
+                )
+                return
+            result = monitor.run_once(group, policy, notify_initial=True)
+            assert result.delivered == 1 and result.pending == 0
+        with SQLiteStateRepository(path) as state:
+            result = MonitorService(source, state, sink).run_once(group, policy)
+            assert result.delivered == result.pending == 0
+        assert len(notifications) == 1
+        assert notifications[0].body == (
+            "Synthetic Author\n"
+            + full
+            + "\nhttps://www.facebook.com/groups/contract-group/posts/301/"
+        )
 
 
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])

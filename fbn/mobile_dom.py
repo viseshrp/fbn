@@ -134,8 +134,10 @@ MOBILE_SCAN_SCRIPT = r"""
         && !excluded.some(root => root.contains(node));
       const messageOwn = node => own(node)
         && !attachments.some(root => root.contains(node));
+      const imageSelector = 'img,[data-mcomponent="ImageArea"],'
+        + '[data-mcomponent="ServerImageArea"]';
       const attachmentSelector = '[role="radiogroup"],'
-        + '[role="group"][aria-label="Poll"],[role="img"],a[href],[role="link"][href]';
+        + '[role="group"][aria-label="Poll"],[role="img"],a[href],[role="link"]';
       for (const node of [section, ...section.querySelectorAll(attachmentSelector)]
         .filter(node => node.matches(attachmentSelector))) {
         if (!visible(node) || !own(node) || node.closest(textSelector)) continue;
@@ -148,9 +150,13 @@ MOBILE_SCAN_SCRIPT = r"""
           && Array.from(node.querySelectorAll(
             'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
           )).some(visible)) attachment = true;
-        if (!attachment && node.querySelector(
-          'img,[data-mcomponent="ServerImageArea"]')) {
-          try {
+        if (!attachment && Array.from(node.querySelectorAll(imageSelector))
+          .some(visible)) {
+          // Bloks links can expose only an action, not an href. Their linked
+          // image is still an attachment; never promote a text-only action.
+          if (node.matches('[role="link"][data-action-id]:not([href])')) {
+            attachment = true;
+          } else if (node.hasAttribute('href')) try {
             const url = new URL(node.getAttribute('href'), location.href);
             attachment = ['http:','https:'].includes(url.protocol);
             if (/(^|\.)facebook\.com$/.test(url.hostname)) {
@@ -160,6 +166,48 @@ MOBILE_SCAN_SCRIPT = r"""
           } catch {}
         }
         if (attachment) { attachments.push(node); describe('attachment', node); }
+      }
+      // A split Bloks link preview has a linked image, optional empty media
+      // decorations, then a separately clickable domain/title caption. There is
+      // no shared attachment wrapper: excluding the whole section would also
+      // discard the authored message. Require this exact local grammar instead.
+      for (const link of section.querySelectorAll('[role="link"][data-action-id]')) {
+        if (!visible(link) || !own(link) || clean(link.innerText)
+          || !attachments.includes(link)) continue;
+        const imageBranch = branch(section, link);
+        if (!imageBranch) continue;
+        let captionBranch = imageBranch.nextElementSibling;
+        while (captionBranch && !clean(captionBranch.innerText)) {
+          if (captionBranch.matches(excludedSelector)
+            || captionBranch.querySelector(excludedSelector + ',button,[role="button"],'
+              + '[role="link"],a[href]')) break;
+          captionBranch = captionBranch.nextElementSibling;
+        }
+        if (!captionBranch || !own(captionBranch)) continue;
+        const parts = Array.from(captionBranch.querySelectorAll(textSelector))
+          .filter(node => visible(node) && own(node) && clean(node.innerText)
+            && !node.querySelector(textSelector));
+        if (parts.length !== 2) continue;
+        const domain = clean(parts[0].innerText);
+        if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/i
+          .test(domain)) continue;
+        const caption = parts[0].closest(
+          '[data-mcomponent="MContainer"][data-action-id]');
+        if (!caption || !captionBranch.contains(caption)
+          || !caption.contains(parts[1]) || caption.closest(textSelector)
+          || captionBranch.matches(excludedSelector + ',button,[role="button"],'
+            + '[role="link"],a[href]')
+          || captionBranch.querySelector(excludedSelector + ',button,[role="button"],'
+            + '[role="link"],a[href],' + imageSelector)
+          || (captionBranch.hasAttribute('data-action-id') && captionBranch !== caption)
+          || Array.from(captionBranch.querySelectorAll('[data-action-id]'))
+            .some(node => node !== caption)
+          || clean(caption.innerText) !== clean(captionBranch.innerText)
+          || clean(caption.innerText) !== clean(
+            parts.map(node => node.innerText).join(' '))) {
+          continue;
+        }
+        attachments.push(caption); describe('attachment', caption);
       }
       const buttons = Array.from(section.querySelectorAll('button,[role="button"]'))
         .filter(node => visible(node) && messageOwn(node));

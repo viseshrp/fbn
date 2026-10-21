@@ -177,6 +177,40 @@ def mobile_preview_fixture(
     )
 
 
+def mobile_split_link_preview_fixture(
+    preview: str,
+    complete: str,
+    *,
+    component: str = "TextArea",
+    partial: bool = True,
+    caption: str = "Automatic preview title",
+) -> str:
+    """Bloks puts linked media and its clickable caption in sibling branches."""
+    html = (
+        mobile_preview_fixture(preview, complete, component=component, delay_ms=80)
+        if partial
+        else mobile_fixture([("301", "Synthetic Author", complete)])
+    )
+    attachment = (
+        '<div data-mcomponent="MContainer" role="link" data-action-id="image-link">'
+        '<div data-mcomponent="ImageArea" style="width:32px;height:32px">'
+        '<img width="32" height="32" '
+        'src="https://scontent.example.fbcdn.net/123456_234567_345_n.jpg">'
+        "</div></div>"
+        '<div data-mcomponent="ImageArea" style="height:1px"></div>'
+        '<div data-mcomponent="MContainer"><div data-mcomponent="MContainer" '
+        'data-action-id="caption-link">'
+        f'<div data-mcomponent="{component}">EXAMPLE.INVALID</div>'
+        f'<div data-mcomponent="{component}">{escape(caption)}</div>'
+        "</div></div>"
+    )
+    marker = (
+        '</div><div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like,'
+    )
+    return html.replace(marker, attachment + marker, 1)
+
+
 def mobile_layout_fixture(
     *,
     partial: bool = False,

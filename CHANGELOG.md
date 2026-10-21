@@ -47,6 +47,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Exclude a split Bloks link-preview caption only when a linked image precedes
+  its separately clickable domain/title block in the same message section.
+  Preserve authored URLs and text, strict preview-prefix and full-destination
+  checks, and rejection of unknown controls or ambiguous attachment ownership.
 - Treat a blank, non-interactive mobile loading shell as a transient render
   timeout after the existing readiness deadline. Retain private screenshots and
   structural counters, then use persisted exponential backoff instead of stopping
