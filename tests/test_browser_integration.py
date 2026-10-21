@@ -521,6 +521,78 @@ def test_unknown_app_like_dialog_is_not_dismissed(tmp_path):
             wait_for_mobile_page(page, timeout_seconds=0.1)
 
 
+def _photo_action_shell(page, *, component="ImageArea", depth=0, count=1, extra=""):
+    """Synthetic family matching a retained content-free photo-shell topology."""
+    page.set_content(mobile_fixture([("301", "Synthetic Author", "Placeholder")]))
+    page.evaluate(
+        r"""options => {
+          const body = document.querySelector('[data-story]').children[2];
+          const shell = document.createElement('div');
+          shell.setAttribute('data-mcomponent','MContainer');
+          shell.setAttribute('data-type','container');
+          shell.setAttribute('data-action-id','synthetic-photo-shell');
+          for (let i=0; i<options.count; i++) {
+            const image = document.createElement('div');
+            image.setAttribute('data-mcomponent',options.component);
+            image.setAttribute('aria-label','Synthetic photo');
+            image.style.cssText='width:32px;height:32px';
+            shell.append(image);
+          }
+          if (options.extra) {
+            const el = document.createElement(options.extra === 'input' ? 'input' : 'div');
+            if (options.extra === 'plain_text') el.textContent='Unowned synthetic words';
+            if (options.extra === 'button') el.setAttribute('role','button');
+            if (options.extra === 'link') el.setAttribute('role','link');
+            if (options.extra === 'empty_action') el.setAttribute('data-action-id','unknown-action');
+            if (options.extra === 'menu') el.setAttribute('aria-label','More options for Synthetic');
+            el.style.cssText='width:32px;height:32px';
+            shell.append(el);
+          }
+          let wrapped = shell;
+          for (let i=0; i<options.depth; i++) {
+            const outer = shell.cloneNode(false);
+            outer.setAttribute('data-action-id','synthetic-outer-'+i);
+            const presentation = document.createElement('div');
+            presentation.append(wrapped); outer.append(presentation); wrapped=outer;
+          }
+          body.replaceChildren(wrapped);
+        }""",
+        {"component": component, "depth": depth, "count": count, "extra": extra},
+    )
+
+
+@pytest.mark.parametrize("component", ["ImageArea", "ServerImageArea"])
+@pytest.mark.parametrize("depth", [0, 1, 7])
+@pytest.mark.parametrize("count", [1, 2])
+def test_photo_only_action_shells_compose_attachment_ownership(
+    tmp_path, component, depth, count
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        _photo_action_shell(page, component=component, depth=depth, count=count)
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            payload = records[0][1]
+            assert payload["text"] == ""
+            assert payload["mediaCount"] == count
+            assert payload["partial"] is False
+            assert all(block["role"] == "attachment" for block in payload["blocks"])
+
+
+@pytest.mark.parametrize(
+    "extra", ["plain_text", "button", "link", "input", "empty_action", "menu"]
+)
+def test_photo_action_shell_cannot_claim_unknown_text_or_controls(tmp_path, extra):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        _photo_action_shell(page, depth=2, extra=extra)
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records == []
+
+
 @pytest.mark.parametrize("kind", ["photo", "video", "link_preview", "listing", "poll"])
 def test_owned_attachments_do_not_become_message_text_or_actions(tmp_path, kind):
     caption = "Original authored caption."

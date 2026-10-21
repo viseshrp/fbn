@@ -98,6 +98,10 @@ Facebook or external notification services.
    fixed-name outcomes. Conflicting claims, unknown controls, unclaimed meaningful
    text or the 12,000-node/192-depth budget reject the body. Owned discussion is
    opaque, so a large comment tree is neither parsed as content nor expanded.
+   Action ownership composes bottom-up: a photo-only clickable shell may inherit
+   attachment ownership only when every child is already an attachment or
+   transparent presentation. Nearby unclaimed text, empty actions, menus and
+   controls prevent that inheritance.
 4. `mobile_view.post_view_issues` validates required content/evidence fields and
    completeness before crossing into application code. Expansion and permalink
    checks independently require preserved identity and matching full content.

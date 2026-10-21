@@ -176,9 +176,22 @@ BODY_COMPONENTS_SCRIPT = r"""
       }
     };
     const recognizeActionOwnership = name => {
+      // Compose ownership from the leaves up. A clickable media shell is not
+      // an unknown control when every child is an already-owned attachment or
+      // transparent presentation. Empty actions, text and controls cannot earn
+      // attachment ownership merely by being near an image.
+      const attachmentOnly = node => claims.get(node)?.role === 'attachment'
+        || (node.kind === 'literal' ? !text(node)
+          : node.transparent && node.children.length > 0
+            && node.children.every(attachmentOnly));
       for (const node of nodes.filter(node => node.flags.action && !node.flags.text
-        && messageOwn(node) && !ancestors(node.parent, owner => owner.flags.text))) {
-        if (node.flags.button || node.flags.control || node.flags.link) continue;
+        && messageOwn(node) && !ancestors(node.parent, owner => owner.flags.text))
+        .reverse()) {
+        if (node.flags.button || node.flags.control || node.flags.link
+          || node.flags.menu) continue;
+        if (node.children.length && node.children.every(attachmentOnly)) {
+          claim(node, 'attachment', name); continue;
+        }
         const content = descendants(node).filter(messageOwn);
         const messageRoots = content.filter(child => child.flags.text
           && !ancestors(child.parent, owner => owner !== node && owner.flags.text));
