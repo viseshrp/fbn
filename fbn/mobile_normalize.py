@@ -79,8 +79,13 @@ NORMALIZE_BODY_SCRIPT = r"""
       }
       const meaningful = children.filter(node => node.kind !== 'literal'
         || clean(node.el.textContent));
+      // Inside an already-owned body, Bloks' container type denotes layout,
+      // not a new post/region. Keep section roots and all semantic flags hard.
+      const layoutContainer = component === 'MContainer'
+        && el.getAttribute('data-type') === 'container';
       const boundary = force || Object.values(flags).some(Boolean)
-        || el.hasAttribute('role') || el.hasAttribute('data-type')
+        || el.hasAttribute('role')
+        || (el.hasAttribute('data-type') && !layoutContainer)
         || Array.from(el.attributes).some(attr => /^aria-/i.test(attr.name))
         || (component && !['MContainer'].includes(component))
         || !['DIV','SPAN','SECTION','P'].includes(el.tagName);

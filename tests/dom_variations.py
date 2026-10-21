@@ -2,11 +2,14 @@
 
 DOM_VARIATION_SCRIPT = r"""
 ({kind, depth}) => {
+  const typed = kind.startsWith('typed_');
+  if (typed) kind = kind.slice(6);
   for (const card of document.querySelectorAll('[data-story]')) {
     const body = card.children[2];
     const wrap = (node, style) => {
       const outer = document.createElement('div');
       outer.setAttribute('data-mcomponent', 'MContainer');
+      if (typed) outer.setAttribute('data-type','container');
       if (style) outer.style.cssText = style;
       node.replaceWith(outer); outer.append(node); return outer;
     };
@@ -14,6 +17,7 @@ DOM_VARIATION_SCRIPT = r"""
       for (let index = 0; index < depth; index++) {
         const inner = document.createElement('div');
         inner.setAttribute('data-mcomponent', 'MContainer');
+        if (typed) inner.setAttribute('data-type','container');
         if (kind === 'display_contents') inner.style.display = 'contents';
         inner.append(...body.childNodes); body.append(inner);
       }
@@ -38,6 +42,7 @@ DOM_VARIATION_SCRIPT = r"""
       for (let index = 0; index < depth; index++) {
         const empty = document.createElement('div');
         empty.setAttribute('data-mcomponent','MContainer');
+        if (typed) empty.setAttribute('data-type','container');
         body.insertBefore(empty, body.children[index % (body.children.length || 1)]);
       }
     } else if (kind === 'discussion_wrappers') {

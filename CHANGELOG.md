@@ -15,6 +15,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit rejection tests for unclaimed text, unknown controls and depth limits.
 - Compositional attachment ownership for photo-only action shells, including
   nested shell/album regressions and rejection of unrelated sibling controls.
+- Normalize typed Bloks layout containers inside owned bodies, while preserving
+  section roots and semantic boundaries; cover nested/branching photo albums.
 - Content-free, bounded DOM ancestry and block-role snapshots alongside failure
   images, with action phases and late-authentication privacy checks.
 - A 128-case preview/panel pipeline matrix plus attachment, dialog, normalization,

@@ -93,6 +93,9 @@ Facebook or external notification services.
    text and media boundaries remain. The complete owned-section wrapper may
    collapse without crossing sections. Text nodes and block separators retain
    their original order. `display:contents` wrappers do not hide readable children.
+   Within an already-owned body, `MContainer` with `data-type="container"` is
+   structural layout, not a new region. It follows the same presentation rules;
+   section roots, actions, roles, ARIA and unknown component/types stay hard.
 3. `mobile_components` runs named discussion, attachment, split-preview, panel,
    expander, media, action-ownership and unknown-control recognizers. Claims record ownership and
    fixed-name outcomes. Conflicting claims, unknown controls, unclaimed meaningful
