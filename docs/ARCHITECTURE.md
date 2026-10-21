@@ -197,6 +197,7 @@ navigation
   +-- checkpoint/consent/CAPTCHA ----> AccountActionRequired (stop)
   +-- HTTP 401/403 ------------------> AccessDenied (stop)
   +-- HTTP 429 / temporary error ----> TransientNavigationError (back off)
+  +-- blank shell at render deadline -> TransientNavigationError (back off)
   +-- expected post anchors ---------> Feed (extract)
   +-- explicit empty-feed marker ----> EmptyFeed (successful)
   +-- no recognized state -----------> LayoutChanged (stop)
@@ -204,6 +205,15 @@ navigation
 
 The adapter never treats an unclassified blank page as an empty group and never
 retries around a security challenge.
+
+A blank boot shell is distinguished from a changed layout using content-free
+counts: no readable text, visible controls/media, mobile scroller, primary menu,
+or post candidate. A spinner role alone is insufficient. After the existing
+readiness deadline, that shell raises a transient navigation failure, records
+private evidence, and leaves the observation uncommitted. The scheduler applies
+its existing durable, capped exponential backoff; no immediate reload or new
+per-link budget is introduced. Unsupported visible UI and post mismatches still
+raise a layout error.
 
 ## Extraction boundary
 

@@ -291,6 +291,47 @@ def test_only_transient_navigation_failures_retry_with_exponential_backoff() -> 
     assert state.failures == 3
 
 
+def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_path):
+    from types import SimpleNamespace
+
+    from fbn.mobile import _raise_render_timeout
+    from fbn.monitor import MonitorService
+    from fbn.state import SQLiteStateRepository
+
+    clock = FakeClock()
+    path = tmp_path / "state.sqlite3"
+    attempts = []
+
+    def acquire(*args, **kwargs):
+        attempts.append(clock())
+        _raise_render_timeout()
+
+    source = SimpleNamespace(fetch_recent=acquire)
+    sink = SimpleNamespace(send=lambda value: pytest.fail("Unverified notification"))
+    schedule = ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99))
+    with SQLiteStateRepository(path) as state:
+        state.observe(GROUP, [], observed_at=START)
+        event = FakeEvent(clock, [True])
+        MonitorLoop(
+            MonitorService(source, state, sink), state, schedule, clock=clock
+        ).run(GROUP, POLICY, stop_event=event)
+        assert len(attempts) == 1
+        assert event.waits == [44 * 60]
+        assert state.consecutive_failures(GROUP) == 1
+        assert not state.pending(GROUP)
+        assert state.notification_boundary(GROUP) is None
+    with SQLiteStateRepository(path) as state:
+        event = FakeEvent(clock, [False, True])
+        MonitorLoop(
+            MonitorService(source, state, sink), state, schedule, clock=clock
+        ).run(GROUP, POLICY, stop_event=event)
+        assert attempts == [START, START + timedelta(minutes=44)]
+        assert event.waits == [44 * 60, 88 * 60]
+        assert state.consecutive_failures(GROUP) == 2
+        assert not state.pending(GROUP)
+        assert state.notification_boundary(GROUP) is None
+
+
 def test_transient_backoff_uses_failure_completion_time() -> None:
     clock = FakeClock()
     state = FakeState()

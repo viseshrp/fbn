@@ -6,6 +6,23 @@ import json
 from html import escape
 
 
+def mobile_loading_shell_fixture(*, accessible_spinner: bool = False) -> str:
+    """Synthetic empty boot screen, including invisible fallback UI.
+
+    The retained incident had a CSS spinner without a progressbar role. Hidden
+    fallback text/forms must not make that shell readable or authenticated.
+    """
+
+    return (
+        "<!doctype html><html><body><div hidden><h1>Hidden fallback</h1>"
+        '<input name="email"><a href="/login/">Hidden login</a></div>'
+        '<div style="position:fixed;top:50%;left:50%;width:24px;height:24px;'
+        'border:4px solid #ccc;border-top-color:#888;border-radius:50%"'
+        + (' role="progressbar"' if accessible_spinner else "")
+        + "></div></body></html>"
+    )
+
+
 def mobile_fixture(
     stories: list[tuple[str, str, str]],
     *,

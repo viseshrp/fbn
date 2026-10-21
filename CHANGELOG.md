@@ -47,6 +47,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Treat a blank, non-interactive mobile loading shell as a transient render
+  timeout after the existing readiness deadline. Retain private screenshots and
+  structural counters, then use persisted exponential backoff instead of stopping
+  the monitor. No reload loop, deadline reset, or weaker post-link verification;
+  unsupported visible layouts and security prompts still fail closed.
+- Inspect every matching login/checkpoint control, so hidden fallback forms
+  cannot mask a visible security prompt.
 - Recover an unreachable archived legacy marker once from the latest delivered
   canonical receipt (schema version 5), preserving the archive and keeping the
   recovered marker fixed across incomplete scans.

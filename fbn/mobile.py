@@ -46,6 +46,7 @@ from .mobile_dom import (
     APP_PROMPT_SCRIPT,
     MOBILE_PERMALINK_SCAN_SCRIPT,
     MOBILE_SCAN_SCRIPT,
+    RENDER_SNAPSHOT_SCRIPT,
     PostView,
 )
 from .models import GroupRef, Post, ScanPolicy, ScanResult
@@ -338,27 +339,9 @@ def _log_layout_snapshot(
     phase: str = "page_render",
     verification_post_count: int | None = None,
     signals: PageSignals | None = None,
-) -> None:
+) -> dict[str, Any]:
     # Fixed structural counters only. Never log text, labels, URLs, or IDs.
-    structure = page.evaluate(
-        """() => ({
-          document_ready: document.readyState,
-          document_visible: document.visibilityState === 'visible',
-          mobile_screens: document.querySelectorAll(
-            '[data-mcomponent="MScreen"]'
-          ).length,
-          total_scrollers: document.querySelectorAll('[data-type="vscroller"]').length,
-          primary_menus: document.querySelectorAll(
-            '[role="button"][aria-label^="More options for "]'
-          ).length,
-          visible_primary_menus: Array.from(document.querySelectorAll(
-            '[role="button"][aria-label^="More options for "]'
-          )).filter(node => node.checkVisibility({contentVisibilityAuto:true,
-            visibilityProperty:true,opacityProperty:true})).length,
-          loading_indicators: document.querySelectorAll('[role="progressbar"]').length,
-          dialogs: document.querySelectorAll('[role="dialog"]').length,
-        })"""
-    )
+    structure = page.evaluate(RENDER_SNAPSHOT_SCRIPT)
     terminal_signals = (
         {
             name: getattr(signals, name)
@@ -385,6 +368,42 @@ def _log_layout_snapshot(
         **terminal_signals,
         **structure,
     )
+    return structure
+
+
+def _is_loading_shell(result: dict[str, Any], structure: dict[str, Any]) -> bool:
+    """Recognize a blank, non-interactive shell, not arbitrary missing selectors.
+
+    Some Facebook boot spinners have neither a role nor mobile components.
+    A progressbar alone cannot excuse content, a changed card, or an unknown UI.
+    This classification permits only delayed retry, never accepting an empty feed.
+    """
+
+    return all(
+        value == 0
+        for value in (
+            result.get("feedRootCount"),
+            result.get("itemCount"),
+            result.get("postCount"),
+            structure.get("total_scrollers"),
+            structure.get("primary_menus"),
+            structure.get("dialogs"),
+            structure.get("visible_text_chars"),
+            structure.get("visible_controls"),
+            structure.get("visible_media"),
+        )
+    )
+
+
+def _raise_render_timeout() -> None:
+    # The scheduler owns retries with persisted, capped exponential backoff.
+    # Do not reload, reopen the link, or reset either action/scan deadline here.
+    error = TransientNavigationError(
+        "Mobile page rendering timed out on a blank loading shell; "
+        "no posts were accepted and no immediate retry was attempted."
+    )
+    _annotate_failure(error, "page_render")
+    raise error
 
 
 def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
@@ -415,26 +434,22 @@ def wait_for_mobile_page(
             "visibilityProperty:true,opacityProperty:true}))"
         ):
             raise _layout_failure("supported_blocking_dialog", phase="page_render")
-        try:
+        state = None
+        with suppress(LayoutChangedError):
             state = classify_page(signals)
-        except LayoutChangedError:
-            if time.monotonic() >= deadline:
-                result = page.evaluate(script, False)
-                missing = result.get("missing", [])
-                _log_layout_snapshot(page, result, permalink=permalink)
-                raise _layout_failure(
-                    *(missing or ["primary_mobile_card"]), phase="page_render"
-                ) from None
-            page.wait_for_timeout(100)
-            continue
         result = page.evaluate(script, False)
-        if result.get("missing"):
-            if time.monotonic() >= deadline:
-                _log_layout_snapshot(page, result, permalink=permalink)
-                raise _layout_failure(*result["missing"], phase="page_render")
-            page.wait_for_timeout(100)
-            continue
-        return state
+        if state is not None and not result.get("missing"):
+            return state
+        if time.monotonic() >= deadline:
+            structure = _log_layout_snapshot(
+                page, result, permalink=permalink, signals=signals
+            )
+            if _is_loading_shell(result, structure):
+                _raise_render_timeout()
+            raise _layout_failure(
+                *_missing_mobile_components(result), phase="page_render"
+            )
+        page.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
 
 
 def _control(
@@ -821,7 +836,7 @@ def _verify_post_at_deadline(
 
     signals = read_page_signals(page, dom_scan_script=MOBILE_PERMALINK_SCAN_SCRIPT)
     result = page.evaluate(MOBILE_PERMALINK_SCAN_SCRIPT, False)
-    _log_layout_snapshot(
+    structure = _log_layout_snapshot(
         page,
         result,
         permalink=True,
@@ -833,6 +848,8 @@ def _verify_post_at_deadline(
     # Preserve typed terminal errors; unknown layouts still fail closed below.
     with suppress(LayoutChangedError):
         classify_page(signals)
+    if _is_loading_shell(result, structure):
+        _raise_render_timeout()
     _verify_primary_post(
         records, payload, missing_components=_missing_mobile_components(result)
     )

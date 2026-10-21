@@ -152,7 +152,9 @@ def classify_page(signals: PageSignals) -> PageState:
 def _is_visible(page: Page, selector: str) -> bool:
     locator = page.locator(selector)
     try:
-        return locator.count() > 0 and locator.first.is_visible()
+        # Hidden fallback forms can precede the live login/checkpoint form.
+        # Inspect all matches so they cannot mask a security stop.
+        return any(locator.nth(index).is_visible() for index in range(locator.count()))
     except PlaywrightError:
         return False
 

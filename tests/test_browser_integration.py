@@ -39,6 +39,7 @@ from tests.mobile_fixtures import (
     app_prompt_fixture,
     mobile_fixture,
     mobile_layout_fixture,
+    mobile_loading_shell_fixture,
     mobile_preview_fixture,
 )
 
@@ -974,6 +975,153 @@ def test_mobile_waits_for_scroller_hydration_without_reloading(tmp_path):
             assert len(records) == 1
 
 
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("accessible_spinner", [False, True])
+def test_mobile_blank_loading_shell_times_out_as_transient_without_reloading(
+    tmp_path, monkeypatch, permalink, accessible_spinner
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type("Log", (), {"warning": lambda self, message, **kw: logged.append(kw)})(),
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        requests = []
+        context.route("**/*", lambda route: requests.append(route.request.url))
+        page.set_content(
+            mobile_loading_shell_fixture(accessible_spinner=accessible_spinner)
+        )
+        with pytest.raises(TransientNavigationError, match="blank loading shell"):
+            wait_for_mobile_page(page, timeout_seconds=0.05, permalink=permalink)
+        assert requests == []
+    snapshot = logged[0]
+    assert snapshot["document_ready"] == "complete"
+    assert snapshot["visible_text_chars"] == snapshot["visible_controls"] == 0
+    assert snapshot["loading_indicators"] == int(accessible_spinner)
+    assert "Hidden fallback" not in str(logged)
+
+
+@pytest.mark.parametrize(
+    "visible_ui",
+    [
+        "<p>Unknown layout</p>",
+        '<button aria-label="Unknown action"></button>',
+        '<img alt="Unknown content" style="width:50px;height:50px">',
+        '<svg width="50" height="50"></svg>',
+    ],
+)
+def test_loading_spinner_cannot_disguise_an_unsupported_visible_layout(
+    tmp_path, visible_ui
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_loading_shell_fixture() + visible_ui)
+        with pytest.raises(LayoutChangedError, match="unique_mobile_scroller"):
+            wait_for_mobile_page(page, timeout_seconds=0.05)
+
+
+@pytest.mark.parametrize("permalink", [False, True])
+def test_mobile_blank_shell_waits_for_actual_content_without_reload(
+    tmp_path, permalink
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_loading_shell_fixture())
+        page.evaluate(
+            "html => setTimeout(() => {document.open();document.write(html);"
+            "document.close();}, 100)",
+            mobile_fixture([("301", "Author", "Full body")]),
+        )
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=2, permalink=permalink)
+            is PageState.FEED
+        )
+        with mobile_records(page, permalink=permalink) as records:
+            assert records[0][1]["text"] == "Full body"
+
+
+@pytest.mark.parametrize(
+    ("terminal", "error"),
+    [
+        ('<input name="email">', AuthenticationRequiredError),
+        ('<input name="approvals_code">', AccountActionRequiredError),
+        ("<main>Content isn't available</main>", AccessDeniedError),
+        ("<main>Temporarily blocked</main>", TransientNavigationError),
+    ],
+)
+def test_loading_shell_does_not_hide_terminal_security_or_access_state(
+    tmp_path, terminal, error
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_loading_shell_fixture() + terminal)
+        with pytest.raises(error) as failure:
+            wait_for_mobile_page(page, timeout_seconds=0.05, permalink=True)
+        assert "blank loading shell" not in str(failure.value)
+
+
+def test_permalink_shell_after_readable_render_is_transient_and_captures_evidence(
+    tmp_path, monkeypatch
+):
+    from fbn import mobile
+    from fbn.failure_screenshots import capture_failure_screenshots
+
+    original_records = mobile.mobile_records
+
+    @contextmanager
+    def replace_with_shell(page, **kwargs):
+        page.set_content(mobile_loading_shell_fixture())
+        with original_records(page, **kwargs) as records:
+            yield records
+
+    monkeypatch.setattr(mobile, "mobile_records", replace_with_shell)
+    with _local_context(tmp_path) as context:
+        original_pages = tuple(context.pages)
+        feed = context.new_page()
+        feed.set_content(mobile_fixture([("301", "Author", "Full body")]))
+        with original_records(feed) as records:
+            payload = records[0][1]
+        requests = []
+
+        def serve(route):
+            requests.append(route.request.url)
+            route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_fixture([("301", "Author", "Full body")]),
+            )
+
+        context.route("**/*", serve)
+        with (
+            pytest.raises(TransientNavigationError, match="blank loading shell"),
+            mobile._post_target(
+                context,
+                on_error=lambda target, error: capture_failure_screenshots(
+                    tmp_path / "profile", error, {"post": target, "feed": feed}
+                ),
+            ) as target,
+        ):
+            resolve_post_link(
+                target,
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                payload,
+                frozenset({"contract-group"}),
+                timeout_seconds=1,
+            )
+        assert len(requests) == 1
+        assert target.is_closed()
+        assert tuple(context.pages) == (*original_pages, feed)
+    evidence = list((tmp_path / "failure-screenshots").iterdir())
+    assert len(evidence) == 1
+    assert {"feed.png", "post.png", "metadata.json"} <= {
+        path.name for path in evidence[0].iterdir()
+    }
+
+
 def test_missing_mobile_scroller_logs_structure_without_page_content(
     tmp_path, monkeypatch
 ):
@@ -999,6 +1147,125 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
     assert snapshot["total_scrollers"] == snapshot["visible_scrollers"] == 0
     assert "Synthetic private body" not in str(logged)
     assert "facebook.com" not in str(logged)
+
+
+def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
+    tmp_path, monkeypatch
+):
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from fbn import mobile
+    from fbn.config import ScheduleSettings
+    from fbn.models import Post
+    from fbn.monitor import MonitorService
+    from fbn.scheduling import MonitorLoop
+
+    group = parse_group_ref("contract-group")
+    now = [datetime(2026, 10, 20, tzinfo=timezone.utc)]
+    attempts, waits, notifications = [], [], []
+    with _local_context(tmp_path) as context:
+        original_pages = tuple(context.pages)
+        stories = [("301", "Author", "New body"), ("300", "Author", "Old body")]
+
+        def serve(route):
+            if "/share/" in route.request.url:
+                number = route.request.url.rstrip("/").split("/")[-1]
+                html = mobile_fixture([s for s in stories if s[0] == number])
+                if number == "301":
+                    html = html.replace("10:00 AM", "11:00 AM")
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    f"'/groups/contract-group/posts/{number}/')</script>"
+                )
+                if len(attempts) == 1:
+                    html = mobile_loading_shell_fixture()
+            else:
+                # Distinct publication times avoid the intentional coarse-age
+                # tie rule that conservatively includes unsent tied posts.
+                html = mobile_fixture(stories).replace("10:00 AM", "11:00 AM", 1)
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "profile"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+
+        def acquire(*args, **kwargs):
+            attempts.append(now[0])
+            monkeypatch.setattr(
+                mobile, "MAX_LINK_SECONDS", 0.2 if len(attempts) == 1 else 5
+            )
+            return source.fetch_recent(*args, **kwargs)
+
+        with SQLiteStateRepository(tmp_path / "state.sqlite3") as state:
+            state.observe(
+                group,
+                [
+                    Post(
+                        group.key,
+                        "300",
+                        group.url + "posts/300/",
+                        "Old body",
+                        "Author",
+                        now[0],
+                        0,
+                    )
+                ],
+                observed_at=now[0],
+            )
+            service = MonitorService(
+                SimpleNamespace(fetch_recent=acquire),
+                state,
+                SimpleNamespace(send=notifications.append),
+            )
+
+            class Stopper:
+                stopped = False
+
+                def is_set(self):
+                    return self.stopped
+
+                def wait(self, timeout):
+                    waits.append(timeout)
+                    if len(waits) == 1:
+                        assert len(attempts) == 1
+                        assert not notifications and not state.pending(group)
+                        assert state.notification_boundary(group) == "300"
+                        assert state.consecutive_failures(group) == 1
+                        now[0] += timedelta(seconds=timeout)
+                        return False
+                    self.stopped = True
+                    return True
+
+            MonitorLoop(
+                service,
+                state,
+                ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+                clock=lambda: now[0],
+                uniform=lambda lower, upper: lower,
+            ).run(
+                group,
+                ScanPolicy(sample_count=3, max_scrolls=1, settle_seconds=0),
+                stop_event=Stopper(),
+            )
+            assert attempts[1] - attempts[0] == timedelta(minutes=44)
+            assert waits == [44 * 60, 44 * 60]
+            assert len(notifications) == 1
+            assert state.notification_boundary(group) == "301"
+            assert not state.pending(group)
+            assert state.consecutive_failures(group) == 0
+            # A later successful scan sees the same GUIDs and sends nothing again.
+            later = service.run_once(
+                group, ScanPolicy(sample_count=3, max_scrolls=1, settle_seconds=0)
+            )
+            assert later.delivered == 0, notifications
+            assert len(notifications) == 1
+            assert tuple(context.pages) == original_pages
 
 
 @pytest.mark.parametrize(
@@ -1081,7 +1348,13 @@ def test_permalink_verification_deadline_logs_current_missing_layout(
                 ),
             ),
         )
-        with pytest.raises(LayoutChangedError, match=component):
+        # Removing the entire scroller leaves only a blank shell. The other
+        # mutations leave visible unsupported content and remain layout errors.
+        error = (
+            TransientNavigationError if missing == "scroller" else LayoutChangedError
+        )
+        pattern = "blank loading shell" if missing == "scroller" else component
+        with pytest.raises(error, match=pattern):
             resolve_post_link(
                 page,
                 "https://m.facebook.com/groups/contract-group/posts/301/",

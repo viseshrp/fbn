@@ -604,6 +604,17 @@ profile lock prevents concurrent processes from corrupting browser state.
 `fbn` fails closed instead of treating an unrecognized page as an empty group.
 Update `fbn` and retry once. Repeated retries do not repair a selector change.
 
+### Blank post page or loading spinner
+
+FBN waits for actual mobile post content within the navigation/scan deadline.
+If the deadline expires on a blank shell with no readable text, controls, media,
+scroller, or primary post, it records private screenshots and content-free
+counters, discards the failed observation, and uses the existing transient
+backoff. The first delay is the configured minimum interval; subsequent failures
+double it up to 24 hours. The delay survives a restart. There is no immediate
+reload or link-reopening loop. Login/account-action prompts, unsupported visible
+layouts, and post-identity mismatches remain hard stops.
+
 ### No notification on the first check
 
 This is the expected baseline behavior. A later unseen post creates a pending

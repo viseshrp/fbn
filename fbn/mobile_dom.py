@@ -444,6 +444,33 @@ AUTH_SCREEN_SCRIPT = r"""
 """
 
 
+RENDER_SNAPSHOT_SCRIPT = r"""
+() => {
+  const visible = node => node.checkVisibility({contentVisibilityAuto:true,
+    visibilityProperty:true,opacityProperty:true});
+  const count = selector => Array.from(document.querySelectorAll(selector))
+    .filter(visible).length;
+  return {
+    document_ready: document.readyState,
+    document_visible: document.visibilityState === 'visible',
+    mobile_screens: document.querySelectorAll('[data-mcomponent="MScreen"]').length,
+    total_scrollers: document.querySelectorAll('[data-type="vscroller"]').length,
+    primary_menus: document.querySelectorAll(
+      '[role="button"][aria-label^="More options for "]').length,
+    visible_primary_menus: count('[role="button"][aria-label^="More options for "]'),
+    loading_indicators: count('[role="progressbar"],[role="status"][aria-busy="true"]'),
+    dialogs: count('[role="dialog"],[aria-modal="true"]'),
+    visible_text_chars: Math.min((document.body?.innerText || '').trim().length,100000),
+    visible_controls: count('button,a[href],input,select,textarea,[role="button"],'
+      + '[role="link"],[role="textbox"],[contenteditable="true"]'),
+    visible_media: count('img,video,canvas,svg,[role="img"],'
+      + '[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"],'
+      + '[data-mcomponent="VideoArea"],[data-mcomponent="ServerVideoArea"]'),
+  };
+}
+"""
+
+
 STRUCTURE_SNAPSHOT_SCRIPT = r"""
 () => {
   const allowed = {

@@ -45,6 +45,41 @@ def test_missing_mobile_components_name_absent_posts_without_page_content(
 
 
 @pytest.mark.parametrize(
+    "field",
+    [
+        "feedRootCount",
+        "itemCount",
+        "postCount",
+        "total_scrollers",
+        "primary_menus",
+        "dialogs",
+        "visible_text_chars",
+        "visible_controls",
+        "visible_media",
+    ],
+)
+@pytest.mark.parametrize("value", [1, None])
+def test_loading_shell_requires_all_content_free_counters_to_be_zero(field, value):
+    from fbn.mobile import _is_loading_shell
+
+    result = dict.fromkeys(("feedRootCount", "itemCount", "postCount"), 0)
+    structure = dict.fromkeys(
+        (
+            "total_scrollers",
+            "primary_menus",
+            "dialogs",
+            "visible_text_chars",
+            "visible_controls",
+            "visible_media",
+        ),
+        0,
+    )
+    assert _is_loading_shell(result, structure)
+    (result if field in result else structure)[field] = value
+    assert not _is_loading_shell(result, structure)
+
+
+@pytest.mark.parametrize(
     ("source_label", "target_label", "elapsed_ms", "matches"),
     [
         ("19 hours ago", "20 hours ago", 2000, True),

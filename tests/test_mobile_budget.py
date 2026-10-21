@@ -43,7 +43,12 @@ def post(number):
 
 
 @pytest.mark.parametrize(
-    "failure", [mobile._ScanBudgetExpired, mobile.LayoutChangedError]
+    "failure",
+    [
+        mobile._ScanBudgetExpired,
+        mobile.LayoutChangedError,
+        mobile.TransientNavigationError,
+    ],
 )
 def test_budget_keeps_verified_work_but_layout_failure_commits_nothing(
     tmp_path, monkeypatch, failure
@@ -69,8 +74,8 @@ def test_budget_keeps_verified_work_but_layout_failure_commits_nothing(
     with SQLiteStateRepository(tmp_path / "state.sqlite3") as state:
         state.observe(GROUP, [post(300)])
         service = MonitorService(Adapter(), state, sink)
-        if failure is mobile.LayoutChangedError:
-            with pytest.raises(mobile.LayoutChangedError):
+        if failure is not mobile._ScanBudgetExpired:
+            with pytest.raises(failure):
                 service.run_once(GROUP, ScanPolicy())
             assert not notifications
             assert (
