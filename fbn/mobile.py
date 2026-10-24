@@ -397,14 +397,18 @@ def _is_loading_shell(result: dict[str, Any], structure: dict[str, Any]) -> bool
     )
 
 
-def _raise_render_timeout(phase: str = "page_render") -> None:
+def _raise_render_timeout(
+    phase: str = "page_render", *, loading_shell: bool = True
+) -> None:
     # The scheduler owns retries with persisted, capped exponential backoff.
     # Do not reload, reopen the link, or reset either action/scan deadline here.
+    surface = "blank loading shell" if loading_shell else "supported page"
     error = TransientNavigationError(
-        "Mobile page rendering timed out on a blank loading shell; "
+        f"Mobile page rendering timed out on a {surface}; "
         "no posts were accepted and no immediate retry was attempted."
     )
     _annotate_failure(error, phase)
+    error._fbn_render_classified = True
     raise error
 
 
@@ -420,7 +424,6 @@ def _inspect_failed_render(
     *,
     permalink: bool,
     phase: str,
-    signals: PageSignals | None = None,
     verification_post_count: int | None = None,
     expected_url: str | None = None,
 ) -> dict[str, Any]:
@@ -432,8 +435,7 @@ def _inspect_failed_render(
     """
 
     script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
-    if signals is None:
-        signals = read_page_signals(page, dom_scan_script=script)
+    signals = read_page_signals(page, dom_scan_script=script)
     result = page.evaluate(script, False)
     structure = _log_layout_snapshot(
         page,
@@ -486,8 +488,13 @@ def wait_for_mobile_page(
             return state
         if time.monotonic() >= deadline:
             result = _inspect_failed_render(
-                page, permalink=permalink, phase="page_render", signals=signals
+                page, permalink=permalink, phase="page_render"
             )
+            if not result.get("missing") and result.get("postCount"):
+                # The view may finish rendering between the coarse state read
+                # and this final snapshot. Abort rather than accept it using an
+                # earlier state or report a layout failure with nothing missing.
+                _raise_render_timeout("page_render", loading_shell=False)
             raise _layout_failure(
                 *_missing_mobile_components(result), phase="page_render"
             )
@@ -720,13 +727,7 @@ def expand_post_preview(
                 ) from exc
             if isinstance(exc, TransientNavigationError):
                 raise
-            error = TransientNavigationError(
-                "Mobile preview action timed out on a supported page; "
-                "no immediate retry was attempted."
-            )
-            _annotate_failure(error, phase)
-            error._fbn_render_classified = True
-            raise error from exc
+            _raise_render_timeout(phase, loading_shell=False)
         raise _layout_failure("complete_expanded_primary_body", phase=phase) from exc
     finally:
         for handle in (completed, expansion):

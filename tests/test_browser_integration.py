@@ -1677,6 +1677,50 @@ def test_mobile_waits_for_all_primary_cards_to_finish_loading(tmp_path):
         )
 
 
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize(
+    ("late_view", "error"),
+    [
+        ("complete", TransientNavigationError),
+        ("blank", TransientNavigationError),
+        ("login", AuthenticationRequiredError),
+        ("checkpoint", AccountActionRequiredError),
+        ("unknown", LayoutChangedError),
+    ],
+)
+def test_mobile_deadline_rechecks_a_late_render_or_security_transition(
+    tmp_path, monkeypatch, permalink, late_view, error
+):
+    from fbn import mobile
+
+    views = {
+        "complete": mobile_fixture([("301", "Author", "Body")]),
+        "blank": mobile_loading_shell_fixture(),
+        "login": '<input name="email">',
+        "checkpoint": '<input name="approvals_code">',
+        "unknown": "<p>Unknown visible UI</p>",
+    }
+    original = mobile.read_page_signals
+    transitioned = False
+
+    def transition_after_signals(page, **kwargs):
+        nonlocal transitioned
+        signals = original(page, **kwargs)
+        if not transitioned:
+            page.set_content(views[late_view])
+            transitioned = True
+        return signals
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_loading_shell_fixture())
+        monkeypatch.setattr(mobile, "read_page_signals", transition_after_signals)
+        with pytest.raises(error) as failure:
+            wait_for_mobile_page(page, timeout_seconds=0, permalink=permalink)
+        assert failure.value._fbn_failure_phase == "page_render"
+        assert transitioned
+
+
 def test_mobile_waits_for_scroller_hydration_without_reloading(tmp_path):
     html = mobile_fixture([("301", "Author", "Body")]).replace(
         'data-type="vscroller"', 'data-type="loading" id="loading-scroller"'

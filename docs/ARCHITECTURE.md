@@ -137,6 +137,10 @@ without another snapshot or a second classification pass.
 Browser-waiter timeouts and pre-wait budget exhaustion use the same rule: a
 recognized unchanged page may retry, while missing/unsupported visible structure
 stops. A timed-out preview is never accepted as a complete post.
+The final rendering snapshot rereads security signals. If a supported view
+arrives between the earlier state check and that deadline snapshot, the scan
+aborts for backoff; it neither accepts a late view against stale state nor
+reports a layout failure with no missing components.
 
 The scheduler alone owns retries. It persists the failure count and next eligible
 time, doubles the configured minimum interval up to a 24-hour cap, and honors that

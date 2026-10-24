@@ -66,6 +66,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Retry stalled preview actions on a recognized unchanged page with the same
   scheduler-owned backoff for browser-waiter and pre-wait budget timeouts;
   unknown layouts, security screens and identity mismatches remain terminal.
+- Recheck current security signals at rendering deadlines. A supported view
+  arriving between deadline checks aborts for backoff instead of producing an
+  empty layout error or being accepted against an earlier screen state.
 - Parse normalized body trees before extracting authored text. Collapse only
   presentation wrappers, retain branching/action/ARIA boundaries, prune owned
   discussion and reject unknown meaningful content without changing identity,
