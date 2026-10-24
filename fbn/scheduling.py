@@ -9,10 +9,11 @@ from datetime import datetime, timedelta, timezone
 from threading import Event
 from typing import Protocol
 
-from .config import ScheduleSettings
+from .config import MOBILE_SCAN_BUDGET_SECONDS, ScheduleSettings
 from .exceptions import (
     ConfigurationError,
     MonitorInUseError,
+    RenderTimeoutError,
     TransientNavigationError,
 )
 from .logging import get_logger
@@ -20,6 +21,8 @@ from .models import GroupRef, RunSummary, ScanPolicy
 
 MAX_BACKOFF = timedelta(hours=24)
 MAX_WAIT_SECONDS = MAX_BACKOFF.total_seconds()
+RENDER_RETRY_DELAYS = (5.0, 10.0, 20.0)
+RENDER_RETRY_GUARD_SECONDS = 30.0
 LOGGER = get_logger("scheduling")
 
 
@@ -152,21 +155,22 @@ class MonitorLoop:
                 return
 
             attempt_started = self._now()
+            next_interval = self._success_interval()
             self._activity(
                 (policy.max_scrolls + 2) * policy.navigation_timeout_seconds
                 + policy.max_scrolls * policy.settle_seconds
                 + 600
             )
             LOGGER.info("Scheduled check started", group_key=group.key)
-            self._state.set_next_eligible(
-                group,
-                self._add_interval(attempt_started, self._schedule.every),
-            )
+            guard_at = self._add_interval(attempt_started, next_interval)
+            self._state.set_next_eligible(group, guard_at)
 
             try:
-                summary = self._service.run_once(
+                summary, reserved_next = self._run_with_render_retries(
                     group,
                     policy,
+                    stopper,
+                    guard_at,
                     notify_initial=notify_initial,
                     commit_delivery=commit_delivery,
                 )
@@ -204,6 +208,8 @@ class MonitorLoop:
                 )
                 continue
 
+            if summary is None:
+                continue
             LOGGER.info(
                 "Scheduled check completed",
                 group_key=summary.group_key,
@@ -216,16 +222,103 @@ class MonitorLoop:
             if self._on_success is not None:
                 self._on_success(summary)
             completed_at = self._now()
-            next_interval = self._success_interval()
-            self._state.set_next_eligible(
-                group,
-                self._add_interval(completed_at, next_interval),
-            )
+            if reserved_next is None:
+                self._state.set_next_eligible(
+                    group,
+                    self._add_interval(completed_at, next_interval),
+                )
+            else:
+                # A successful short retry must not move the reserved routine slot.
+                next_interval = max(timedelta(), reserved_next - completed_at)
             LOGGER.info(
                 "Next scheduled check",
                 group_key=group.key,
                 delay_seconds=int(next_interval.total_seconds()),
             )
+
+    def _run_with_render_retries(
+        self,
+        group: GroupRef,
+        policy: ScanPolicy,
+        stopper: EventLike,
+        guard_at: datetime,
+        *,
+        notify_initial: bool,
+        commit_delivery: bool,
+    ) -> tuple[RunSummary | None, datetime | None]:
+        """Keep short render recovery inside one scheduled check.
+
+        Only positively classified render failures qualify. Rate limits and
+        generic network failures retain their separate long-backoff path.
+        The regular slot is persisted once, not replaced by the short delay;
+        a restart skips the remaining local retries and honors that slot.
+        """
+
+        routine_at = None
+        # Include the shared scan budget, four initial navigation/render/sort
+        # phases, and conservative browser startup/cleanup time before admitting
+        # a retry. Do not borrow time from the next routine check.
+        headroom = (
+            MOBILE_SCAN_BUDGET_SECONDS
+            + 4 * policy.navigation_timeout_seconds
+            + 120
+            + RENDER_RETRY_GUARD_SECONDS
+        )
+        for retry_index in range(len(RENDER_RETRY_DELAYS) + 1):
+            if stopper.is_set():
+                return None, routine_at
+            try:
+                summary = self._service.run_once(
+                    group,
+                    policy,
+                    notify_initial=notify_initial,
+                    commit_delivery=commit_delivery,
+                )
+                return summary, routine_at
+            except RenderTimeoutError:
+                failed_at = self._now()
+                if routine_at is None:
+                    if self._state.next_eligible(group) != guard_at:
+                        LOGGER.info("Render retry skipped", reason="schedule_changed")
+                        return None, None
+                    # Keep the slot chosen before the check. If the machine
+                    # suspended past it, yield to an immediately due routine run.
+                    routine_at = max(guard_at, failed_at)
+                    # Count the logical failed check once, not each local try.
+                    self._state.record_failure(
+                        group, next_eligible_at=routine_at, at=failed_at
+                    )
+                if retry_index == len(RENDER_RETRY_DELAYS):
+                    LOGGER.warning(
+                        "Render retries exhausted; waiting for routine check",
+                        retry_count=retry_index,
+                    )
+                    return None, routine_at
+                delay = RENDER_RETRY_DELAYS[retry_index]
+                if (routine_at - failed_at).total_seconds() <= headroom + delay:
+                    LOGGER.info("Render retry skipped", reason="routine_check_near")
+                    return None, routine_at
+                LOGGER.warning(
+                    "Render retry scheduled",
+                    retry_number=retry_index + 1,
+                    delay_seconds=delay,
+                )
+                self._activity(delay)
+                if stopper.wait(delay) or stopper.is_set():
+                    return None, routine_at
+                if self._state.next_eligible(group) != routine_at:
+                    LOGGER.info("Render retry skipped", reason="schedule_changed")
+                    return None, routine_at
+                if (routine_at - self._now()).total_seconds() <= headroom:
+                    LOGGER.info("Render retry skipped", reason="routine_check_near")
+                    return None, routine_at
+                self._activity(
+                    (policy.max_scrolls + 2) * policy.navigation_timeout_seconds
+                    + policy.max_scrolls * policy.settle_seconds
+                    + 600
+                )
+                LOGGER.info("Render retry started", retry_number=retry_index + 1)
+        raise AssertionError("Render retry loop exceeded its fixed attempt limit")
 
     def _wait_until_eligible(
         self,

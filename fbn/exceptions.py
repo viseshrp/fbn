@@ -45,6 +45,10 @@ class TransientNavigationError(FbnError):
     exit_code = 7
 
 
+class RenderTimeoutError(TransientNavigationError):
+    """A verified loading/stalled view permits bounded in-check retries."""
+
+
 class LayoutChangedError(FbnError):
     """The page loaded but did not match a supported, safe page state."""
 

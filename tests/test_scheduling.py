@@ -7,9 +7,15 @@ import pytest
 
 from fbn.config import ScheduleSettings
 from fbn.exceptions import (
+    AccessDeniedError,
+    AccountActionRequiredError,
+    AuthenticationRequiredError,
+    BrowserUnavailableError,
     ConfigurationError,
     DeliveryError,
+    LayoutChangedError,
     MonitorInUseError,
+    RenderTimeoutError,
     TransientNavigationError,
 )
 from fbn.models import GroupRef, RunSummary, ScanPolicy
@@ -177,9 +183,9 @@ def test_honors_persisted_eligibility_then_persists_guard_and_success_jitter() -
 
     assert service.calls == 1
     assert event.waits == [2 * 60 * 60, 2 * 60 * 60]
-    assert service.guard_values == [START + timedelta(hours=3)]
+    assert service.guard_values == [START + timedelta(hours=4)]
     assert state.set_history == [
-        START + timedelta(hours=3),
+        START + timedelta(hours=4),
         START + timedelta(hours=4),
     ]
     assert state.next_at == START + timedelta(hours=4)
@@ -217,6 +223,7 @@ def test_pre_attempt_guard_survives_nontransient_crash_and_error_propagates() ->
             state,
             ScheduleSettings(),
             clock=clock,
+            uniform=lambda lower, upper: lower,
         ).run(GROUP, POLICY, stop_event=FakeEvent(clock))
 
     assert service.calls == 1
@@ -291,7 +298,332 @@ def test_only_transient_navigation_failures_retry_with_exponential_backoff() -> 
     assert state.failures == 3
 
 
-def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_path):
+def test_render_retries_take_seconds_and_keep_one_routine_slot() -> None:
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(
+        state,
+        clock,
+        [RenderTimeoutError("one"), RenderTimeoutError("two"), None],
+        on_attempt=lambda: clock.advance(2),
+    )
+    event = FakeEvent(clock, [False, False, True])
+    summaries = []
+    samples = []
+
+    def fixed_interval(lower, upper):
+        samples.append((lower, upper))
+        return lower
+
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=fixed_interval,
+        on_success=summaries.append,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    routine_at = START + timedelta(minutes=44)
+    assert event.waits == [5, 10, 44 * 60 - 21]
+    assert service.calls == 3
+    assert service.guard_values == [START + timedelta(minutes=44)] + [routine_at] * 2
+    assert state.next_at == routine_at
+    assert samples == [(44 * 60, 99 * 60)]
+    assert len(state.failure_history) == 1
+    assert state.failures == 0
+    assert summaries == [SUMMARY]
+
+
+def test_render_retry_exhaustion_waits_for_the_normal_check_without_growing_delay():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(state, clock, [RenderTimeoutError("loading")] * 8)
+    event = FakeEvent(clock, [False] * 7 + [True])
+    samples = []
+
+    def fixed_interval(lower, upper):
+        samples.append((lower, upper))
+        return lower
+
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=fixed_interval,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 8
+    assert event.waits == [5, 10, 20, 44 * 60 - 35] * 2
+    assert state.next_at == START + timedelta(minutes=88)
+    assert state.failures == 2
+    assert len(state.failure_history) == len(samples) == 2
+
+
+def test_render_retry_is_skipped_when_a_full_scan_would_crowd_the_routine_slot():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(state, clock, [RenderTimeoutError("loading")])
+    event = FakeEvent(clock, [True])
+    # Its ordinary scan allowance exceeds the shortest routine interval.
+    policy = ScanPolicy(navigation_timeout_seconds=300)
+
+    class SlowPolicyService:
+        def run_once(self, group, requested_policy, **kwargs):
+            assert requested_policy is policy
+            return service.run_once(group, POLICY, **kwargs)
+
+    MonitorLoop(
+        SlowPolicyService(),
+        state,
+        ScheduleSettings(timedelta(minutes=15), timedelta(minutes=15)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, policy, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [15 * 60]
+    assert state.next_at == START + timedelta(minutes=15)
+
+
+def test_render_retry_does_not_rebook_a_nearly_due_routine_check():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(
+        state,
+        clock,
+        [RenderTimeoutError("loading")],
+        on_attempt=lambda: clock.advance(43 * 60),
+    )
+    event = FakeEvent(clock, [True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [60]
+    assert state.next_at == START + timedelta(minutes=44)
+
+
+def test_render_retry_rechecks_the_routine_deadline_after_a_late_wakeup():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(state, clock, [RenderTimeoutError("loading")])
+
+    class LateEvent(FakeEvent):
+        def wait(self, timeout=None):
+            interrupted = super().wait(timeout)
+            if not interrupted:
+                clock.advance(43 * 60)
+            return interrupted
+
+    event = LateEvent(clock, [False, True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [5, 55]
+    assert state.next_at == START + timedelta(minutes=44)
+
+
+def test_render_retry_does_not_overwrite_a_peers_new_routine_slot():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(state, clock, [RenderTimeoutError("loading")])
+
+    class PeerEvent(FakeEvent):
+        def wait(self, timeout=None):
+            interrupted = super().wait(timeout)
+            if not interrupted:
+                state.next_at = START + timedelta(minutes=70)
+            return interrupted
+
+    event = PeerEvent(clock, [False, True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [5, 70 * 60 - 5]
+    assert state.next_at == START + timedelta(minutes=70)
+
+
+@pytest.mark.parametrize("spare_seconds", [-1, 0, 1])
+def test_render_retry_requires_strictly_more_than_scan_headroom_and_delay(
+    spare_seconds,
+):
+    clock = FakeClock()
+    state = FakeState()
+    remaining = 360 + 5 + spare_seconds
+    service = FakeService(
+        state,
+        clock,
+        [RenderTimeoutError("loading")],
+        on_attempt=lambda: clock.advance(44 * 60 - remaining),
+    )
+    event = FakeEvent(clock, [True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert event.waits == ([5] if spare_seconds > 0 else [remaining])
+    assert service.calls == 1
+    assert state.next_at == START + timedelta(minutes=44)
+
+
+def test_render_retry_yields_to_an_already_due_routine_check():
+    clock = FakeClock()
+    state = FakeState()
+    calls = 0
+
+    def suspend_first_attempt():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            clock.advance(48 * 60)
+
+    service = FakeService(
+        state,
+        clock,
+        [RenderTimeoutError("loading"), None],
+        on_attempt=suspend_first_attempt,
+    )
+    event = FakeEvent(clock, [True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 2
+    assert event.waits == [44 * 60]
+    assert state.failure_history == [(START + timedelta(minutes=48),) * 2]
+    assert state.next_at == START + timedelta(minutes=92)
+
+
+def test_render_retry_preserves_a_peer_schedule_changed_during_initial_scan():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(
+        state,
+        clock,
+        [RenderTimeoutError("loading")],
+        on_attempt=lambda: state.set_next_eligible(
+            GROUP, START + timedelta(minutes=70)
+        ),
+    )
+    event = FakeEvent(clock, [True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [70 * 60]
+    assert state.failure_history == []
+    assert state.next_at == START + timedelta(minutes=70)
+
+
+def test_render_retry_stops_when_shutdown_arrives_as_the_wait_finishes():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(state, clock, [RenderTimeoutError("loading")])
+
+    class CancelEvent(FakeEvent):
+        def wait(self, timeout=None):
+            super().wait(timeout)
+            self._set = True
+            return False
+
+    event = CancelEvent(clock, [False])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [5]
+    assert state.next_at == START + timedelta(minutes=44)
+
+
+def test_render_retry_cannot_turn_a_rate_limit_into_another_short_retry():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(
+        state,
+        clock,
+        [RenderTimeoutError("loading"), TransientNavigationError("rate limit")],
+    )
+    event = FakeEvent(clock, [False, True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 2
+    assert event.waits == [5, 88 * 60]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DeliveryError("delivery"),
+        ConfigurationError("configuration"),
+        LayoutChangedError("unknown layout"),
+        AuthenticationRequiredError("login"),
+        AccountActionRequiredError("checkpoint"),
+        AccessDeniedError("access"),
+        BrowserUnavailableError("browser"),
+    ],
+)
+def test_render_retry_does_not_swallow_a_later_nonretryable_error(error):
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(state, clock, [RenderTimeoutError("loading"), error])
+    event = FakeEvent(clock, [False])
+
+    with pytest.raises(type(error)):
+        MonitorLoop(
+            service,
+            state,
+            ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+            clock=clock,
+            uniform=lambda lower, upper: lower,
+        ).run(GROUP, POLICY, stop_event=event)
+    assert event.waits == [5]
+    assert service.calls == 2
+
+
+def test_render_retry_interruption_honors_routine_slot_after_restart(tmp_path):
     from types import SimpleNamespace
 
     from fbn.mobile import _raise_render_timeout
@@ -332,10 +664,14 @@ def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_pat
         state.observe(GROUP, [], observed_at=START)
         event = FakeEvent(clock, [True])
         MonitorLoop(
-            MonitorService(source, state, sink), state, schedule, clock=clock
+            MonitorService(source, state, sink),
+            state,
+            schedule,
+            clock=clock,
+            uniform=lambda lower, upper: lower,
         ).run(GROUP, POLICY, stop_event=event)
         assert len(attempts) == 1
-        assert event.waits == [44 * 60]
+        assert event.waits == [5]
         assert state.consecutive_failures(GROUP) == 1
         assert not state.pending(GROUP)
         assert state.notification_boundary(GROUP) is None
@@ -343,10 +679,14 @@ def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_pat
     with SQLiteStateRepository(path) as state:
         event = FakeEvent(clock, [False, True])
         MonitorLoop(
-            MonitorService(source, state, sink), state, schedule, clock=clock
+            MonitorService(source, state, sink),
+            state,
+            schedule,
+            clock=clock,
+            uniform=lambda lower, upper: lower,
         ).run(GROUP, POLICY, stop_event=event)
         assert attempts == [START, START + timedelta(minutes=44)]
-        assert event.waits == [44 * 60, 88 * 60]
+        assert event.waits == [44 * 60, 5]
         assert state.consecutive_failures(GROUP) == 2
         assert not state.pending(GROUP)
         assert state.notification_boundary(GROUP) is None
@@ -363,9 +703,9 @@ def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_pat
         assert attempts == [
             START,
             START + timedelta(minutes=44),
-            START + timedelta(minutes=132),
+            START + timedelta(minutes=88),
         ]
-        assert event.waits == [88 * 60, 99 * 60]
+        assert event.waits == [44 * 60, 99 * 60]
         assert state.consecutive_failures(GROUP) == 0
         assert not state.pending(GROUP)
         assert state.notification_boundary(GROUP) == "301"
@@ -464,6 +804,7 @@ def test_scheduler_normalizes_aware_clock_values_to_utc() -> None:
             state,
             ScheduleSettings(),
             clock=clock,
+            uniform=lambda lower, upper: lower,
         ).run(GROUP, POLICY, stop_event=FakeEvent(clock))
 
     assert state.next_at == START + timedelta(hours=1)
@@ -517,5 +858,5 @@ def test_scheduler_rejects_invalid_injected_uniform_results(value: float) -> Non
             uniform=lambda lower, upper: value,
         ).run(GROUP, POLICY, stop_event=FakeEvent(clock))
 
-    assert service.calls == 1
-    assert state.next_at == START + timedelta(hours=1)
+    assert service.calls == 0
+    assert state.next_at is None

@@ -1805,7 +1805,12 @@ def test_preview_loading_transition_uses_shared_transient_classification(
                 TransientNavigationError, match="blank loading shell"
             ) as failure:
                 expand_post_preview(
-                    page, *records[0], timeout_seconds=0.2, permalink=permalink
+                    page,
+                    *records[0],
+                    timeout_seconds=0.2
+                    if phase == "find_primary_preview"
+                    else OFFLINE_NAVIGATION_SECONDS,
+                    permalink=permalink,
                 )
         assert failure.value._fbn_failure_phase == phase
         assert requests == []
@@ -2096,7 +2101,7 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
     "failure_kind", ["initial", "feed_preview", "permalink_preview"]
 )
 @pytest.mark.parametrize("failed_attempts", [1, 2])
-def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
+def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
     tmp_path, monkeypatch, failure_kind, failed_attempts
 ):
     from datetime import timedelta
@@ -2104,6 +2109,7 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
 
     from fbn import mobile
     from fbn.config import ScheduleSettings
+    from fbn.exceptions import RenderTimeoutError
     from fbn.models import Post
     from fbn.monitor import MonitorService
     from fbn.scheduling import MonitorLoop
@@ -2111,6 +2117,19 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
     group = parse_group_ref("contract-group")
     now = [datetime(2026, 10, 20, tzinfo=timezone.utc)]
     attempts, waits, notifications = [], [], []
+    original_readiness = mobile.wait_for_mobile_page
+
+    def bounded_loading_readiness(page, **kwargs):
+        # Shorten only the blank-shell readiness wait, never navigation to it.
+        if (
+            failure_kind == "initial"
+            and len(attempts) <= failed_attempts
+            and kwargs.get("permalink")
+        ):
+            kwargs["timeout_seconds"] = 0.1
+        return original_readiness(page, **kwargs)
+
+    monkeypatch.setattr(mobile, "wait_for_mobile_page", bounded_loading_readiness)
     with _local_context(tmp_path) as context:
         original_pages = tuple(context.pages)
         stories = [("301", "Author", "New body"), ("300", "Author", "Old body")]
@@ -2168,9 +2187,13 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
             monkeypatch.setattr(
                 mobile,
                 "MAX_LINK_SECONDS",
-                0.3 if len(attempts) <= failed_attempts else 5,
+                OFFLINE_NAVIGATION_SECONDS,
             )
-            return source.fetch_recent(*args, **kwargs)
+            try:
+                return source.fetch_recent(*args, **kwargs)
+            except TransientNavigationError as error:
+                assert isinstance(error, RenderTimeoutError)
+                raise
 
         with SQLiteStateRepository(tmp_path / "state.sqlite3") as state:
             state.observe(
@@ -2206,7 +2229,10 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
                         assert len(attempts) == len(waits)
                         assert not notifications and not state.pending(group)
                         assert state.notification_boundary(group) == "300"
-                        assert state.consecutive_failures(group) == len(waits)
+                        assert state.consecutive_failures(group) == 1
+                        assert state.next_eligible(group) == datetime(
+                            2026, 10, 20, 0, 44, tzinfo=timezone.utc
+                        )
                         assert tuple(context.pages) == original_pages
                         now[0] += timedelta(seconds=timeout)
                         return False
@@ -2226,11 +2252,10 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
             )
             assert len(attempts) == failed_attempts + 1
             assert [later - earlier for earlier, later in pairwise(attempts)] == [
-                timedelta(minutes=44 * 2**index) for index in range(failed_attempts)
+                timedelta(seconds=5 * 2**index) for index in range(failed_attempts)
             ]
-            assert waits == [44 * 60 * 2**index for index in range(failed_attempts)] + [
-                44 * 60
-            ]
+            short_delays = [5 * 2**index for index in range(failed_attempts)]
+            assert waits == [*short_delays, 44 * 60 - sum(short_delays)]
             assert len(notifications) == 1
             assert state.notification_boundary(group) == "301"
             assert not state.pending(group)

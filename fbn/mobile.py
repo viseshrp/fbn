@@ -25,11 +25,13 @@ from .browser import (
     classify_page,
     read_page_signals,
 )
+from .config import MOBILE_SCAN_BUDGET_SECONDS
 from .exceptions import (
     AccessDeniedError,
     BrowserUnavailableError,
     ConfigurationError,
     LayoutChangedError,
+    RenderTimeoutError,
     TransientNavigationError,
 )
 from .extractor import (
@@ -54,7 +56,7 @@ from .mobile_view import post_view_issues
 from .models import GroupRef, Post, ScanPolicy, ScanResult
 
 LOGGER = get_logger("mobile")
-MAX_SCAN_SECONDS = 90.0
+MAX_SCAN_SECONDS = MOBILE_SCAN_BUDGET_SECONDS
 COPY_TIMEOUT_SECONDS = 30.0
 MAX_LINK_SECONDS = 30.0
 MAX_EXPANSION_SECONDS = 15.0
@@ -400,10 +402,10 @@ def _is_loading_shell(result: dict[str, Any], structure: dict[str, Any]) -> bool
 def _raise_render_timeout(
     phase: str = "page_render", *, loading_shell: bool = True
 ) -> None:
-    # The scheduler owns retries with persisted, capped exponential backoff.
+    # The scheduler owns bounded seconds-scale retries within this check.
     # Do not reload, reopen the link, or reset either action/scan deadline here.
     surface = "blank loading shell" if loading_shell else "supported page"
-    error = TransientNavigationError(
+    error = RenderTimeoutError(
         f"Mobile page rendering timed out on a {surface}; "
         "no posts were accepted and no immediate retry was attempted."
     )
@@ -725,8 +727,6 @@ def expand_post_preview(
                 raise _layout_failure(
                     *_missing_mobile_components(result), phase=phase
                 ) from exc
-            if isinstance(exc, TransientNavigationError):
-                raise
             _raise_render_timeout(phase, loading_shell=False)
         raise _layout_failure("complete_expanded_primary_body", phase=phase) from exc
     finally:

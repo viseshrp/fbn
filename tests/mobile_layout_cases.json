@@ -17,8 +17,8 @@
     "case": "permalink_blank_boot_spinner",
     "evidence_date": "2026-10-19",
     "expected_blocks": ["unknown"],
-    "outcome": "wait_for_content_then_persist_delayed_transient_backoff_without_acceptance",
-    "tests": ["test_mobile_blank_loading_shell_times_out_as_transient_without_reloading", "test_mobile_blank_shell_waits_for_actual_content_without_reload", "test_loading_spinner_cannot_disguise_an_unsupported_visible_layout", "test_permalink_shell_after_readable_render_is_transient_and_captures_evidence", "test_render_timeout_backoff_survives_restart_without_accepting_posts", "test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end"]
+    "outcome": "wait_for_content_then_bounded_in_check_retry_preserving_routine_slot_without_acceptance",
+    "tests": ["test_mobile_blank_loading_shell_times_out_as_transient_without_reloading", "test_mobile_blank_shell_waits_for_actual_content_without_reload", "test_loading_spinner_cannot_disguise_an_unsupported_visible_layout", "test_permalink_shell_after_readable_render_is_transient_and_captures_evidence", "test_render_retry_interruption_honors_routine_slot_after_restart", "test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end"]
   },
   {
     "case": "app_prompt_blocks_sort",

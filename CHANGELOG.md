@@ -55,10 +55,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Recover recognized render failures inside the same scheduled check with at
+  most three retries after 5/10/20 seconds. Preserve the routine slot, skip
+  retries without full-scan/cleanup headroom, recheck after wakeup, and honor
+  shutdown, peer schedule changes and restart. Keep rate limits/network failures
+  on their separate slower path and all security/identity/layout stops intact.
 - Share terminal-state/loading classification across page readiness, sorting,
   post verification and preview expansion. Preserve the actual failure phase,
-  capture evidence and route blank-shell failures through persisted exponential
-  backoff with fresh scan pages. Keep identity changes and visible unknown
+  capture evidence and route blank-shell failures through bounded in-check
+  recovery with fresh scan pages. Keep identity changes and visible unknown
   layouts terminal; do not refresh in a loop or reset action deadlines.
 - Classify the current screen even when preview preparation consumes its action
   budget, so a late login/checkpoint or unsupported UI cannot become a retry.
@@ -83,8 +88,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checks, and rejection of unknown controls or ambiguous attachment ownership.
 - Treat a blank, non-interactive mobile loading shell as a transient render
   timeout after the existing readiness deadline. Retain private screenshots and
-  structural counters, then use persisted exponential backoff instead of stopping
-  the monitor. No reload loop, deadline reset, or weaker post-link verification;
+  structural counters, then use bounded in-check recovery instead of stopping
+  the monitor. No unbounded reload loop, deadline reset, or weaker link verification;
   unsupported visible layouts and security prompts still fail closed.
 - Inspect every matching login/checkpoint control, so hidden fallback forms
   cannot mask a visible security prompt.

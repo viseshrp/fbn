@@ -142,15 +142,29 @@ arrives between the earlier state check and that deadline snapshot, the scan
 aborts for backoff; it neither accepts a late view against stale state nor
 reports a layout failure with no missing components.
 
-The scheduler alone owns retries. It persists the failure count and next eligible
-time, doubles the configured minimum interval up to a 24-hour cap, and honors that
-time after process restart. Each delayed attempt performs a new scan with fresh
-browser pages; no immediate reload/reopen loop is used. A successful observation
-resets the failure count and returns to the configured normal interval range.
-With 44–99 minute normal bounds, failure delays are 44, 88, 176 minutes and so on,
-capped at 24 hours. Authentication/checkpoint, unsupported visible layout and
-post-identity/content failures remain fail-closed; delayed retries never weaken
-the ownership, canonical GUID, completeness or delivery deduplication checks.
+The scheduler owns bounded recovery within a scheduled check. A classified
+`RenderTimeoutError` permits at most three additional acquisitions after 5, 10,
+and 20 seconds. Each closes its failed context before the interruptible delay
+and uses a fresh context for the next acquisition. No browser operation retries
+itself or resets an action deadline.
+
+The normal next slot is selected and persisted before acquisition. A render
+retry cannot move that slot, including after recovery or exhaustion. Admission
+and post-wakeup checks reserve the shared 90-second scan budget, four configured
+navigation/render/sort allowances, 120 seconds for browser startup/cleanup, and
+a 30-second guard. At the default 30-second navigation timeout this is six
+minutes of headroom, plus the retry delay. A late wakeup or changed shared
+schedule cancels the retry. When the budget is exhausted, monitoring waits for
+the normal slot rather than increasing it to hours or days. Only one logical
+failure is counted for the check. A restart honors the normal persisted slot
+and skips abandoned local retries instead of issuing an immediate request.
+
+Ordinary successful checks retain their configured completion-to-next-check
+interval. Generic network and rate-limit failures remain separate and retain
+the existing slower persisted backoff; they never enter the short render loop.
+Authentication/checkpoint, unsupported visible layout and post-identity/content
+failures still stop. Short retries never weaken ownership, canonical GUID,
+completeness or delivery deduplication checks. Failed acquisitions commit nothing.
 
 Mobile body partitioning also recognizes a split Bloks link preview: an owned
 linked image is followed, in the same section, by a separate action containing

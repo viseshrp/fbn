@@ -266,7 +266,11 @@ Checks and monitoring are headless by default. `--headed` is an explicit
 troubleshooting choice on a trusted display. Authentication, account-action,
 access-denied, browser-profile,
 configuration, and unsupported-layout failures stop the loop with a nonzero
-exit code. Only transient navigation failures are backed off and retried.
+exit code. Recognized loading/stalled-render failures may retry within the same
+scheduled check after 5, 10, and 20 seconds. Retries keep the next routine slot
+fixed and are skipped if a full scan plus cleanup/guard time cannot fit before
+it. Exhaustion waits for that normal slot; restarting also honors the saved slot.
+Generic network/rate-limit failures retain their separate slower backoff.
 
 Useful options include:
 

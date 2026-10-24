@@ -18,6 +18,7 @@ DEFAULT_EVERY = "1h"
 DEFAULT_TO = "3h"
 MINIMUM_INTERVAL = timedelta(minutes=15)
 MAXIMUM_INTERVAL = timedelta(days=365)
+MOBILE_SCAN_BUDGET_SECONDS = 90.0
 
 _DURATION_PATTERN = re.compile(r"([1-9][0-9]*)([smhdw])")
 _DURATION_UNITS = {
