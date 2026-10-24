@@ -397,14 +397,14 @@ def _is_loading_shell(result: dict[str, Any], structure: dict[str, Any]) -> bool
     )
 
 
-def _raise_render_timeout() -> None:
+def _raise_render_timeout(phase: str = "page_render") -> None:
     # The scheduler owns retries with persisted, capped exponential backoff.
     # Do not reload, reopen the link, or reset either action/scan deadline here.
     error = TransientNavigationError(
         "Mobile page rendering timed out on a blank loading shell; "
         "no posts were accepted and no immediate retry was attempted."
     )
-    _annotate_failure(error, "page_render")
+    _annotate_failure(error, phase)
     raise error
 
 
@@ -413,6 +413,47 @@ def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
     if not missing and result.get("postCount", 0) == 0:
         missing = ["primary_mobile_card"]
     return tuple(sorted(set(missing)))
+
+
+def _inspect_failed_render(
+    page: Page,
+    *,
+    permalink: bool,
+    phase: str,
+    signals: PageSignals | None = None,
+    verification_post_count: int | None = None,
+    expected_url: str | None = None,
+) -> dict[str, Any]:
+    """Classify current evidence without retrying, accepting, or adding a wait.
+
+    All render-dependent paths use the same security/loading distinction.
+    A blank shell aborts this scan; the scheduler alone owns delayed retries.
+    Visible unknown layouts and identity changes never earn transient status.
+    """
+
+    script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
+    if signals is None:
+        signals = read_page_signals(page, dom_scan_script=script)
+    result = page.evaluate(script, False)
+    structure = _log_layout_snapshot(
+        page,
+        result,
+        permalink=permalink,
+        phase=phase,
+        verification_post_count=verification_post_count,
+        signals=signals,
+    )
+    try:
+        with suppress(LayoutChangedError):
+            classify_page(signals)
+        if expected_url is not None and page.url != expected_url:
+            raise _layout_failure("expanded_primary_url_unchanged", phase=phase)
+        if _is_loading_shell(result, structure):
+            _raise_render_timeout(phase)
+    except Exception as error:
+        _annotate_failure(error, phase)
+        raise
+    return result
 
 
 def wait_for_mobile_page(
@@ -443,11 +484,9 @@ def wait_for_mobile_page(
         if state is not None and not result.get("missing"):
             return state
         if time.monotonic() >= deadline:
-            structure = _log_layout_snapshot(
-                page, result, permalink=permalink, signals=signals
+            result = _inspect_failed_render(
+                page, permalink=permalink, phase="page_render", signals=signals
             )
-            if _is_loading_shell(result, structure):
-                _raise_render_timeout()
             raise _layout_failure(
                 *_missing_mobile_components(result), phase="page_render"
             )
@@ -478,6 +517,7 @@ def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
         return
     sort = _control(page, "Sort")
     if sort is None:
+        _inspect_failed_render(page, permalink=False, phase="open_sort")
         raise _layout_failure("group_sort_control")
     try:
         with _action_phase("open_sort"):
@@ -490,6 +530,7 @@ def select_new_posts(page: Page, *, timeout_seconds: float) -> None:
         if new_posts is None:
             page.wait_for_timeout(100)
     if new_posts is None:
+        _inspect_failed_render(page, permalink=False, phase="select_new_posts")
         raise _layout_failure("new_posts_sort_choice")
     try:
         with _action_phase("select_new_posts"):
@@ -607,6 +648,13 @@ def expand_post_preview(
                 * 1_000,
             )
         expanded = completed.json_value()
+        if isinstance(expanded, dict) and expanded.get("missing"):
+            _inspect_failed_render(
+                page,
+                permalink=permalink,
+                phase="expanded_primary_preview_render",
+                expected_url=original_url,
+            )
         if not isinstance(expanded, dict) or not expanded.get("missing"):
             issues = post_view_issues(expanded)
             if issues:
@@ -650,9 +698,11 @@ def expand_post_preview(
         )
         return expanded
     except PlaywrightError as exc:
-        raise _layout_failure(
-            "complete_expanded_primary_body", phase="expanded_primary_preview_render"
-        ) from exc
+        phase = getattr(exc, "_fbn_failure_phase", "expanded_primary_preview_render")
+        _inspect_failed_render(
+            page, permalink=permalink, phase=phase, expected_url=original_url
+        )
+        raise _layout_failure("complete_expanded_primary_body", phase=phase) from exc
     finally:
         for handle in (completed, expansion):
             if handle is not None:
@@ -857,22 +907,12 @@ def _verify_post_at_deadline(
 ) -> None:
     """Explain the final observed failure without saving content or retrying."""
 
-    signals = read_page_signals(page, dom_scan_script=MOBILE_PERMALINK_SCAN_SCRIPT)
-    result = page.evaluate(MOBILE_PERMALINK_SCAN_SCRIPT, False)
-    structure = _log_layout_snapshot(
+    result = _inspect_failed_render(
         page,
-        result,
         permalink=True,
         phase="post_verification",
         verification_post_count=len(records),
-        signals=signals,
     )
-    # Account/access/loading state can change after the initial readable render.
-    # Preserve typed terminal errors; unknown layouts still fail closed below.
-    with suppress(LayoutChangedError):
-        classify_page(signals)
-    if _is_loading_shell(result, structure):
-        _raise_render_timeout()
     _verify_primary_post(
         records, payload, missing_components=_missing_mobile_components(result)
     )

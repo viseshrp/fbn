@@ -123,6 +123,25 @@ post content and identity must remain unchanged. Unknown interactivity and
 unclassified text must still reject. These tests complement, rather than replace,
 the complete acquisition/state/delivery/restart and copied-link regression suite.
 
+Render-dependent failures share one current-page classifier in `mobile`.
+Readiness, sorting, preview expansion (including a replaced/detached menu), and
+post verification recheck security/access signals and capture structural counters
+before distinguishing a blank, non-interactive loading shell from visible unknown
+content. The original action phase is preserved. A changed expansion URL remains
+an identity failure even if the destination is blank. No loading classification
+accepts a post, clears the notification marker, extends a deadline or retries
+inside the browser operation.
+
+The scheduler alone owns retries. It persists the failure count and next eligible
+time, doubles the configured minimum interval up to a 24-hour cap, and honors that
+time after process restart. Each delayed attempt performs a new scan with fresh
+browser pages; no immediate reload/reopen loop is used. A successful observation
+resets the failure count and returns to the configured normal interval range.
+With 44–99 minute normal bounds, failure delays are 44, 88, 176 minutes and so on,
+capped at 24 hours. Authentication/checkpoint, unsupported visible layout and
+post-identity/content failures remain fail-closed; delayed retries never weaken
+the ownership, canonical GUID, completeness or delivery deduplication checks.
+
 Mobile body partitioning also recognizes a split Bloks link preview: an owned
 linked image is followed, in the same section, by a separate action containing
 only a domain and title. Empty media decorations may intervene, but authored

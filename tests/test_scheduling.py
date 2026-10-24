@@ -295,19 +295,38 @@ def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_pat
     from types import SimpleNamespace
 
     from fbn.mobile import _raise_render_timeout
+    from fbn.models import Post, ScanResult
     from fbn.monitor import MonitorService
     from fbn.state import SQLiteStateRepository
 
     clock = FakeClock()
     path = tmp_path / "state.sqlite3"
     attempts = []
+    notifications = []
 
     def acquire(*args, **kwargs):
         attempts.append(clock())
-        _raise_render_timeout()
+        if len(attempts) < 3:
+            _raise_render_timeout("find_primary_preview")
+        return ScanResult(
+            (
+                Post(
+                    GROUP.key,
+                    "301",
+                    GROUP.url + "posts/301/",
+                    "Verified body",
+                    "Author",
+                    clock(),
+                    0,
+                ),
+            ),
+            "feed",
+            0,
+            False,
+        )
 
     source = SimpleNamespace(fetch_recent=acquire)
-    sink = SimpleNamespace(send=lambda value: pytest.fail("Unverified notification"))
+    sink = SimpleNamespace(send=notifications.append)
     schedule = ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99))
     with SQLiteStateRepository(path) as state:
         state.observe(GROUP, [], observed_at=START)
@@ -320,6 +339,7 @@ def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_pat
         assert state.consecutive_failures(GROUP) == 1
         assert not state.pending(GROUP)
         assert state.notification_boundary(GROUP) is None
+        assert not notifications
     with SQLiteStateRepository(path) as state:
         event = FakeEvent(clock, [False, True])
         MonitorLoop(
@@ -330,6 +350,26 @@ def test_render_timeout_backoff_survives_restart_without_accepting_posts(tmp_pat
         assert state.consecutive_failures(GROUP) == 2
         assert not state.pending(GROUP)
         assert state.notification_boundary(GROUP) is None
+        assert not notifications
+    with SQLiteStateRepository(path) as state:
+        event = FakeEvent(clock, [False, True])
+        MonitorLoop(
+            MonitorService(source, state, sink),
+            state,
+            schedule,
+            clock=clock,
+            uniform=lambda lower, upper: upper,
+        ).run(GROUP, POLICY, notify_initial=True, stop_event=event)
+        assert attempts == [
+            START,
+            START + timedelta(minutes=44),
+            START + timedelta(minutes=132),
+        ]
+        assert event.waits == [88 * 60, 99 * 60]
+        assert state.consecutive_failures(GROUP) == 0
+        assert not state.pending(GROUP)
+        assert state.notification_boundary(GROUP) == "301"
+        assert len(notifications) == 1
 
 
 def test_transient_backoff_uses_failure_completion_time() -> None:

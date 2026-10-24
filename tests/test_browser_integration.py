@@ -9,6 +9,7 @@ import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -1712,6 +1713,134 @@ def test_mobile_blank_loading_shell_times_out_as_transient_without_reloading(
     assert "Hidden fallback" not in str(logged)
 
 
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("accessible_spinner", [False, True])
+@pytest.mark.parametrize(
+    "phase", ["find_primary_preview", "expanded_primary_preview_render"]
+)
+def test_preview_loading_transition_uses_shared_transient_classification(
+    tmp_path, monkeypatch, permalink, accessible_spinner, phase
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type("Log", (), {"warning": lambda self, message, **kw: logged.append(kw)})(),
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_preview_fixture("Synthetic prefix.", "Full body."))
+        shell = mobile_loading_shell_fixture(accessible_spinner=accessible_spinner)
+        requests = []
+        context.route("**/*", lambda route: requests.append(route.request.url))
+        with mobile_records(page, permalink=permalink) as records:
+            if phase == "find_primary_preview":
+                page.set_content(shell)
+            else:
+                page.evaluate(
+                    "html => window.expandPreview = () => {"
+                    "document.body.innerHTML=html}",
+                    shell,
+                )
+            with pytest.raises(
+                TransientNavigationError, match="blank loading shell"
+            ) as failure:
+                expand_post_preview(
+                    page, *records[0], timeout_seconds=0.2, permalink=permalink
+                )
+        assert failure.value._fbn_failure_phase == phase
+        assert requests == []
+    snapshots = [fields for fields in logged if "document_ready" in fields]
+    assert len(snapshots) == 1
+    assert snapshots[0]["phase"] == phase
+    assert snapshots[0]["page_kind"] == ("permalink" if permalink else "feed")
+    assert snapshots[0]["visible_text_chars"] == 0
+    assert "Synthetic prefix" not in str(logged)
+
+
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize(
+    ("late_ui", "error"),
+    [
+        ("<p>Unknown visible content</p>", LayoutChangedError),
+        ('<button aria-label="Unknown action"></button>', LayoutChangedError),
+        ('<svg width="50" height="50"></svg>', LayoutChangedError),
+        ('<input name="email">', AuthenticationRequiredError),
+        ('<input name="approvals_code">', AccountActionRequiredError),
+        ("<main>Content isn't available</main>", AccessDeniedError),
+    ],
+)
+def test_preview_loading_cannot_hide_unknown_layout_or_security(
+    tmp_path, permalink, late_ui, error
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_preview_fixture("Synthetic prefix.", "Full body."))
+        with mobile_records(page, permalink=permalink) as records:
+            page.set_content(mobile_loading_shell_fixture() + late_ui)
+            with pytest.raises(error) as failure:
+                expand_post_preview(
+                    page, *records[0], timeout_seconds=0.2, permalink=permalink
+                )
+        assert not isinstance(failure.value, TransientNavigationError)
+        assert failure.value._fbn_failure_phase == "find_primary_preview"
+
+
+@pytest.mark.parametrize("permalink", [False, True])
+def test_preview_loading_after_navigation_preserves_identity_failure(
+    tmp_path, permalink
+):
+    with _local_context(tmp_path) as context:
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_preview_fixture("Synthetic prefix.", "Full body."),
+            ),
+        )
+        page = context.new_page()
+        page.goto("https://m.facebook.com/groups/contract-group/posts/301/")
+        with mobile_records(page, permalink=permalink) as records:
+            page.evaluate(
+                "html => window.expandPreview = () => {"
+                "history.pushState(null,'','/groups/contract-group/posts/999/');"
+                "document.body.innerHTML=html}",
+                mobile_loading_shell_fixture(),
+            )
+            with pytest.raises(
+                LayoutChangedError, match="expanded_primary_url_unchanged"
+            ):
+                expand_post_preview(
+                    page, *records[0], timeout_seconds=0.3, permalink=permalink
+                )
+
+
+@pytest.mark.parametrize("phase", ["open_sort", "select_new_posts"])
+def test_sort_loading_transition_uses_shared_transient_classification(tmp_path, phase):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        shell = mobile_loading_shell_fixture()
+        if phase == "open_sort":
+            page.set_content(shell)
+        else:
+            page.set_content(
+                mobile_fixture([("301", "Author", "Body")], sorted_feed=False)
+            )
+            page.evaluate(
+                "html => document.querySelector('button').onclick = () => {"
+                "document.body.innerHTML=html}",
+                shell,
+            )
+        with pytest.raises(
+            TransientNavigationError, match="blank loading shell"
+        ) as failure:
+            select_new_posts(page, timeout_seconds=0.2)
+        assert failure.value._fbn_failure_phase == phase
+
+
 @pytest.mark.parametrize(
     "visible_ui",
     [
@@ -1856,8 +1985,12 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
     assert "facebook.com" not in str(logged)
 
 
+@pytest.mark.parametrize(
+    "failure_kind", ["initial", "feed_preview", "permalink_preview"]
+)
+@pytest.mark.parametrize("failed_attempts", [1, 2])
 def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failure_kind, failed_attempts
 ):
     from datetime import timedelta
     from types import SimpleNamespace
@@ -1875,6 +2008,23 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
         original_pages = tuple(context.pages)
         stories = [("301", "Author", "New body"), ("300", "Author", "Old body")]
 
+        def preview(html):
+            shell = json.dumps(mobile_loading_shell_fixture())
+            return html.replace(
+                '<div data-mcomponent="ServerTextArea">New body</div>',
+                '<div data-mcomponent="TextArea" data-action-id="preview-301" '
+                'onclick="expandSynthetic(this)">New <span>...see more</span></div>',
+                1,
+            ) + (
+                "<script>function expandSynthetic(node){"
+                + (
+                    f"document.body.innerHTML={shell};"
+                    if len(attempts) <= failed_attempts
+                    else 'node.textContent="New body";'
+                )
+                + "}</script>"
+            )
+
         def serve(route):
             if "/share/" in route.request.url:
                 number = route.request.url.rstrip("/").split("/")[-1]
@@ -1885,12 +2035,16 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
                     "<script>history.replaceState(null,'',"
                     f"'/groups/contract-group/posts/{number}/')</script>"
                 )
-                if len(attempts) == 1:
+                if failure_kind == "initial" and len(attempts) <= failed_attempts:
                     html = mobile_loading_shell_fixture()
+                elif failure_kind == "permalink_preview" and number == "301":
+                    html = preview(html)
             else:
                 # Distinct publication times avoid the intentional coarse-age
                 # tie rule that conservatively includes unsent tied posts.
                 html = mobile_fixture(stories).replace("10:00 AM", "11:00 AM", 1)
+                if failure_kind == "feed_preview":
+                    html = preview(html)
             route.fulfill(status=200, content_type="text/html", body=html)
 
         context.route("**/*", serve)
@@ -1905,7 +2059,9 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
         def acquire(*args, **kwargs):
             attempts.append(now[0])
             monkeypatch.setattr(
-                mobile, "MAX_LINK_SECONDS", 0.2 if len(attempts) == 1 else 5
+                mobile,
+                "MAX_LINK_SECONDS",
+                0.3 if len(attempts) <= failed_attempts else 5,
             )
             return source.fetch_recent(*args, **kwargs)
 
@@ -1939,11 +2095,12 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
 
                 def wait(self, timeout):
                     waits.append(timeout)
-                    if len(waits) == 1:
-                        assert len(attempts) == 1
+                    if len(waits) <= failed_attempts:
+                        assert len(attempts) == len(waits)
                         assert not notifications and not state.pending(group)
                         assert state.notification_boundary(group) == "300"
-                        assert state.consecutive_failures(group) == 1
+                        assert state.consecutive_failures(group) == len(waits)
+                        assert tuple(context.pages) == original_pages
                         now[0] += timedelta(seconds=timeout)
                         return False
                     self.stopped = True
@@ -1960,8 +2117,13 @@ def test_loading_shell_delayed_retry_verifies_and_delivers_once_end_to_end(
                 ScanPolicy(sample_count=3, max_scrolls=1, settle_seconds=0),
                 stop_event=Stopper(),
             )
-            assert attempts[1] - attempts[0] == timedelta(minutes=44)
-            assert waits == [44 * 60, 44 * 60]
+            assert len(attempts) == failed_attempts + 1
+            assert [later - earlier for earlier, later in pairwise(attempts)] == [
+                timedelta(minutes=44 * 2**index) for index in range(failed_attempts)
+            ]
+            assert waits == [44 * 60 * 2**index for index in range(failed_attempts)] + [
+                44 * 60
+            ]
             assert len(notifications) == 1
             assert state.notification_boundary(group) == "301"
             assert not state.pending(group)

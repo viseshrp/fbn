@@ -55,6 +55,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Share terminal-state/loading classification across page readiness, sorting,
+  post verification and preview expansion. Preserve the actual failure phase,
+  capture evidence and route blank-shell failures through persisted exponential
+  backoff with fresh scan pages. Keep identity changes and visible unknown
+  layouts terminal; do not refresh in a loop or reset action deadlines.
 - Parse normalized body trees before extracting authored text. Collapse only
   presentation wrappers, retain branching/action/ARIA boundaries, prune owned
   discussion and reject unknown meaningful content without changing identity,
