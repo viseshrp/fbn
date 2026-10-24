@@ -452,6 +452,7 @@ def _inspect_failed_render(
             _raise_render_timeout(phase)
     except Exception as error:
         _annotate_failure(error, phase)
+        error._fbn_render_classified = True
         raise
     return result
 
@@ -614,11 +615,14 @@ def expand_post_preview(
     original_url = page.url
     expansion = None
     completed = None
+    phase = "find_primary_preview"
     try:
-        page.bring_to_front()
-        _dismiss_app_prompt(page, deadline)
-        menu.evaluate("node => node.scrollIntoView({block:'center',inline:'nearest'})")
-        with _action_phase("find_primary_preview"):
+        with _action_phase(phase):
+            page.bring_to_front()
+            _dismiss_app_prompt(page, deadline)
+            menu.evaluate(
+                "node => node.scrollIntoView({block:'center',inline:'nearest'})"
+            )
             expansion = page.wait_for_function(
                 f"menu => ({script})(true).records"
                 ".find(record => record.menu === menu)?.expand || null",
@@ -628,14 +632,16 @@ def expand_post_preview(
         control = expansion.as_element()
         if control is None:
             raise _layout_failure("actionable_primary_preview_control")
-        control.evaluate(
-            "node => node.scrollIntoView({block:'center',inline:'nearest'})"
-        )
-        with _action_phase("expand_primary_preview"):
+        phase = "expand_primary_preview"
+        with _action_phase(phase):
+            control.evaluate(
+                "node => node.scrollIntoView({block:'center',inline:'nearest'})"
+            )
             control.click(
                 timeout=_remaining_seconds(deadline, "expand_primary_preview") * 1_000
             )
-        with _action_phase("expanded_primary_preview_render"):
+        phase = "expanded_primary_preview_render"
+        with _action_phase(phase):
             completed = page.wait_for_function(
                 "arg => {if (!arg.menu.isConnected) return {missing: true};"
                 f"const record = ({script})(true).records"
@@ -697,11 +703,22 @@ def expand_post_preview(
             ),
         )
         return expanded
-    except PlaywrightError as exc:
-        phase = getattr(exc, "_fbn_failure_phase", "expanded_primary_preview_render")
-        _inspect_failed_render(
+    except (PlaywrightError, TransientNavigationError) as exc:
+        if getattr(exc, "_fbn_render_classified", False):
+            raise
+        phase = getattr(exc, "_fbn_failure_phase", phase)
+        result = _inspect_failed_render(
             page, permalink=permalink, phase=phase, expected_url=original_url
         )
+        if isinstance(exc, TransientNavigationError):
+            # An exhausted action budget still inspects the current screen.
+            # Known readable UI may retry; missing/unsupported visible structure
+            # must not bypass the same layout and security checks as a waiter.
+            if result.get("missing") or not result.get("postCount"):
+                raise _layout_failure(
+                    *_missing_mobile_components(result), phase=phase
+                ) from exc
+            raise
         raise _layout_failure("complete_expanded_primary_body", phase=phase) from exc
     finally:
         for handle in (completed, expansion):

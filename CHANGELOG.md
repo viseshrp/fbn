@@ -60,6 +60,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capture evidence and route blank-shell failures through persisted exponential
   backoff with fresh scan pages. Keep identity changes and visible unknown
   layouts terminal; do not refresh in a loop or reset action deadlines.
+- Classify the current screen even when preview preparation consumes its action
+  budget, so a late login/checkpoint or unsupported UI cannot become a retry.
+  Preserve phase annotations and classify each error only once.
 - Parse normalized body trees before extracting authored text. Collapse only
   presentation wrappers, retain branching/action/ARIA boundaries, prune owned
   discussion and reject unknown meaningful content without changing identity,

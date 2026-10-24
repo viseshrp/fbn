@@ -131,6 +131,9 @@ content. The original action phase is preserved. A changed expansion URL remains
 an identity failure even if the destination is blank. No loading classification
 accepts a post, clears the notification marker, extends a deadline or retries
 inside the browser operation.
+An action budget expiring before a browser waiter follows the same classifier;
+it cannot skip late security/layout checks. Already-classified errors propagate
+without another snapshot or a second classification pass.
 
 The scheduler alone owns retries. It persists the failure count and next eligible
 time, doubles the configured minimum interval up to a 24-hour cap, and honors that

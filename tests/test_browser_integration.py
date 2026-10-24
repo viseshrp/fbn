@@ -715,7 +715,7 @@ def test_owned_attachments_do_not_become_message_text_or_actions(tmp_path, kind)
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
         page.set_content(html)
-        wait_for_mobile_page(page, timeout_seconds=0.5)
+        wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
         with mobile_records(page) as records:
             assert len(records) == 1
             assert records[0][1]["text"] == caption
@@ -767,7 +767,7 @@ def test_image_card_owns_its_preview_controls_not_the_authored_message(
             snapshot = page.evaluate(STRUCTURE_SNAPSHOT_SCRIPT)
             assert any(node["block"] == "unknown" for node in snapshot["nodes"])
             return
-        wait_for_mobile_page(page, timeout_seconds=0.5)
+        wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
         with mobile_records(page) as records:
             source = records[0][1]
             assert source["text"] == caption
@@ -788,7 +788,7 @@ def test_image_card_owns_its_preview_controls_not_the_authored_message(
             "https://m.facebook.com/groups/contract-group/posts/301/",
             source,
             frozenset({"contract-group"}),
-            timeout_seconds=0.5,
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
 
 
@@ -1785,6 +1785,47 @@ def test_preview_loading_cannot_hide_unknown_layout_or_security(
                     page, *records[0], timeout_seconds=0.2, permalink=permalink
                 )
         assert not isinstance(failure.value, TransientNavigationError)
+        assert failure.value._fbn_failure_phase == "find_primary_preview"
+
+
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize(
+    ("late_ui", "error"),
+    [
+        (None, TransientNavigationError),
+        ("", TransientNavigationError),
+        ("<p>Unknown visible content</p>", LayoutChangedError),
+        ('<button aria-label="Unknown action"></button>', LayoutChangedError),
+        ('<input name="email">', AuthenticationRequiredError),
+        ('<input name="approvals_code">', AccountActionRequiredError),
+        ("<main>Content isn't available</main>", AccessDeniedError),
+    ],
+)
+def test_preview_expired_budget_still_checks_current_security_and_layout(
+    tmp_path, monkeypatch, permalink, late_ui, error
+):
+    from fbn import mobile
+
+    original_remaining = mobile._remaining_seconds
+
+    def expired_find(deadline, phase):
+        if phase == "find_primary_preview":
+            failure = TransientNavigationError("Synthetic action budget exhausted")
+            mobile._annotate_failure(failure, phase)
+            raise failure
+        return original_remaining(deadline, phase)
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_preview_fixture("Synthetic prefix.", "Full body."))
+        with mobile_records(page, permalink=permalink) as records:
+            if late_ui is not None:
+                page.set_content(mobile_loading_shell_fixture() + late_ui)
+            monkeypatch.setattr(mobile, "_remaining_seconds", expired_find)
+            with pytest.raises(error) as failure:
+                expand_post_preview(
+                    page, *records[0], timeout_seconds=5, permalink=permalink
+                )
         assert failure.value._fbn_failure_phase == "find_primary_preview"
 
 
