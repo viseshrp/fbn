@@ -710,15 +710,23 @@ def expand_post_preview(
         result = _inspect_failed_render(
             page, permalink=permalink, phase=phase, expected_url=original_url
         )
-        if isinstance(exc, TransientNavigationError):
-            # An exhausted action budget still inspects the current screen.
+        if isinstance(exc, (PlaywrightTimeoutError, TransientNavigationError)):
+            # Both timeout mechanisms still inspect the current screen.
             # Known readable UI may retry; missing/unsupported visible structure
             # must not bypass the same layout and security checks as a waiter.
             if result.get("missing") or not result.get("postCount"):
                 raise _layout_failure(
                     *_missing_mobile_components(result), phase=phase
                 ) from exc
-            raise
+            if isinstance(exc, TransientNavigationError):
+                raise
+            error = TransientNavigationError(
+                "Mobile preview action timed out on a supported page; "
+                "no immediate retry was attempted."
+            )
+            _annotate_failure(error, phase)
+            error._fbn_render_classified = True
+            raise error from exc
         raise _layout_failure("complete_expanded_primary_body", phase=phase) from exc
     finally:
         for handle in (completed, expansion):

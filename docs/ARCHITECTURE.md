@@ -134,6 +134,9 @@ inside the browser operation.
 An action budget expiring before a browser waiter follows the same classifier;
 it cannot skip late security/layout checks. Already-classified errors propagate
 without another snapshot or a second classification pass.
+Browser-waiter timeouts and pre-wait budget exhaustion use the same rule: a
+recognized unchanged page may retry, while missing/unsupported visible structure
+stops. A timed-out preview is never accepted as a complete post.
 
 The scheduler alone owns retries. It persists the failure count and next eligible
 time, doubles the configured minimum interval up to a 24-hour cap, and honors that

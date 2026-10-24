@@ -63,6 +63,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Classify the current screen even when preview preparation consumes its action
   budget, so a late login/checkpoint or unsupported UI cannot become a retry.
   Preserve phase annotations and classify each error only once.
+- Retry stalled preview actions on a recognized unchanged page with the same
+  scheduler-owned backoff for browser-waiter and pre-wait budget timeouts;
+  unknown layouts, security screens and identity mismatches remain terminal.
 - Parse normalized body trees before extracting authored text. Collapse only
   presentation wrappers, retain branching/action/ARIA boundaries, prune owned
   discussion and reject unknown meaningful content without changing identity,

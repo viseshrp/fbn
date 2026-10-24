@@ -1314,7 +1314,8 @@ def test_mobile_expansion_rejects_changed_owner_date_menu_body_or_incomplete_ren
         page.set_content(
             mobile_preview_fixture("Synthetic prefix.", complete, behavior=behavior)
         )
-        with mobile_records(page) as records, pytest.raises(LayoutChangedError):
+        error = TransientNavigationError if behavior == "never" else LayoutChangedError
+        with mobile_records(page) as records, pytest.raises(error):
             expand_post_preview(page, *records[0], timeout_seconds=2)
         assert page.evaluate("window.previewClicks") == 1
 
@@ -1593,10 +1594,13 @@ def test_mobile_selects_new_posts_instead_of_trusting_the_url(tmp_path):
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(mobile_fixture([("301", "Author", "Body")], sorted_feed=False))
-        select_new_posts(page, timeout_seconds=1)
+        select_new_posts(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
         assert page.locator("#sort-label").inner_text() == "New posts"
         assert not page.locator("#sort-menu").is_visible()
-        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
+            is PageState.FEED
+        )
 
 
 def test_mobile_excludes_discussion_nested_inside_the_body_text_component(tmp_path):
@@ -1629,8 +1633,11 @@ def test_mobile_reads_hydrated_text_and_icon_prefixed_actions(
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(html)
-        select_new_posts(page, timeout_seconds=1)
-        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        select_new_posts(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
+            is PageState.FEED
+        )
         with mobile_records(page) as records:
             assert len(records) == 1
             assert records[0][1]["author"] == "Author"
@@ -1664,7 +1671,10 @@ def test_mobile_waits_for_all_primary_cards_to_finish_loading(tmp_path):
             timestamp.removeAttribute('aria-label');
             setTimeout(() => timestamp.setAttribute('aria-label', label), 100);
         }""")
-        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
+            is PageState.FEED
+        )
 
 
 def test_mobile_waits_for_scroller_hydration_without_reloading(tmp_path):
@@ -1678,7 +1688,10 @@ def test_mobile_waits_for_scroller_hydration_without_reloading(tmp_path):
             setTimeout(() => document.getElementById('loading-scroller')
                 .setAttribute('data-type', 'vscroller'), 350);
         }""")
-        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
+            is PageState.FEED
+        )
         with mobile_records(page) as records:
             assert len(records) == 1
 
@@ -1789,6 +1802,7 @@ def test_preview_loading_cannot_hide_unknown_layout_or_security(
 
 
 @pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("timeout_kind", ["action_budget", "browser_waiter"])
 @pytest.mark.parametrize(
     ("late_ui", "error"),
     [
@@ -1801,8 +1815,8 @@ def test_preview_loading_cannot_hide_unknown_layout_or_security(
         ("<main>Content isn't available</main>", AccessDeniedError),
     ],
 )
-def test_preview_expired_budget_still_checks_current_security_and_layout(
-    tmp_path, monkeypatch, permalink, late_ui, error
+def test_preview_timeout_still_checks_current_security_and_layout(
+    tmp_path, monkeypatch, permalink, timeout_kind, late_ui, error
 ):
     from fbn import mobile
 
@@ -1815,13 +1829,19 @@ def test_preview_expired_budget_still_checks_current_security_and_layout(
             raise failure
         return original_remaining(deadline, phase)
 
+    def expired_waiter(*args, **kwargs):
+        raise PlaywrightTimeoutError("Synthetic browser waiter deadline")
+
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(mobile_preview_fixture("Synthetic prefix.", "Full body."))
         with mobile_records(page, permalink=permalink) as records:
             if late_ui is not None:
                 page.set_content(mobile_loading_shell_fixture() + late_ui)
-            monkeypatch.setattr(mobile, "_remaining_seconds", expired_find)
+            if timeout_kind == "action_budget":
+                monkeypatch.setattr(mobile, "_remaining_seconds", expired_find)
+            else:
+                monkeypatch.setattr(page, "wait_for_function", expired_waiter)
             with pytest.raises(error) as failure:
                 expand_post_preview(
                     page, *records[0], timeout_seconds=5, permalink=permalink
@@ -1914,7 +1934,9 @@ def test_mobile_blank_shell_waits_for_actual_content_without_reload(
             mobile_fixture([("301", "Author", "Full body")]),
         )
         assert (
-            wait_for_mobile_page(page, timeout_seconds=2, permalink=permalink)
+            wait_for_mobile_page(
+                page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS, permalink=permalink
+            )
             is PageState.FEED
         )
         with mobile_records(page, permalink=permalink) as records:
@@ -2451,7 +2473,10 @@ def test_mobile_defers_unrendered_cards_until_scrolling_makes_them_readable(tmp_
             assert [payload["author"] for _, payload in records] == ["First"]
         card.scroll_into_view_if_needed()
         page.wait_for_timeout(100)
-        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        assert (
+            wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
+            is PageState.FEED
+        )
         with mobile_records(page) as records:
             assert [payload["author"] for _, payload in records] == ["First", "Second"]
 
@@ -3052,7 +3077,7 @@ def test_mobile_never_uses_a_reply_action_row_as_the_post_footer(
             with pytest.raises(LayoutChangedError, match="primary_action_footer"):
                 wait_for_mobile_page(page, timeout_seconds=0.1)
         else:
-            wait_for_mobile_page(page, timeout_seconds=1)
+            wait_for_mobile_page(page, timeout_seconds=OFFLINE_NAVIGATION_SECONDS)
             with mobile_records(page) as records:
                 assert len(records) == 1
                 assert records[0][1]["text"] == "Only the primary body"
