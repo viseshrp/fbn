@@ -63,11 +63,13 @@ BODY_COMPONENTS_SCRIPT = r"""
         + eventWeekday + '\\s+at\\s+' + eventClock + ')$', 'i');
       const attachmentDate = value => timestampPattern.test(attachmentText(value))
         || eventDatePattern.test(attachmentText(value));
-      const publicationLabel = value => {
-        const label = attachmentText(value);
+      const publicationLabel = (value, owner = null) => {
+        let label = attachmentText(value).replace(/^[,\s]+/, '');
+        if (owner && label.startsWith(owner + ',')) {
+          label = label.slice(owner.length + 1).replace(/^[,\s]+/, '');
+        }
         if (attachmentDate(label)) return true;
         const fields = label.split(',').map(clean);
-        if (fields[0] === '') fields.shift();
         return fields.length === 2 && attachmentDate(fields[0])
           && /^(?:public(?: group)?|private group|friends|only me)$/i.test(fields[1]);
       };
@@ -173,6 +175,63 @@ BODY_COMPONENTS_SCRIPT = r"""
             || (child.kind === 'literal' && text(child)
               && !ancestors(child.parent, owner => owner.flags.text))))) continue;
         claim(surface, 'attachment', name);
+        claim(node, 'attachment', name);
+      }
+      // Rich image previews can use a linked heading plus an author/date
+      // byline. Own that closed card, not adjacent authored message sections.
+      for (const node of nodes.filter(untypedAction)) {
+        if (claims.get(node)?.role === 'attachment') continue;
+        const content = descendants(node), parts = attachmentLeaves(node);
+        if (parts.length !== 2) continue;
+        const [title, byline] = parts;
+        const titleLinks = descendants(title).filter(child => child.flags.link);
+        const authors = descendants(byline).filter(child => child.flags.link);
+        if (titleLinks.length !== 1 || authors.length !== 1
+          || text(titleLinks[0]) !== text(title) || !text(authors[0])
+          || !byline.el.hasAttribute('aria-label')
+          || !publicationLabel(byline.el.getAttribute('aria-label'),
+            text(authors[0]))) continue;
+        const age = attachmentText(read(byline,
+          child => !contains(authors[0], child)))
+          .replace(/^[\s\u00b7\u2022,]+|[\s\u00b7\u2022,]+$/g, '');
+        if (!attachmentDate(age)) continue;
+        const caption = ancestors(title, child => child !== node
+          && child.flags.action && contains(child, byline));
+        if (!caption || !contains(node, caption)) continue;
+        if (content.some(child => !supportedStructure(child) || child.flags.button
+          || child.flags.control || child.flags.menu || child.flags.discussion)) {
+          continue;
+        }
+        const mediaRegion = child => supportedStructure(child)
+          && !child.flags.button && !child.flags.control && !child.flags.menu
+          && !child.flags.link && !child.flags.discussion
+          && !attachmentText(text(child))
+          && (!child.flags.action || child.flags.media
+            || descendants(child).some(owner => owner.flags.media))
+          && (child.kind === 'literal'
+            || (child.flags.media || child.children.length > 0)
+              && child.children.every(mediaRegion));
+        const media = content.filter(child => child.flags.media
+          && !ancestors(child.parent, owner => owner !== node && owner.flags.media));
+        if (media.length < 2) continue;
+        if (node.children.some(child => !contains(child, caption)
+          && !mediaRegion(child))) continue;
+        if (content.some(child => !contains(caption, child)
+          && !contains(child, caption) && !mediaRegion(child))) continue;
+        if (content.some(child => child !== caption && contains(child, caption)
+          && (child.flags.action || child.flags.link))) continue;
+        if (content.some(child => contains(caption, child)
+          && (!supportedStructure(child) || child.flags.button || child.flags.control
+            || child.flags.menu || child.flags.discussion || child.flags.media
+            || (child.kind === 'literal' && attachmentText(text(child))
+              && !ancestors(child.parent, owner => owner.flags.text))
+            || (child.flags.link && !contains(titleLinks[0], child)
+              && !contains(authors[0], child))
+            || (child.flags.action && child !== caption
+              && !contains(titleLinks[0], child) && !contains(authors[0], child)
+              && !(child === byline && !child.el.hasAttribute('data-action-id')
+                && !Array.from(child.el.attributes)
+                  .some(attr => /^on/i.test(attr.name))))))) continue;
         claim(node, 'attachment', name);
       }
       // Event previews have their own image, date/title and response control.
@@ -397,10 +456,24 @@ BODY_COMPONENTS_SCRIPT = r"""
       issues.add('unclaimed_body_text');
     }
     const texts = [];
-    for (const node of nodes.filter(node => node.flags.text && messageOwn(node)
-      && !ancestors(node.parent, owner => owner.flags.text))) {
+    const messageRoots = nodes.filter(node => node.flags.text && messageOwn(node)
+      && !ancestors(node.parent, owner => owner.flags.text));
+    for (const node of messageRoots) {
       const value = clean(read(node, messageOwn));
       if (value) { texts.push(value); claim(node, 'message', 'message'); }
+    }
+    let previewBoundary = null;
+    if (expanders.length === 1) {
+      const cut = nodes.find(node => node.el === expanders[0]);
+      if (cut) {
+        const prefix = clean(messageRoots.map(node => read(node,
+          child => messageOwn(child) && child.order < cut.order)).join(' '));
+        const suffix = clean(messageRoots.map(node => read(node,
+          child => messageOwn(child) && child.end > cut.end)).join(' '));
+        const joined = clean(texts.join(' '));
+        if (prefix && [prefix + suffix, clean(prefix + ' ' + suffix)]
+          .includes(joined)) previewBoundary = {prefix, suffix};
+      }
     }
     const regions = [], blocks = [];
     for (const [node, evidence] of claims) {
@@ -410,7 +483,7 @@ BODY_COMPONENTS_SCRIPT = r"""
       blocks.push({role: evidence.role, textChars: text(node).length,
         component: node.component || null});
     }
-    return {text: clean(texts.join(' ')), texts, expanders, mediaCount,
+    return {text: clean(texts.join(' ')), texts, expanders, previewBoundary, mediaCount,
       mediaKeys: Array.from(mediaKeys).sort(), partial: expanders.length > 0,
       bodyControlCount, blocks, regions, unsupported: issues.size > 0,
       recognizers: outcomes, issues: Array.from(issues).sort(),

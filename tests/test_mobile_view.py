@@ -5,12 +5,54 @@ from __future__ import annotations
 import pytest
 
 from fbn.mobile_compare import comparison_script, parser_reference
-from fbn.mobile_view import post_view_issues
+from fbn.mobile_view import post_view_issues, preview_matches_expanded
 from tests.mobile_fixtures import post_view_fixture as valid_view
 
 
 def test_mobile_view_boundary_accepts_complete_synthetic_evidence():
     assert post_view_issues(valid_view()) == ()
+
+
+@pytest.mark.parametrize(
+    "expanded,accepted",
+    [
+        ("Opening. New middle. Closing.", True),
+        ("Changed opening. New middle. Closing.", False),
+        ("Opening. New middle. Changed closing.", False),
+        ("Closing. New middle. Opening.", False),
+    ],
+)
+def test_preview_expansion_preserves_both_visible_boundaries(expanded, accepted):
+    source = {
+        "text": "Opening. Closing.",
+        "previewPrefix": "Opening.",
+        "previewSuffix": "Closing.",
+    }
+    assert preview_matches_expanded(source, expanded) is accepted
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("previewPrefix", ""),
+        ("previewPrefix", None),
+        ("previewSuffix", None),
+        ("previewPrefix", "Unrelated."),
+    ],
+)
+def test_preview_expansion_rejects_incomplete_or_forged_boundaries(field, value):
+    source = valid_view()
+    source.update(
+        text="Opening. Closing.",
+        partial=True,
+        bodyState="partial",
+        previewControlCount=1,
+        previewPrefix="Opening.",
+        previewSuffix="Closing.",
+    )
+    source[field] = value
+    assert "post_view_preview_boundary" in post_view_issues(source)
+    assert not preview_matches_expanded(source, "Opening. New middle. Closing.")
 
 
 @pytest.mark.parametrize("field", list(valid_view()))

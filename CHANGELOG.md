@@ -18,6 +18,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   weekday/clock event labels without stripping any authored message text.
 - Parse month/day and day/month attachment dates and composite publication/
   audience labels, rejecting unknown metadata fields.
+- Preserve authored text on both sides of a truncated message run during
+  expansion, while still requiring exact complete destination text and identity.
+- Recognize bounded rich image previews with linked headings and validated
+  author/date bylines, without excluding adjacent authored paragraphs.
 - Include focus-sign and event-handler-presence categories in private structural
   captures, without retaining handler code or accessible labels.
 - Generated wrapper, text-fragment, decoration and discussion variations, with

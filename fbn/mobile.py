@@ -52,7 +52,7 @@ from .mobile_dom import (
     RENDER_SNAPSHOT_SCRIPT,
     PostView,
 )
-from .mobile_view import post_view_issues
+from .mobile_view import post_view_issues, preview_matches_expanded
 from .models import GroupRef, Post, ScanPolicy, ScanResult
 
 LOGGER = get_logger("mobile")
@@ -688,8 +688,9 @@ def expand_post_preview(
                 not expanded.get("missing", False)
                 and not expanded.get("partial", False)
             ),
-            "expanded_primary_body_preserves_preview": bool(payload["text"])
-            and expanded.get("text", "").startswith(payload["text"]),
+            "expanded_primary_body_preserves_preview": preview_matches_expanded(
+                payload, expanded.get("text", "")
+            ),
             "expanded_primary_body_grew": (
                 len(expanded.get("text", "")) > len(payload["text"])
             ),
@@ -701,6 +702,10 @@ def expand_post_preview(
                 **comparisons,
                 source_body_chars=len(payload["text"]),
                 expanded_body_chars=len(expanded.get("text", "")),
+                source_preview_prefix_chars=len(
+                    payload.get("previewPrefix", payload["text"])
+                ),
+                source_preview_suffix_chars=len(payload.get("previewSuffix", "")),
             )
             raise _layout_failure(*missing, phase="expanded_primary_preview_render")
         LOGGER.debug(
@@ -1054,7 +1059,7 @@ def _resolve_post_link(
                 and items[0]["author"] == payload["author"]
                 and _publication_matches(items[0], payload)
                 and items[0]["text"]
-                and payload["text"].startswith(items[0]["text"])
+                and preview_matches_expanded(items[0], payload["text"])
             ):
                 # The permalink can be shortened too. Expand only this
                 # matching preview, inside the original link deadline, and

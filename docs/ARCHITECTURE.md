@@ -117,6 +117,14 @@ Facebook or external notification services.
    IDs/handlers remain unsupported. Message extraction never strips these glyphs.
    Publication accessibility labels may combine a date and a fixed audience
    category. Parse those fields separately; arbitrary extra fields do not qualify.
+   A unique authored expander also records its normalized message prefix and
+   suffix. Validate that they reconstruct all visible preview text, then require
+   both to survive expansion. Later visible paragraphs are not assumed to be a
+   prefix of the newly expanded earlier paragraph. Full permalink equality and
+   every author/publication/menu/navigation check remain independent and strict.
+   Rich image cards require media-only branches, one linked heading and one
+   linked author with validated date metadata. Unknown controls or unowned text
+   invalidate the card; adjacent authored sections are never claimed by it.
    Event cards require actual media, exactly one recognized response/open control,
    a date/title pair, and no other controls, links or unowned actions/text. These
    attachment claims precede expander discovery, so attachment captions/buttons

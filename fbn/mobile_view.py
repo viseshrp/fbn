@@ -27,11 +27,42 @@ class PostView(TypedDict, total=False):
     bodyTextPartCount: int
     bodyTextLengths: list[int]
     previewControlCount: int
+    previewPrefix: str
+    previewSuffix: str
     blocks: list[BlockEvidence]
     bodyState: Literal["partial", "complete"]
     parserVersion: int
     recognizers: list[dict[str, str]]
     normalization: dict[str, int]
+
+
+def _preview_boundary_valid(value: dict) -> bool:
+    prefix, suffix, text = (
+        value.get("previewPrefix"),
+        value.get("previewSuffix"),
+        value.get("text"),
+    )
+    return (
+        isinstance(prefix, str)
+        and bool(prefix)
+        and isinstance(suffix, str)
+        and isinstance(text, str)
+        and text in (prefix + suffix, (prefix + " " + suffix).strip())
+    )
+
+
+def preview_matches_expanded(value: dict, expanded: str) -> bool:
+    """Preserve both visible sides of the one truncated message region."""
+    text = value.get("text")
+    if not isinstance(text, str) or not text:
+        return False
+    if "previewPrefix" in value or "previewSuffix" in value:
+        return (
+            _preview_boundary_valid(value)
+            and expanded.startswith(value["previewPrefix"])
+            and expanded.endswith(value["previewSuffix"])
+        )
+    return expanded.startswith(text)
 
 
 def post_view_issues(value: object) -> tuple[str, ...]:
@@ -40,6 +71,10 @@ def post_view_issues(value: object) -> tuple[str, ...]:
     if not isinstance(value, dict):
         return ("post_view_object",)
     issues = []
+    if ("previewPrefix" in value or "previewSuffix" in value) and (
+        value.get("partial") is not True or not _preview_boundary_valid(value)
+    ):
+        issues.append("post_view_preview_boundary")
     for name in ("author", "text", "timestamp", "timestampLabel"):
         field = value.get(name)
         if not isinstance(field, str) or (

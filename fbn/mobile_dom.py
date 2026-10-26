@@ -156,6 +156,8 @@ MOBILE_SCAN_SCRIPT = (
         bodyControlCount, bodyTextPartCount: texts.length,
         bodyTextLengths: texts.slice(0, 32).map(text => text.length),
         previewControlCount: expanders.length,
+        ...(body.previewBoundary ? {previewPrefix:body.previewBoundary.prefix,
+          previewSuffix:body.previewBoundary.suffix} : {}),
         parserVersion: 1, recognizers: body.recognizers,
         normalization: body.normalization,
       }});

@@ -47,6 +47,8 @@ from tests.mobile_fixtures import (
     mobile_loading_shell_fixture,
     mobile_preview_fixture,
     mobile_rendered_attachment_fixture,
+    mobile_rich_credit_fixture,
+    mobile_segmented_preview_fixture,
     mobile_split_link_preview_fixture,
 )
 
@@ -1198,6 +1200,53 @@ def test_attachment_icon_normalization_preserves_authored_private_glyphs(tmp_pat
             assert records[0][1]["text"] == authored
 
 
+def test_rich_image_credit_is_metadata_not_authored_message(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_rich_credit_fixture())
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == "Synthetic message."
+            assert records[0][1]["mediaCount"] == 2
+
+
+@pytest.mark.parametrize(
+    "fault", ["unknown_control", "text", "literal", "author", "date", "empty_action"]
+)
+def test_rich_image_credit_rejects_unowned_or_unverified_metadata(tmp_path, fault):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        extra = (
+            "<button>Unknown</button>"
+            if fault == "unknown_control"
+            else (
+                '<div data-mcomponent="TextArea">Unowned text</div>'
+                if fault == "text"
+                else ""
+            )
+        )
+        if fault == "literal":
+            extra = "Unowned raw text"
+        page.set_content(mobile_rich_credit_fixture(extra=extra))
+        if fault == "empty_action":
+            page.locator('[data-action-id="rich-card"]').evaluate("""el => {
+                const action=document.createElement('div');
+                action.setAttribute('data-action-id','unknown-action');
+                action.append(document.createTextNode(' '));el.append(action);
+            }""")
+        if fault in {"author", "date"}:
+            page.locator('[data-action-id="rich-caption"] > div').last.evaluate(
+                "(el, label) => el.setAttribute('aria-label',label)",
+                "Other Author, 3 days ago, Private group"
+                if fault == "author"
+                else "Unknown date",
+            )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
 def test_attachment_gallery_overlay_requires_matching_count_and_owned_mosaic(tmp_path):
     with _local_context(tmp_path) as context:
         page = context.new_page()
@@ -1795,6 +1844,115 @@ def test_mobile_permalink_preview_expands_within_scroller_and_requires_full_equa
                     frozenset({"contract-group"}),
                     timeout_seconds=5,
                 )
+        assert target.evaluate("window.previewClicks") == 1
+
+
+@pytest.mark.parametrize("inline", [False, True])
+def test_mobile_expansion_preserves_visible_text_after_the_truncated_run(
+    tmp_path, inline
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_segmented_preview_fixture(inline=inline))
+        with mobile_records(page) as records:
+            menu, preview = records[0]
+            assert preview["text"] == "Synthetic opening. Visible closing."
+            expanded = expand_post_preview(page, menu, preview, timeout_seconds=3)
+        assert expanded["text"] == (
+            "Synthetic opening. Hidden continuation. Visible closing."
+        )
+
+
+def test_mobile_expansion_rejects_rewriting_an_already_visible_tail(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_segmented_preview_fixture(changed_tail=True))
+        with (
+            mobile_records(page) as records,
+            pytest.raises(
+                LayoutChangedError, match="expanded_primary_body_preserves_preview"
+            ),
+        ):
+            expand_post_preview(page, *records[0], timeout_seconds=3)
+
+
+@pytest.mark.parametrize("inline", [False, True])
+def test_segmented_preview_still_requires_exact_complete_destination_text(
+    tmp_path, inline
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_segmented_preview_fixture(inline=inline))
+        with mobile_records(page) as records:
+            source = expand_post_preview(page, *records[0], timeout_seconds=3)
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=mobile_fixture(
+                    [
+                        (
+                            "301",
+                            "Synthetic Author",
+                            "Synthetic opening. Wrong hidden continuation. "
+                            "Visible closing.",
+                        )
+                    ]
+                ),
+            ),
+        )
+        with pytest.raises(
+            LayoutChangedError, match="resolved_primary_body_matches_source"
+        ):
+            resolve_post_link(
+                context.new_page(),
+                "https://m.facebook.com/groups/contract-group/posts/301/",
+                source,
+                frozenset({"contract-group"}),
+                timeout_seconds=5,
+            )
+
+
+@pytest.mark.parametrize("inline", [False, True])
+@pytest.mark.parametrize("wrong_middle", [False, True])
+def test_segmented_permalink_preview_expands_then_requires_full_equality(
+    tmp_path, inline, wrong_middle
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        html = mobile_segmented_preview_fixture(inline=inline)
+        page.set_content(html)
+        with mobile_records(page) as records:
+            source = expand_post_preview(page, *records[0], timeout_seconds=3)
+        target_html = (
+            html.replace("Hidden continuation.", "Wrong continuation.")
+            if wrong_middle
+            else html
+        )
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200, content_type="text/html", body=target_html
+            ),
+        )
+        target = context.new_page()
+        url = "https://m.facebook.com/groups/contract-group/posts/301/"
+        if wrong_middle:
+            with pytest.raises(
+                LayoutChangedError, match="resolved_primary_body_matches_source"
+            ):
+                resolve_post_link(
+                    target,
+                    url,
+                    source,
+                    frozenset({"contract-group"}),
+                    timeout_seconds=3,
+                )
+        else:
+            assert resolve_post_link(
+                target, url, source, frozenset({"contract-group"}), timeout_seconds=5
+            ).endswith("/posts/301/")
         assert target.evaluate("window.previewClicks") == 1
 
 

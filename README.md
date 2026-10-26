@@ -186,6 +186,11 @@ and ordinary Unicode emoji are unchanged. Explicit handlers and unknown actions
 in date metadata still stop the check.
 Accessible publication labels are split into a validated date and, when present,
 a known audience label. Unknown prefixes, suffixes or extra fields are rejected.
+For a truncated message, the reader records the visible text before and after
+the single See more control. Expansion must preserve both sides and grow only
+between them. The complete destination message must still match exactly.
+Rich image previews require media-only branches and a linked heading with a
+validated author/date byline. Adjacent authored paragraphs remain message text.
 Inline formatting and repeated paragraphs are preserved. Attachment previews,
 poll choices, sale-card actions, avatars, and interface images are not message
 text. Media-only links require matching stable attachment identifiers rather

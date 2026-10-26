@@ -366,6 +366,70 @@ def mobile_controlled_attachment_fixture(
     return html.replace(marker, attachment + marker, 1)
 
 
+def mobile_rich_credit_fixture(*, extra: str = "") -> str:
+    """Synthetic image preview with an avatar and linked heading/author/date."""
+    image = (
+        '<div data-mcomponent="ImageArea"><img width="32" height="32" '
+        'src="https://scontent.example.fbcdn.net/123456_234567_345_n.jpg"></div>'
+    )
+    card = (
+        '<div data-mcomponent="MContainer" data-action-id="rich-card">'
+        '<div data-mcomponent="MContainer"><div data-mcomponent="MContainer" '
+        'data-action-id="rich-avatar">' + image + "</div></div>"
+        '<div data-mcomponent="MContainer" data-action-id="rich-image">'
+        + image
+        + '</div><div data-mcomponent="MContainer" data-action-id="rich-caption">'
+        '<div data-mcomponent="ServerTextArea"><span role="link" '
+        'data-action-id="rich-heading">Synthetic Group</span></div>'
+        '<div data-mcomponent="ServerTextArea" tabindex="0" '
+        'aria-label="Synthetic Credit, , 3 days ago, Private group">'
+        '<span role="link" data-action-id="rich-author">Synthetic Credit</span>'
+        "<span> · 3d · </span></div>" + extra + "</div></div>"
+    )
+    html = mobile_fixture([("301", "Synthetic Author", "Synthetic message.")])
+    marker = (
+        '</div><div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like, '
+    )
+    return html.replace(marker, card + marker, 1)
+
+
+def mobile_segmented_preview_fixture(
+    *, inline: bool = False, changed_tail: bool = False
+) -> str:
+    """A truncated message run followed by already-visible authored text."""
+    prefix, full, tail = (
+        "Synthetic opening.",
+        "Synthetic opening. Hidden continuation.",
+        "Visible closing.",
+    )
+    html = mobile_preview_fixture(prefix, full + (" " + tail if inline else ""))
+    if inline:
+        html = html.replace(
+            "<span>...see more</span>", "<span>...see more</span> " + tail, 1
+        )
+    else:
+        marker = (
+            '</div><div data-mcomponent="MContainer">'
+            '<button role="button" aria-label="Like, '
+        )
+        html = html.replace(
+            marker,
+            '<div data-mcomponent="ServerTextArea" data-tail>'
+            + tail
+            + "</div>"
+            + marker,
+            1,
+        )
+        if changed_tail:
+            html = html.replace(
+                "node.removeAttribute('onclick');",
+                "node.removeAttribute('onclick');"
+                "document.querySelector('[data-tail]').textContent='Changed closing.';",
+            )
+    return html
+
+
 def mobile_rendered_attachment_fixture(kind: str) -> str:
     """Synthetic Bloks text spans, focusable metadata and font-icon decoration."""
     html = mobile_controlled_attachment_fixture(kind)
