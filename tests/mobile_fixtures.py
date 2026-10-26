@@ -314,6 +314,25 @@ def mobile_controlled_attachment_fixture(
                 'aria-label="Sunday, October 11, 2026 at 10:00 AM">Yesterday</div>'
                 "</div></div>"
             )
+    elif kind == "gallery":
+        tiles = []
+        for index in range(5):
+            overlay = (
+                '<div data-mcomponent="TextArea" role="button" '
+                'aria-label="+2 more" data-action-id="synthetic-gallery-more">+2</div>'
+                if index == 4
+                else ""
+            )
+            tiles.append(
+                '<div data-mcomponent="MContainer">' + image + overlay + "</div>"
+            )
+        attachment = (
+            '<div data-mcomponent="MContainer" data-action-id="synthetic-gallery">'
+            + '<div data-mcomponent="MContainer">'
+            + "".join(tiles)
+            + extra
+            + "</div></div>"
+        )
     elif kind == "event":
         attachment = (
             '<div data-mcomponent="MContainer" data-type="container" '

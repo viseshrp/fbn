@@ -125,7 +125,16 @@ def test_structural_snapshot_cannot_serialize_content_identifiers_or_unknown_val
 
 @pytest.mark.parametrize(
     "kind",
-    ["photo", "video", "event_interest", "event_response", "event_open", "unknown"],
+    [
+        "photo",
+        "video",
+        "credit_picture",
+        "gallery_more",
+        "event_interest",
+        "event_response",
+        "event_open",
+        "unknown",
+    ],
 )
 def test_structural_snapshot_retains_only_fixed_control_categories(kind):
     data = screenshots._safe_structure(

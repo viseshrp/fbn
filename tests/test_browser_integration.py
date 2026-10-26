@@ -842,7 +842,7 @@ def test_media_only_destination_requires_stable_owned_attachment_id(tmp_path, wr
             ).endswith("/posts/301/")
 
 
-@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event"])
+@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event", "gallery"])
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
 @pytest.mark.parametrize("depth", [0, 4])
 def test_attachment_control_ownership_preserves_main_post_and_link(
@@ -860,7 +860,7 @@ def test_attachment_control_ownership_preserves_main_post_and_link(
             assert len(records) == 1
             source = records[0][1]
             assert source["text"] == "Synthetic authored message. Full continuation."
-            assert source["mediaCount"] == 1
+            assert source["mediaCount"] == (5 if kind == "gallery" else 1)
             assert source["bodyControlCount"] == source["previewControlCount"] == 0
             assert source["partial"] is False
         target = context.new_page()
@@ -884,7 +884,7 @@ def test_attachment_control_ownership_preserves_main_post_and_link(
         ).endswith("/posts/301/")
 
 
-@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event"])
+@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event", "gallery"])
 @pytest.mark.parametrize(
     "extra",
     [
@@ -905,7 +905,7 @@ def test_attachment_control_ownership_rejects_unrelated_controls_or_text(
             wait_for_mobile_page(page, timeout_seconds=0.1)
 
 
-@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event"])
+@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event", "gallery"])
 def test_attachment_control_ownership_keeps_the_authored_expander(tmp_path, kind):
     with _local_context(tmp_path) as context:
         page = context.new_page()
@@ -1060,6 +1060,90 @@ def test_attachment_event_requires_calendar_and_clock_metadata(tmp_path, value):
             wait_for_mobile_page(page, timeout_seconds=0.1)
 
 
+@pytest.mark.parametrize("label", ["Interested, not selected", "Interested selected"])
+def test_attachment_event_selection_state_is_not_a_new_control(tmp_path, label):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture("event"))
+        page.locator('[aria-label="Interested"]').evaluate(
+            "(el, label) => el.setAttribute('aria-label', label)", label
+        )
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == (
+                "Synthetic authored message. Full continuation."
+            )
+
+
+@pytest.mark.parametrize(
+    "suffix", ["'s picture", "\u2019s picture", " profile picture"]
+)
+def test_attachment_picture_credit_must_match_the_button_owner(tmp_path, suffix):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture("photo_credit"))
+        button = page.locator('[data-action-id="synthetic-media-open"]')
+        button.evaluate(
+            "(el, label) => el.setAttribute('aria-label', label)",
+            f"Synthetic Credit{suffix}",
+        )
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == (
+                "Synthetic authored message. Full continuation."
+            )
+            assert records[0][1]["mediaCount"] == 1
+        button.evaluate(
+            "(el, label) => el.setAttribute('aria-label', label)",
+            f"Unrelated Person{suffix}",
+        )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_attachment_gallery_overlay_requires_matching_count_and_owned_mosaic(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        html = mobile_controlled_attachment_fixture("gallery")
+        page.set_content(html)
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == (
+                "Synthetic authored message. Full continuation."
+            )
+            assert records[0][1]["mediaCount"] == 5
+        for label in ("+3 more", "More", "Unrelated control"):
+            page.set_content(html)
+            page.locator('[data-action-id="synthetic-gallery-more"]').evaluate(
+                "(el, label) => el.setAttribute('aria-label', label)", label
+            )
+            with pytest.raises(
+                LayoutChangedError, match="supported_primary_body_controls"
+            ):
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '<button aria-label="Unknown action">Unknown</button>',
+        '<div role="alert">Unexpected</div>',
+        '<div data-action-id="unknown-empty" style="width:8px;height:8px"></div>',
+        '<div data-mcomponent="ServerTextArea">Unowned caption</div>',
+    ],
+)
+def test_attachment_gallery_overlay_cannot_hide_unrelated_content(tmp_path, extra):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture("gallery", extra=extra))
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
 @pytest.mark.parametrize("kind", ["photo", "photo_credit", "event"])
 def test_attachment_ownership_cannot_erase_unknown_media_roles(tmp_path, kind):
     with _local_context(tmp_path) as context:
@@ -1083,7 +1167,13 @@ def test_attachment_ownership_cannot_erase_unknown_media_roles(tmp_path, kind):
 
 @pytest.mark.parametrize(
     ("kind", "category"),
-    [("photo", "photo"), ("video", "video"), ("event", "event_interest")],
+    [
+        ("photo", "photo"),
+        ("video", "video"),
+        ("event", "event_interest"),
+        ("photo_credit", "credit_picture"),
+        ("gallery", "gallery_more"),
+    ],
 )
 def test_attachment_control_diagnostics_never_expose_accessible_labels(
     tmp_path, kind, category
@@ -1094,7 +1184,12 @@ def test_attachment_control_diagnostics_never_expose_accessible_labels(
     with _local_context(tmp_path) as context:
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
-        page.set_content(mobile_controlled_attachment_fixture(kind))
+        html = mobile_controlled_attachment_fixture(kind)
+        if kind == "photo_credit":
+            html = html.replace(
+                "Photo: synthetic description", "Synthetic Credit profile picture"
+            )
+        page.set_content(html)
         wait_for_mobile_page(page, timeout_seconds=0.1)
         saved = json.loads(_safe_structure(page.evaluate(STRUCTURE_SNAPSHOT_SCRIPT)))
         assert category in {node["control"] for node in saved["nodes"]}

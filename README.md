@@ -176,6 +176,10 @@ Media-opening buttons need a recognized photo/video label and media-only owned
 children. Separate media credit/date metadata and image-backed event previews
 are attachments only when their complete control/content shape is recognized;
 nearby messages, unrelated buttons and inputs cannot inherit that ownership.
+Event response labels may include their selected state. A credited profile-picture
+control must name the adjacent credit exactly. A photo-album `+N more` overlay
+must match its visible count inside a media-only mosaic. None of these attachment
+controls is clicked, and their labels never become notification text.
 Inline formatting and repeated paragraphs are preserved. Attachment previews,
 poll choices, sale-card actions, avatars, and interface images are not message
 text. Media-only links require matching stable attachment identifiers rather

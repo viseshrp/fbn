@@ -10,9 +10,14 @@ ATTACHMENT_CONTROL_SCRIPT = r"""
     const name = label || cleanLabel(el.innerText);
     if (/^(?:(?:open|view|see) (?:the )?(?:photo|image)|photo|image)(?:$|:)/i
       .test(label)) return 'photo';
+    if (/^.+(?:['\u2019]s picture| profile picture)$/i.test(label)) {
+      return 'credit_picture';
+    }
+    if (/^\+[1-9][0-9]{0,5}\s+more$/i.test(label)) return 'gallery_more';
     if (/^(?:play|open|view) (?:the )?video$/i.test(name)) return 'video';
-    if (/^interested$/i.test(name)) return 'event_interest';
-    if (/^(?:going|not going)$/i.test(name)) return 'event_response';
+    const response = name.replace(/(?:,\s*|\s+)(?:not )?selected$/i, '');
+    if (/^interested$/i.test(response)) return 'event_interest';
+    if (/^(?:going|not going)$/i.test(response)) return 'event_response';
     if (/^(?:view|see|open) event$/i.test(name)) return 'event_open';
     return 'unknown';
   };

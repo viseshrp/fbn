@@ -11,6 +11,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ownership-preserving DOM normalization, named body/header/footer recognizers,
   independent `PostView` validation and opt-in same-DOM reference comparison.
+- Verified attachment variants for selected/unselected event responses, credited
+  profile-picture controls and count-matched photo-album overlays; unrelated
+  controls, mismatched credits and counts still fail closed.
 - Generated wrapper, text-fragment, decoration and discussion variations, with
   explicit rejection tests for unclaimed text, unknown controls and depth limits.
 - Compositional attachment ownership for photo-only action shells, including

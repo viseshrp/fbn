@@ -108,6 +108,10 @@ Facebook or external notification services.
    Photo/video opening buttons require a matching fixed control category and a
    media-only subtree. Media credit cards additionally require one linked credit
    name and accessible/visible publication metadata in a separate action region.
+   Profile-picture labels must name that credit exactly before earning ownership.
+   Counted album overlays require a media-only mosaic and matching visible and
+   accessible counts. Event response labels normalize selected/unselected state;
+   no attachment response, picture or album control is clicked.
    Event cards require actual media, exactly one recognized response/open control,
    a date/title pair, and no other controls, links or unowned actions/text. These
    attachment claims precede expander discovery, so attachment captions/buttons
