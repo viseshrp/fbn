@@ -14,6 +14,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Verified attachment variants for selected/unselected event responses, credited
   profile-picture controls and count-matched photo-album overlays; unrelated
   controls, mismatched credits and counts still fail closed.
+- Recognize focus-only credit timestamps, attachment font-icon decoration and
+  weekday/clock event labels without stripping any authored message text.
+- Parse month/day and day/month attachment dates and composite publication/
+  audience labels, rejecting unknown metadata fields.
+- Include focus-sign and event-handler-presence categories in private structural
+  captures, without retaining handler code or accessible labels.
 - Generated wrapper, text-fragment, decoration and discussion variations, with
   explicit rejection tests for unclaimed text, unknown controls and depth limits.
 - Compositional attachment ownership for photo-only action shells, including

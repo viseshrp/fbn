@@ -366,6 +366,48 @@ def mobile_controlled_attachment_fixture(
     return html.replace(marker, attachment + marker, 1)
 
 
+def mobile_rendered_attachment_fixture(kind: str) -> str:
+    """Synthetic Bloks text spans, focusable metadata and font-icon decoration."""
+    html = mobile_controlled_attachment_fixture(kind)
+    return (
+        html
+        + """<script>(kind => {
+      if (kind === 'photo_credit') {
+        document.querySelector('[data-action-id="synthetic-media-open"]')
+          .setAttribute('aria-label','Synthetic Credit profile picture');
+        const date=document.querySelector('[data-action-id="synthetic-credit"]')
+          .lastElementChild;
+        date.setAttribute('tabindex','0');
+        date.setAttribute('aria-label',', 2 days ago, Private group');
+        date.textContent='2d \\u{f0123} \\u{f0124}';
+      }
+      if (kind === 'event') {
+        document.querySelector('[data-action-id="synthetic-event"]')
+          .querySelector('[data-mcomponent="ServerTextArea"]')
+          .textContent='Sun, 17 Jan';
+        document.querySelector('[aria-label="Interested"]')
+          .setAttribute('tabindex','0');
+      }
+      if (kind === 'gallery') {
+        const icon=document.createElement('div');
+        icon.setAttribute('data-mcomponent','TextArea');
+        icon.textContent='\\u{f0123}';
+        document.querySelector('[data-action-id="synthetic-gallery"]')
+          .firstElementChild.firstElementChild.append(icon);
+      }
+      for (const el of document.querySelectorAll(
+        '[data-mcomponent="TextArea"],[data-mcomponent="ServerTextArea"]')) {
+        if (el.querySelector('[data-mcomponent]')) continue;
+        const wrapper=document.createElement('div');
+        const span=document.createElement('span');
+        span.append(...el.childNodes);wrapper.append(span);el.append(wrapper);
+      }
+    })('"""
+        + kind
+        + """')</script>"""
+    )
+
+
 def mobile_layout_fixture(
     *,
     partial: bool = False,

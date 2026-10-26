@@ -46,6 +46,7 @@ from tests.mobile_fixtures import (
     mobile_layout_fixture,
     mobile_loading_shell_fixture,
     mobile_preview_fixture,
+    mobile_rendered_attachment_fixture,
     mobile_split_link_preview_fixture,
 )
 
@@ -1024,6 +1025,9 @@ def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path)
             *relative_dates,
             "Sun, Jan 17",
             "Jan 17, 2027 at 16:00",
+            "Sun, 17 Jan",
+            "Sunday, 17 January 2027 at 4 PM",
+            "Sun at 4 PM",
             "\U000f0123 Yesterday at 4PM",
         ]:
             for label in (
@@ -1101,6 +1105,97 @@ def test_attachment_picture_credit_must_match_the_button_owner(tmp_path, suffix)
         )
         with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
             wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize("kind", ["photo_credit", "event", "gallery"])
+def test_attachment_renderer_metadata_and_icon_ownership(tmp_path, kind):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_rendered_attachment_fixture(kind))
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == (
+                "Synthetic authored message. Full continuation."
+            )
+            assert records[0][1]["mediaCount"] == (5 if kind == "gallery" else 1)
+
+
+@pytest.mark.parametrize("fault", ["words", "emoji", "action"])
+def test_attachment_font_icons_cannot_hide_text_or_actions(tmp_path, fault):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_rendered_attachment_fixture("gallery"))
+        icon = page.locator(
+            '[data-action-id="synthetic-gallery"] [data-mcomponent="TextArea"]'
+        ).first
+        icon.evaluate(
+            """(el, fault) => {
+          if(fault==='words')el.textContent += 'Unowned caption';
+          if(fault==='emoji')el.textContent = '🐈';
+          if(fault==='action')el.setAttribute('data-action-id','unknown-icon-action');
+        }""",
+            fault,
+        )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_attachment_focusable_date_cannot_hide_explicit_actions(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        for attribute in ("data-action-id", "onclick"):
+            page.set_content(mobile_rendered_attachment_fixture("photo_credit"))
+            page.locator('[data-action-id="synthetic-credit"] > div').last.evaluate(
+                "(el, attribute) => el.setAttribute(attribute,'unknown-action')",
+                attribute,
+            )
+            with pytest.raises(
+                LayoutChangedError, match="supported_primary_body_controls"
+            ):
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_attachment_publication_labels_separate_date_from_known_audience(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        for label, accepted in (
+            (", 2 days ago, Private group", True),
+            ("2 days ago, Public group", True),
+            ("Sunday, 17 January 2027 at 10:00 AM", True),
+            (", No date, Private group", False),
+            ("Unknown caption, 2 days ago", False),
+            (", 2 days ago, Unknown caption", False),
+            (", 2 days ago, Private group, Extra text", False),
+        ):
+            page.set_content(mobile_rendered_attachment_fixture("photo_credit"))
+            page.locator('[data-action-id="synthetic-credit"] > div').last.evaluate(
+                "(el, label) => el.setAttribute('aria-label',label)", label
+            )
+            if accepted:
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+            else:
+                with pytest.raises(
+                    LayoutChangedError, match="supported_primary_body_controls"
+                ):
+                    wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_attachment_icon_normalization_preserves_authored_private_glyphs(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        authored = "Synthetic authored \U000f0123 message. Full continuation."
+        html = mobile_rendered_attachment_fixture("gallery").replace(
+            "Synthetic authored message. Full continuation.", authored
+        )
+        page.set_content(html)
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == authored
 
 
 def test_attachment_gallery_overlay_requires_matching_count_and_owned_mosaic(tmp_path):

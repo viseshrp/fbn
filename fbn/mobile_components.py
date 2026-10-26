@@ -32,6 +32,11 @@ BODY_COMPONENTS_SCRIPT = r"""
     };
     const leaves = node => [node, ...descendants(node)].filter(child => child.flags.text
       && !descendants(child).some(other => other.flags.text) && text(child));
+    // Bloks font icons are metadata decorations only inside a positively
+    // bounded attachment. Never strip them from the author's message.
+    const attachmentText = value => clean(value.replace(/\p{Co}/gu, ''));
+    const attachmentLeaves = node => leaves(node)
+      .filter(child => attachmentText(text(child)));
     const recognizeDiscussion = name => {
       for (const node of nodes.filter(node => node.flags.discussion)) {
         claim(node, 'discussion', name);
@@ -39,6 +44,33 @@ BODY_COMPONENTS_SCRIPT = r"""
     };
     const recognizeAttachments = name => {
       const creditPictures = new Set();
+      const eventWeekday = '(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?'
+        + '|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)';
+      const eventMonth = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?'
+        + '|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?'
+        + '|nov(?:ember)?|dec(?:ember)?)';
+      const eventDay = '(?:0?[1-9]|[12][0-9]|3[01])';
+      const eventYear = '(?:[, ]+[12][0-9]{3})?';
+      const eventCalendar = '(?:yesterday|today|tomorrow|'
+        + eventMonth + '\\s+' + eventDay + eventYear + '|'
+        + eventDay + '\\s+' + eventMonth + eventYear + ')';
+      const eventClock = '(?:(?:0?[1-9]|1[0-2])'
+        + '(?::[0-5][0-9])?\\s*(?:am|pm)'
+        + '|(?:[01]?[0-9]|2[0-3]):[0-5][0-9])'
+        + '(?:\\s+(?:UTC|GMT|[ECMP][SD]T))?';
+      const eventDatePattern = new RegExp('^(?:(?:' + eventWeekday + '[, ]+)?'
+        + eventCalendar + '(?:[, ]+(?:at\\s+)?' + eventClock + ')?|'
+        + eventWeekday + '\\s+at\\s+' + eventClock + ')$', 'i');
+      const attachmentDate = value => timestampPattern.test(attachmentText(value))
+        || eventDatePattern.test(attachmentText(value));
+      const publicationLabel = value => {
+        const label = attachmentText(value);
+        if (attachmentDate(label)) return true;
+        const fields = label.split(',').map(clean);
+        if (fields[0] === '') fields.shift();
+        return fields.length === 2 && attachmentDate(fields[0])
+          && /^(?:public(?: group)?|private group|friends|only me)$/i.test(fields[1]);
+      };
       for (const node of nodes) {
         if (!own(node) || ancestors(node.parent,
           owner => owner.flags.text)) continue;
@@ -113,7 +145,7 @@ BODY_COMPONENTS_SCRIPT = r"""
               && ['photo','video'].includes(attachmentControlKind(child.el)))));
         if (surfaces.length !== 1) continue;
         const surface = surfaces[0];
-        const parts = leaves(node).filter(child => !contains(surface, child));
+        const parts = attachmentLeaves(node).filter(child => !contains(surface, child));
         if (parts.length !== 2) continue;
         const [credit, date] = parts;
         if (creditPictures.has(surface)
@@ -123,9 +155,8 @@ BODY_COMPONENTS_SCRIPT = r"""
         const links = descendants(credit).filter(child => child.flags.link);
         if (links.length !== 1 || text(links[0]) !== text(credit)
           || !date.el.hasAttribute('aria-label')
-          || !timestampPattern.test(clean(date.el.getAttribute('aria-label')))
-          || !(timestampPattern.test(text(date))
-            || /^(?:today|yesterday)$/i.test(text(date)))) continue;
+          || !publicationLabel(date.el.getAttribute('aria-label'))
+          || !attachmentDate(text(date))) continue;
         const caption = ancestors(credit, child => child !== node
           && child.flags.action && contains(child, date));
         if (!caption || !contains(node, caption)) continue;
@@ -135,7 +166,10 @@ BODY_COMPONENTS_SCRIPT = r"""
             || child.flags.discussion || child.flags.media
             || (child.flags.link && !contains(credit, child))
             || (child.flags.action && child !== caption
-              && !contains(credit, child))
+              && !contains(credit, child)
+              && !(child === date && !child.el.hasAttribute('data-action-id')
+                && !Array.from(child.el.attributes)
+                  .some(attr => /^on/i.test(attr.name))))
             || (child.kind === 'literal' && text(child)
               && !ancestors(child.parent, owner => owner.flags.text))))) continue;
         claim(surface, 'attachment', name);
@@ -143,18 +177,6 @@ BODY_COMPONENTS_SCRIPT = r"""
       }
       // Event previews have their own image, date/title and response control.
       // Claim that bounded card, never an enclosing body or its authored text.
-      const eventDatePattern = new RegExp(
-        '^(?:(?:mon|tue|wed|thu|fri|sat|sun)'
-        + '(?:day|sday|nesday|rsday|urday)?[, ]+)?'
-        + '(?:yesterday|today|tomorrow|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?'
-        + '|apr(?:il)?'
-        + '|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?'
-        + '|nov(?:ember)?|dec(?:ember)?)\\s+(?:0?[1-9]|[12][0-9]|3[01])'
-        + '(?:[, ]+[12][0-9]{3})?)'
-        + '(?:[, ]+(?:at\\s+)?(?:(?:0?[1-9]|1[0-2])'
-        + '(?::[0-5][0-9])?\\s*(?:am|pm)'
-        + '|(?:[01]?[0-9]|2[0-3]):[0-5][0-9])'
-        + '(?:\\s+(?:UTC|GMT|[ECMP][SD]T))?)?$', 'i');
       const eventDate = value => eventDatePattern.test(
         clean(value.replace(/\p{Co}/gu, '')));
       for (const node of nodes.filter(untypedAction)) {
@@ -179,7 +201,7 @@ BODY_COMPONENTS_SCRIPT = r"""
             || (child.el.nodeType === Node.ELEMENT_NODE
               && child.el.hasAttribute('role')
               && !['button','img'].includes(child.el.getAttribute('role'))))) continue;
-        const parts = leaves(node).filter(child => !contains(button, child));
+        const parts = attachmentLeaves(node).filter(child => !contains(button, child));
         if (parts.length !== 2 || parts.filter(child => eventDate(text(child)))
           .length !== 1) continue;
         if (content.some(child => child.kind === 'literal' && text(child)
@@ -208,9 +230,9 @@ BODY_COMPONENTS_SCRIPT = r"""
             || child.flags.control || child.flags.menu || child.flags.discussion
             || child.flags.link || (child.flags.button && child !== button)
             || (child.flags.action && child !== button && !child.flags.image)
-            || (text(child) && !contains(button, child)
+            || (attachmentText(text(child)) && !contains(button, child)
               && !contains(child, button)))) break;
-          if (leaves(gallery).some(child => !contains(button, child))) break;
+          if (attachmentLeaves(gallery).some(child => !contains(button, child))) break;
           claim(button, 'attachment', name);
           claim(gallery, 'attachment', name);
           break;

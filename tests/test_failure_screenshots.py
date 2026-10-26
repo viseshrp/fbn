@@ -143,6 +143,27 @@ def test_structural_snapshot_retains_only_fixed_control_categories(kind):
     assert json.loads(data)["nodes"][0]["control"] == kind
 
 
+def test_structural_snapshot_exposes_only_focus_sign_and_handler_presence():
+    for value in ("absent", "negative", "zero", "positive", "other"):
+        data = screenshots._safe_structure(
+            {
+                "nodes": [
+                    {
+                        "parent": -1,
+                        "tag": "DIV",
+                        "focus": value,
+                        "hasHandler": True,
+                        "handler": "SYNTHETIC_SECRET",
+                    }
+                ],
+                "truncated": False,
+            }
+        )
+        node = json.loads(data)["nodes"][0]
+        assert node["focus"] == value and node["hasHandler"] is True
+        assert "SYNTHETIC_SECRET" not in data.decode()
+
+
 def test_structural_snapshot_is_node_bounded():
     data = screenshots._safe_structure(
         {"nodes": [{"parent": -1, "tag": "BODY"}] * 1001, "truncated": False}

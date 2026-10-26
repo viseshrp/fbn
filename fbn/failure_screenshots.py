@@ -58,6 +58,7 @@ _PHASES = frozenset(
     }
 )
 _VALUES = {
+    "focus": frozenset({"absent", "negative", "zero", "positive", "other"}),
     "control": frozenset(
         {
             "photo",
@@ -157,7 +158,7 @@ def _safe_structure(value: object) -> bytes:
                 if item is None or (isinstance(item, str) and item in allowed)
                 else "other"
             )
-        for key in ("visible", "hasAction", "hasLabel"):
+        for key in ("visible", "hasAction", "hasLabel", "hasHandler"):
             node[key] = source.get(key) is True
         count = source.get("textChars")
         node["textChars"] = min(max(count, 0), 100_000) if type(count) is int else 0

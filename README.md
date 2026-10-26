@@ -180,6 +180,12 @@ Event response labels may include their selected state. A credited profile-pictu
 control must name the adjacent credit exactly. A photo-album `+N more` overlay
 must match its visible count inside a media-only mosaic. None of these attachment
 controls is clicked, and their labels never become notification text.
+Known attachment dates can be focusable without being actions. Font-icon glyphs
+are ignored only within an otherwise verified attachment; authored message text
+and ordinary Unicode emoji are unchanged. Explicit handlers and unknown actions
+in date metadata still stop the check.
+Accessible publication labels are split into a validated date and, when present,
+a known audience label. Unknown prefixes, suffixes or extra fields are rejected.
 Inline formatting and repeated paragraphs are preserved. Attachment previews,
 poll choices, sale-card actions, avatars, and interface images are not message
 text. Media-only links require matching stable attachment identifiers rather

@@ -112,6 +112,11 @@ Facebook or external notification services.
    Counted album overlays require a media-only mosaic and matching visible and
    accessible counts. Event response labels normalize selected/unselected state;
    no attachment response, picture or album control is clicked.
+   Bloks private-use font icons are decorations only inside those bounded
+   attachments. Focus-only timestamp metadata is permitted, but explicit action
+   IDs/handlers remain unsupported. Message extraction never strips these glyphs.
+   Publication accessibility labels may combine a date and a fixed audience
+   category. Parse those fields separately; arbitrary extra fields do not qualify.
    Event cards require actual media, exactly one recognized response/open control,
    a date/title pair, and no other controls, links or unowned actions/text. These
    attachment claims precede expander discovery, so attachment captions/buttons

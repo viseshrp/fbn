@@ -266,6 +266,10 @@ STRUCTURE_SNAPSHOT_SCRIPT = r"""
     : allowed[kind].includes(value) ? value : 'other';
   const nodes = [], queue = document.body ? [[document.body,-1,0]] : [];
   const roles = window.__fbnMobileBlockRoles;
+  const focus = node => !node.hasAttribute('tabindex') ? 'absent'
+    : !/^-?\d+$/.test(node.getAttribute('tabindex')) ? 'other'
+      : Number(node.getAttribute('tabindex')) < 0 ? 'negative'
+        : Number(node.getAttribute('tabindex')) === 0 ? 'zero' : 'positive';
   let cursor=0;
   while (cursor < queue.length && nodes.length < 1000) {
     const [node,parent,depth] = queue[cursor++];
@@ -275,6 +279,8 @@ STRUCTURE_SNAPSHOT_SCRIPT = r"""
       type:safe(node.getAttribute('data-type'),'type'),
       block:safe(roles?.get(node) || null,'block'),
       control:attachmentControlKind(node),
+      focus:focus(node),
+      hasHandler:Array.from(node.attributes).some(attr => /^on/i.test(attr.name)),
       hasAction:node.hasAttribute('data-action-id'),hasLabel:node.hasAttribute('aria-label'),
       visible:node.checkVisibility({contentVisibilityAuto:true,
         visibilityProperty:true,opacityProperty:true}),
