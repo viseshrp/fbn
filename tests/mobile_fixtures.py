@@ -543,6 +543,44 @@ def mobile_header_assembly_fixture(
     )
 
 
+def mobile_compound_fixture(
+    *,
+    partial: bool = False,
+    include_boundary: bool = False,
+    intermediate_footer: bool = False,
+) -> str:
+    """Two real sibling post units; only the last has a rendered footer."""
+    stories = [
+        ("302", "Synthetic First", "First body. Full continuation."),
+        ("301", "Synthetic Second", "Second body."),
+    ]
+    if include_boundary:
+        stories.append(("300", "Synthetic Boundary", "Old body."))
+    html = mobile_fixture(stories).replace("10:00 AM", "11:00 AM", 1)
+    if partial:
+        html = html.replace(
+            '<div data-mcomponent="ServerTextArea">'
+            "First body. Full continuation.</div>",
+            '<div data-mcomponent="TextArea" data-action-id="first-preview" '
+            "onclick=\"this.textContent='First body. Full continuation.'\">"
+            "First body. <span>...See more</span></div>",
+            1,
+        )
+    return (
+        html
+        + """<script>
+      const first=document.querySelector('[data-story="302"]');
+      const second=document.querySelector('[data-story="301"]');
+      if(!__INTERMEDIATE_FOOTER__)
+        first.querySelector('[aria-label="Make a comment"]').parentElement.remove();
+      first.lastElementChild.remove();
+      second.firstElementChild.remove();
+      while(second.firstChild)first.append(second.firstChild);
+      second.remove();
+    </script>"""
+    ).replace("__INTERMEDIATE_FOOTER__", json.dumps(intermediate_footer))
+
+
 def app_prompt_fixture(*, known: bool = True, delay_ms: int = 0) -> str:
     """A blocking app prompt; no navigation or account action is allowed."""
     heading = "Facebook is better on the app" if known else "Unknown blocking dialog"

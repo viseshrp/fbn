@@ -1,5 +1,12 @@
 [
   {
+    "case": "sibling_posts_share_a_feed_wrapper_without_intermediate_footer",
+    "evidence_date": "2026-10-26",
+    "expected_blocks": ["header", "message", "attachment", "header", "message", "footer"],
+    "outcome": "parse_every_closed_sibling_unit_and_verify_its_own_copied_permalink_before_atomic_delivery",
+    "tests": ["test_compound_wrapper_keeps_both_posts_and_their_own_menus", "test_compound_wrapper_rejects_unowned_parts", "test_compound_wrapper_is_not_a_unique_permalink", "test_compound_wrapper_delivery_is_atomic_and_survives_reopen"]
+  },
+  {
     "case": "complete_headers_with_unresolved_menu_ownership",
     "evidence_date": "2026-10-26",
     "expected_blocks": ["header", "message"],

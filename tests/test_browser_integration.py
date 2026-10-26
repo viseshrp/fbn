@@ -42,6 +42,7 @@ from fbn.state import SQLiteStateRepository
 from tests.dom_variations import DOM_VARIATION_SCRIPT
 from tests.mobile_fixtures import (
     app_prompt_fixture,
+    mobile_compound_fixture,
     mobile_controlled_attachment_fixture,
     mobile_fixture,
     mobile_header_assembly_fixture,
@@ -4386,6 +4387,175 @@ def test_header_assembly_waits_for_coherent_dom_without_reloading(tmp_path):
             assert records[0][1]["author"] == "Synthetic Outer"
             assert records[0][1]["text"] == "Synthetic authored body."
         assert page.url == "about:blank" and page.evaluate("activePost === null")
+
+
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize("intermediate_footer", [False, True])
+def test_compound_wrapper_keeps_both_posts_and_their_own_menus(
+    tmp_path, partial, intermediate_footer
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_compound_fixture(
+                partial=partial, intermediate_footer=intermediate_footer
+            )
+        )
+        assert wait_for_mobile_page(page, timeout_seconds=1) is PageState.FEED
+        with mobile_records(page) as records:
+            assert len(records) == 2
+            assert [payload["author"] for _, payload in records] == [
+                "Synthetic First",
+                "Synthetic Second",
+            ]
+            for index, (menu, payload) in enumerate(records):
+                assert copy_post_link(
+                    page, menu, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+                ).endswith(f"/{302 - index}/")
+                if payload["partial"]:
+                    payload = expand_post_preview(
+                        page, menu, payload, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+                    )
+                assert payload["text"] == (
+                    "First body. Full continuation." if index == 0 else "Second body."
+                )
+        assert page.evaluate("activePost === null")
+
+
+@pytest.mark.parametrize("fault", ["author", "date", "control", "raw", "footer"])
+def test_compound_wrapper_rejects_unowned_parts(tmp_path, fault):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_compound_fixture())
+        page.evaluate(
+            """fault=>{
+          const card=document.querySelector('[data-story]');
+          const header=card.children[1];
+          if(fault==='author')header.querySelector('[role=link]').textContent='Other';
+          if(fault==='date')header.querySelector('[aria-label]')
+            .setAttribute('aria-label','Unknown date');
+          if(fault==='control'){
+            const button=document.createElement('button');button.textContent='Unknown';
+            card.children[2].append(button);
+          }
+          if(fault==='raw')card.children[2].append('Unowned synthetic text');
+          if(fault==='footer') {
+            card.querySelector('[aria-label="Make a comment"]').remove();
+          }
+        }""",
+            fault,
+        )
+        with pytest.raises(LayoutChangedError):
+            wait_for_mobile_page(page, timeout_seconds=0.05)
+
+
+def test_compound_wrapper_is_not_a_unique_permalink(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_compound_fixture())
+        with pytest.raises(RenderTimeoutError):
+            wait_for_mobile_page(page, timeout_seconds=0.05, permalink=True)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize("wrong_destination", [None, "302", "301"])
+@pytest.mark.parametrize("intermediate_footer", [False, True])
+def test_compound_wrapper_delivery_is_atomic_and_survives_reopen(
+    tmp_path, partial, wrong_destination, intermediate_footer
+):
+    from types import SimpleNamespace
+
+    from fbn.models import Post
+    from fbn.monitor import MonitorService
+
+    group = parse_group_ref("contract-group")
+    notices = []
+    stories = {
+        "302": ("302", "Synthetic First", "First body. Full continuation."),
+        "301": ("301", "Synthetic Second", "Second body."),
+        "300": ("300", "Synthetic Boundary", "Old body."),
+    }
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            if "/share/" in route.request.url:
+                number = route.request.url.rstrip("/").split("/")[-1]
+                story = stories[number]
+                if number == wrong_destination:
+                    story = (*story[:2], "Different synthetic body.")
+                html = mobile_fixture([story])
+                if number == "302":
+                    html = html.replace("10:00 AM", "11:00 AM")
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    f"'/groups/contract-group/posts/{number}/')</script>"
+                )
+            else:
+                html = mobile_compound_fixture(
+                    partial=partial,
+                    include_boundary=True,
+                    intermediate_footer=intermediate_footer,
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        path = tmp_path / "state.sqlite3"
+        policy = ScanPolicy(
+            sample_count=3,
+            max_scrolls=1,
+            settle_seconds=0,
+            navigation_timeout_seconds=5,
+        )
+        with SQLiteStateRepository(path) as state:
+            state.observe(
+                group,
+                [
+                    Post(
+                        group.key,
+                        "300",
+                        group.url + "posts/300/",
+                        "Old body.",
+                        "Synthetic Boundary",
+                        datetime.now(timezone.utc),
+                        0,
+                    )
+                ],
+            )
+            service = MonitorService(
+                source, state, SimpleNamespace(send=notices.append)
+            )
+            if wrong_destination:
+                with pytest.raises(LayoutChangedError):
+                    service.run_once(group, policy)
+                assert not notices and not state.pending(group)
+                assert state.notification_boundary(group) == "300"
+                assert (
+                    state._connection.execute("SELECT COUNT(*) FROM posts").fetchone()[
+                        0
+                    ]
+                    == 1
+                )
+                return
+            result = service.run_once(group, policy)
+            assert result.delivered == 2 and result.pending == 0
+            assert len(notices) == 1
+            assert "First body. Full continuation." in notices[0].body
+            assert "Second body." in notices[0].body
+            assert "Quoted body" not in notices[0].body
+            assert "Nested reply" not in notices[0].body
+        with SQLiteStateRepository(path) as state:
+            result = MonitorService(
+                source, state, SimpleNamespace(send=notices.append)
+            ).run_once(group, policy)
+            assert result.delivered == result.pending == 0
+            assert len(notices) == 1
 
 
 def test_header_assembly_diagnostics_do_not_include_content(tmp_path, monkeypatch):

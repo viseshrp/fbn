@@ -167,7 +167,19 @@ arrives between the earlier state check and that deadline snapshot, the scan
 aborts for backoff; it neither accepts a late view against stale state nor
 reports a layout failure with no missing components.
 
-Competing post menus are never resolved by position. A separate header-assembly
+The outer feed wrapper is not a post boundary. The compound-unit recognizer
+requires distinct sibling metadata-only headers in document order, a supported
+nonempty body between every pair, no unowned prefix or controls, and a complete
+final action footer. A following validated header bounds an earlier unit even
+when its footer is not rendered. Empty units, nested headers, unknown controls
+and incomplete action rows cannot become this shape. This grammar is feed-only;
+permalinks still require exactly one primary post and its own footer.
+Every source unit retains its own menu and expansion region. Acquisition copies
+that menu's link before expansion and independently requires exact complete
+message, author, publication and same-group canonical identity on the destination.
+One failed unit aborts observation and delivery for the entire acquisition.
+
+Unresolved competing menus are never resolved by picking one. A header-assembly
 classifier validates every header's author/date and closed metadata ownership,
 then the first complete post action row and all remaining body ownership. Only
 separate headers with no unknown controls, unowned text, incomplete footers or

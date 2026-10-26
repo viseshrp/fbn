@@ -147,4 +147,71 @@ HEADER_COMPONENT_SCRIPT = r"""
     for (const header of headers) roles.set(header.root, 'header');
     return true;
   };
+
+  // A feed wrapper is not a post boundary. Some chronological-feed wrappers
+  // hold several sibling header/body units and paint only the last footer.
+  // These are acquisition candidates: every unit still needs an independently
+  // copied, same-group permalink and exact complete destination comparison.
+  const recognizeCompoundPosts = (card, menus) => {
+    if (menus.length < 2 || menus.length > 8) return null;
+    const sections = sectionsFor(card);
+    const headers = menus.map(menu => ({menu, header:branch(card, menu)}));
+    if (headers.some(unit => !unit.header)
+      || new Set(headers.map(unit => unit.header)).size !== menus.length) {
+      return null;
+    }
+    let previous = -1;
+    for (const unit of headers) {
+      unit.index = sections.indexOf(unit.header);
+      unit.headerResult = recognizeHeader(unit.header, unit.menu);
+      if (unit.index <= previous
+        || !headerMetadataOnly(unit.header, unit.menu, unit.headerResult)) {
+        return null;
+      }
+      previous = unit.index;
+    }
+    const prefix = parseBody(sections.slice(0, headers[0].index));
+    if (prefix.unsupported || prefix.text || prefix.mediaKeys.length
+      || prefix.bodyControlCount || prefix.partial
+      || sections.slice(0, headers[0].index).some(section =>
+        section.matches('img,video,[role="img"]')
+        || section.querySelector('img,video,[role="img"]'))) return null;
+    for (let index = 0; index < headers.length; index++) {
+      const unit = headers[index], next = headers[index + 1];
+      unit.start = unit.index + 1;
+      const footer = recognizeFooter(sections, unit.start);
+      if (next) {
+        if (footer.status === 'incomplete') return null;
+        const ownFooter = footer.status === 'recognized' && footer.index < next.index;
+        unit.end = ownFooter ? footer.index : next.index;
+        unit.footer = ownFooter ? sections[footer.index] : null;
+        if (ownFooter) {
+          const gap = parseBody(sections.slice(footer.index + 1, next.index));
+          if (gap.unsupported || gap.text || gap.mediaCount
+            || gap.bodyControlCount || gap.partial) return null;
+        }
+      } else {
+        if (footer.status !== 'recognized' || footer.index < unit.start) {
+          return null;
+        }
+        unit.end = footer.index;
+        unit.footer = sections[footer.index];
+      }
+      unit.sections = sections;
+      unit.body = parseBody(sections.slice(unit.start, unit.end));
+      if (unit.body.unsupported || (!unit.body.text && !unit.body.mediaCount)
+        || unit.body.partial && unit.body.expanders.length !== 1) return null;
+    }
+    return headers;
+  };
+
+  const postUnitMenus = card => {
+    const initial = primaryMenus(card);
+    return Array.from(card.querySelectorAll(menuSelector)).filter(menu => {
+      if (!visible(menu) || menu.closest(excludedSelector)) return false;
+      if (initial.includes(menu)) return true;
+      const header = branch(card, menu);
+      return header && headerMetadataOnly(header, menu, recognizeHeader(header, menu));
+    });
+  };
 """

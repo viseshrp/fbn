@@ -197,7 +197,14 @@ text. Media-only links require matching stable attachment identifiers rather
 than image counts. Link verification waits for the same document to finish
 rendering and still requires exact complete message equality and matching author,
 publication, group, and canonical post identity.
-Competing menus never select a post. A card with separate closed author/date
+Feed wrappers can contain several posts. A named compound-unit recognizer
+requires separate closed author/date headers and an independently supported,
+nonempty body for each. The next validated sibling header may bound an earlier
+unit before a footer is rendered; the last unit still needs its own complete
+action row. Each unit is expanded separately and must match its own copied
+same-group permalink, including its complete message, author and publication.
+Comments, replies and bounded shared-post regions remain excluded.
+Unresolved competing menus never select a post. A card with separate author/date
 headers, a supported body and a complete action footer can qualify only for
 bounded render recovery after its readiness deadline. Every candidate must be
 accounted for, with no other missing components or unknown header/body controls.

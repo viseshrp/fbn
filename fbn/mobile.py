@@ -371,6 +371,7 @@ def _log_layout_snapshot(
         valid_posts=result.get("postCount", 0),
         retryable_header_cards=result.get("headerAssemblyCount", 0),
         unclassified_menu_cards=result.get("unclassifiedMenuCards", 0),
+        compound_wrappers=result.get("compoundCardCount", 0),
         **terminal_signals,
         **structure,
     )
