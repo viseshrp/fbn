@@ -9,6 +9,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Recognize closed author/date header assemblies with competing menus as
+  non-accepting render failures eligible for the existing bounded in-check retry.
+  Unknown headers/controls, incomplete footers and identity failures still stop.
+- Record post-menu presence and classified/unclassified header-card counts in
+  private structural diagnostics without retaining names, labels or action IDs.
 - Ownership-preserving DOM normalization, named body/header/footer recognizers,
   independent `PostView` validation and opt-in same-DOM reference comparison.
 - Verified attachment variants for selected/unselected event responses, credited

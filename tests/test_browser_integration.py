@@ -22,6 +22,7 @@ from fbn.exceptions import (
     AccountActionRequiredError,
     AuthenticationRequiredError,
     LayoutChangedError,
+    RenderTimeoutError,
     TransientNavigationError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
@@ -43,6 +44,7 @@ from tests.mobile_fixtures import (
     app_prompt_fixture,
     mobile_controlled_attachment_fixture,
     mobile_fixture,
+    mobile_header_assembly_fixture,
     mobile_layout_fixture,
     mobile_loading_shell_fixture,
     mobile_preview_fixture,
@@ -2781,7 +2783,7 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
 
 
 @pytest.mark.parametrize(
-    "failure_kind", ["initial", "feed_preview", "permalink_preview"]
+    "failure_kind", ["initial", "feed_preview", "permalink_preview", "header_assembly"]
 )
 @pytest.mark.parametrize("failed_attempts", [1, 2])
 def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
@@ -2805,9 +2807,9 @@ def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
     def bounded_loading_readiness(page, **kwargs):
         # Shorten only the blank-shell readiness wait, never navigation to it.
         if (
-            failure_kind == "initial"
+            failure_kind in {"initial", "header_assembly"}
             and len(attempts) <= failed_attempts
-            and kwargs.get("permalink")
+            and (failure_kind == "header_assembly" or kwargs.get("permalink"))
         ):
             kwargs["timeout_seconds"] = 0.1
         return original_readiness(page, **kwargs)
@@ -2854,6 +2856,11 @@ def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
                 html = mobile_fixture(stories).replace("10:00 AM", "11:00 AM", 1)
                 if failure_kind == "feed_preview":
                     html = preview(html)
+                elif (
+                    failure_kind == "header_assembly"
+                    and len(attempts) <= failed_attempts
+                ):
+                    html = mobile_header_assembly_fixture()
             route.fulfill(status=200, content_type="text/html", body=html)
 
         context.route("**/*", serve)
@@ -4246,6 +4253,158 @@ def test_headless_browser_uses_configured_timezone(tmp_path: Path) -> None:
             page.close()
 
     assert timezone_id == "America/New_York"
+
+
+@pytest.mark.parametrize("headers", [2, 3])
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("position", ["before_body", "after_body"])
+def test_header_assembly_never_accepts_a_competing_menu(
+    tmp_path, headers, permalink, position
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_header_assembly_fixture(headers=headers, position=position)
+        )
+        with pytest.raises(RenderTimeoutError, match="header assembly") as failure:
+            wait_for_mobile_page(page, timeout_seconds=0.05, permalink=permalink)
+        assert failure.value._fbn_failure_phase == "page_render"
+        assert failure.value._fbn_render_classified is True
+        assert page.url == "about:blank"
+        assert page.evaluate("activePost === null")
+
+
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "same_header_menu",
+        "wrong_author",
+        "unknown_date",
+        "extra_timestamp",
+        "header_control",
+        "header_input",
+        "header_text",
+        "header_media",
+        "header_action",
+        "body_control",
+        "body_raw_text",
+        "prefix_text",
+        "missing_footer",
+        "partial_footer",
+        "nested_header",
+        "too_many_headers",
+    ],
+)
+def test_header_assembly_cannot_disguise_unknown_ownership(tmp_path, permalink, fault):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_header_assembly_fixture(
+                headers=9 if fault == "too_many_headers" else 2
+            )
+        )
+        page.evaluate(
+            """fault => {
+          const card=document.querySelector('[data-story]');
+          const header=card.querySelector('[data-header-assembly]');
+          const body=Array.from(card.querySelectorAll(
+            '[data-mcomponent="ServerTextArea"]'))
+            .find(node=>node.textContent==='Synthetic authored body.').parentElement;
+          const add=(root,tag,text)=>{const node=document.createElement(tag);
+            node.textContent=text;root.append(node);return node;};
+          const date=header.querySelector('[aria-label]');
+          if(fault==='same_header_menu') {
+            card.children[1].append(header.querySelector('button'));header.remove();
+          } else if(fault==='wrong_author') {
+            header.querySelector('[role=link]').textContent=
+              'Different synthetic author';
+          } else if(fault==='unknown_date') {
+            date.setAttribute('aria-label','Unknown date');
+          }
+          else if(fault==='extra_timestamp') header.append(date.cloneNode(true));
+          else if(fault==='header_control') add(header,'button','Unknown action');
+          else if(fault==='header_input') add(header,'input','');
+          else if(fault==='header_action') {
+            add(date,'span','').setAttribute('data-action-id','unknown');
+          }
+          else if(fault==='header_text') {
+            add(header,'div','Unowned synthetic header text')
+              .setAttribute('data-mcomponent','TextArea');
+          } else if(fault==='header_media') {
+            const image=add(header,'img','');image.style='width:16px;height:16px';
+          } else if(fault==='body_control') add(body,'button','Unknown action');
+          else if(fault==='body_raw_text') body.append('Unclaimed synthetic text');
+          else if(fault==='prefix_text') {
+            const section=document.createElement('div');
+            section.setAttribute('data-mcomponent','MContainer');
+            add(section,'div','Unowned synthetic prefix')
+              .setAttribute('data-mcomponent','TextArea');
+            card.insertBefore(section,card.children[1]);
+          } else if(fault==='missing_footer') {
+            card.querySelector('[aria-label="Make a comment"]').parentElement.remove();
+          } else if(fault==='partial_footer') {
+            card.querySelector('[aria-label="Make a comment"]').remove();
+          }
+          else if(fault==='nested_header') body.prepend(header);
+        }""",
+            fault,
+        )
+        with pytest.raises(LayoutChangedError, match="unique_primary_menu"):
+            wait_for_mobile_page(page, timeout_seconds=0.05, permalink=permalink)
+        assert page.evaluate("activePost === null")
+
+
+@pytest.mark.parametrize(
+    "terminal,error",
+    [
+        ('<input name="email">', AuthenticationRequiredError),
+        ('<input name="approvals_code">', AccountActionRequiredError),
+        ("<main>Content isn't available</main>", AccessDeniedError),
+        ("<main>Temporarily blocked</main>", TransientNavigationError),
+    ],
+)
+def test_header_assembly_never_overrides_terminal_page_state(tmp_path, terminal, error):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_header_assembly_fixture() + terminal)
+        with pytest.raises(error) as failure:
+            wait_for_mobile_page(page, timeout_seconds=0.05)
+        assert not isinstance(failure.value, RenderTimeoutError)
+
+
+def test_header_assembly_waits_for_coherent_dom_without_reloading(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_header_assembly_fixture())
+        page.evaluate(
+            "setTimeout(()=>document.querySelectorAll('[data-header-assembly]').forEach(node=>node.remove()),30)"
+        )
+        assert wait_for_mobile_page(page, timeout_seconds=5) is PageState.FEED
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            assert records[0][1]["author"] == "Synthetic Outer"
+            assert records[0][1]["text"] == "Synthetic authored body."
+        assert page.url == "about:blank" and page.evaluate("activePost === null")
+
+
+def test_header_assembly_diagnostics_do_not_include_content(tmp_path, monkeypatch):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type("Log", (), {"warning": lambda self, message, **kw: logged.append(kw)})(),
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_header_assembly_fixture())
+        with pytest.raises(RenderTimeoutError):
+            wait_for_mobile_page(page, timeout_seconds=0.05)
+    assert logged[-1]["retryable_header_cards"] == 1
+    assert logged[-1]["unclassified_menu_cards"] == 0
+    assert "Synthetic" not in str(logged) and "facebook.com" not in str(logged)
 
 
 def test_persistent_profile_retains_facebook_cookie_across_headless_relaunch(

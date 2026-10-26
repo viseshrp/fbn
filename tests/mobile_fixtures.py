@@ -516,6 +516,33 @@ def mobile_layout_fixture(
     return html
 
 
+def mobile_header_assembly_fixture(
+    *, headers: int = 2, position: str = "before_body"
+) -> str:
+    """Synthetic unowned but complete headers; never select a competing menu."""
+    html = mobile_fixture([("301", "Synthetic Outer", "Synthetic authored body.")])
+    rows = []
+    for index in range(1, headers):
+        owner = f"Synthetic Header {index}"
+        rows.append(
+            '<div data-mcomponent="MContainer" data-header-assembly="true">'
+            '<div data-mcomponent="ServerTextArea">'
+            f'<span role="link">{owner}</span></div>'
+            '<div data-mcomponent="ServerTextArea" '
+            'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h</div>'
+            f'<button role="button" aria-label="More options for {owner}" '
+            f'data-action-id="assembly-{index}">...</button></div>'
+        )
+    return html + (
+        '<script>const assemblyCard=document.querySelector("[data-story]");'
+        "const assemblyAnchor=assemblyCard.children["
+        + ("3" if position == "after_body" else "2")
+        + "];assemblyAnchor.insertAdjacentHTML('beforebegin',"
+        + json.dumps("".join(rows))
+        + ");</script>"
+    )
+
+
 def app_prompt_fixture(*, known: bool = True, delay_ms: int = 0) -> str:
     """A blocking app prompt; no navigation or account action is allowed."""
     heading = "Facebook is better on the app" if known else "Unknown blocking dialog"

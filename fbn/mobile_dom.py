@@ -51,6 +51,7 @@ MOBILE_SCAN_SCRIPT = (
   const roles = window.__fbnMobileBlockRoles = new WeakMap();
   const missing = new Set();
   let candidateCount = 0;
+  let headerAssemblyCount = 0, unclassifiedMenuCards = 0;
   if (roots.length !== 1) missing.add('unique_mobile_scroller');
   const branch = (root, node) => presentationChildren(root)
     .find(child => child === node || child.contains(node)) || null;
@@ -105,7 +106,11 @@ MOBILE_SCAN_SCRIPT = (
       const primary = primaryMenus(card);
       if (!primary.length) continue;
       candidateCount++;
-      if (primary.length !== 1) { missing.add('unique_primary_menu'); continue; }
+      if (primary.length !== 1) {
+        if (recognizeHeaderAssembly(card, primary)) headerAssemblyCount++;
+        else unclassifiedMenuCards++;
+        missing.add('unique_primary_menu'); continue;
+      }
       const menu = primary[0];
       const header = branch(card, menu);
       roles.set(header, 'header');
@@ -168,6 +173,7 @@ MOBILE_SCAN_SCRIPT = (
     containerCount: candidateCount, authorCount: records.length,
     storyMessageCount: records.length, postCount: records.length,
     hasFeed: roots.length === 1, missing: Array.from(missing),
+    headerAssemblyCount, unclassifiedMenuCards,
   };
   return includeContent ? {...counts, records} : counts;
 }
@@ -284,6 +290,7 @@ STRUCTURE_SNAPSHOT_SCRIPT = r"""
       focus:focus(node),
       hasHandler:Array.from(node.attributes).some(attr => /^on/i.test(attr.name)),
       hasAction:node.hasAttribute('data-action-id'),hasLabel:node.hasAttribute('aria-label'),
+      isPostMenu:node.matches('[role="button"][aria-label^="More options for "]'),
       visible:node.checkVisibility({contentVisibilityAuto:true,
         visibilityProperty:true,opacityProperty:true}),
       textChars: /^(?:Server)?TextArea$/.test(component || '')

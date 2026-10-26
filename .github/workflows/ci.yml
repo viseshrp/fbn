@@ -101,7 +101,8 @@ jobs:
   browser-integration:
     name: Sanitized local browser integration
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The full suite plus a cold Chromium/dependency install can exceed 20m.
+    timeout-minutes: 30
 
     steps:
       - name: Check out source

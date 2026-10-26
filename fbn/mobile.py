@@ -369,6 +369,8 @@ def _log_layout_snapshot(
         visible_scrollers=result.get("feedRootCount", 0),
         primary_candidates=result.get("itemCount", 0),
         valid_posts=result.get("postCount", 0),
+        retryable_header_cards=result.get("headerAssemblyCount", 0),
+        unclassified_menu_cards=result.get("unclassifiedMenuCards", 0),
         **terminal_signals,
         **structure,
     )
@@ -400,11 +402,20 @@ def _is_loading_shell(result: dict[str, Any], structure: dict[str, Any]) -> bool
 
 
 def _raise_render_timeout(
-    phase: str = "page_render", *, loading_shell: bool = True
+    phase: str = "page_render",
+    *,
+    loading_shell: bool = True,
+    header_assembly: bool = False,
 ) -> None:
     # The scheduler owns bounded seconds-scale retries within this check.
     # Do not reload, reopen the link, or reset either action/scan deadline here.
-    surface = "blank loading shell" if loading_shell else "supported page"
+    surface = (
+        "recognized header assembly"
+        if header_assembly
+        else "blank loading shell"
+        if loading_shell
+        else "supported page"
+    )
     error = RenderTimeoutError(
         f"Mobile page rendering timed out on a {surface}; "
         "no posts were accepted and no immediate retry was attempted."
@@ -412,6 +423,26 @@ def _raise_render_timeout(
     _annotate_failure(error, phase)
     error._fbn_render_classified = True
     raise error
+
+
+def _is_header_assembly(result: dict[str, Any]) -> bool:
+    """Known metadata/body/footer evidence permits recovery, never acceptance."""
+    names = (
+        "feedRootCount",
+        "itemCount",
+        "postCount",
+        "headerAssemblyCount",
+        "unclassifiedMenuCards",
+    )
+    if any(type(result.get(name)) is not int or result[name] < 0 for name in names):
+        return False
+    return (
+        result.get("missing") == ["unique_primary_menu"]
+        and result["feedRootCount"] == 1
+        and result["headerAssemblyCount"] > 0
+        and result["unclassifiedMenuCards"] == 0
+        and result["itemCount"] == result["postCount"] + result["headerAssemblyCount"]
+    )
 
 
 def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
@@ -454,6 +485,8 @@ def _inspect_failed_render(
             raise _layout_failure("expanded_primary_url_unchanged", phase=phase)
         if _is_loading_shell(result, structure):
             _raise_render_timeout(phase)
+        if _is_header_assembly(result):
+            _raise_render_timeout(phase, loading_shell=False, header_assembly=True)
     except Exception as error:
         _annotate_failure(error, phase)
         error._fbn_render_classified = True

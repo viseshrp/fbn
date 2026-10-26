@@ -164,6 +164,18 @@ def test_structural_snapshot_exposes_only_focus_sign_and_handler_presence():
         assert "SYNTHETIC_SECRET" not in data.decode()
 
 
+@pytest.mark.parametrize("value", [True, False, None, "SYNTHETIC_SECRET"])
+def test_structural_snapshot_records_only_post_menu_presence(value):
+    data = screenshots._safe_structure(
+        {
+            "nodes": [{"parent": -1, "isPostMenu": value, "label": "SYNTHETIC_SECRET"}],
+            "truncated": False,
+        }
+    )
+    assert json.loads(data)["nodes"][0]["isPostMenu"] is (value is True)
+    assert b"SYNTHETIC_SECRET" not in data
+
+
 def test_structural_snapshot_is_node_bounded():
     data = screenshots._safe_structure(
         {"nodes": [{"parent": -1, "tag": "BODY"}] * 1001, "truncated": False}

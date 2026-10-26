@@ -167,6 +167,19 @@ arrives between the earlier state check and that deadline snapshot, the scan
 aborts for backoff; it neither accepts a late view against stale state nor
 reports a layout failure with no missing components.
 
+Competing post menus are never resolved by position. A separate header-assembly
+classifier validates every header's author/date and closed metadata ownership,
+then the first complete post action row and all remaining body ownership. Only
+separate headers with no unknown controls, unowned text, incomplete footers or
+other missing evidence qualify. Its count must account for every invalid card.
+This is a non-accepting render state: the card produces no record, and readiness
+still waits for an actually coherent DOM. At the existing deadline it raises
+`RenderTimeoutError` for the same bounded scheduler-owned fresh acquisitions.
+Same-header competing menus and unknown metadata remain `LayoutChangedError`.
+No ambiguity relaxes source/destination identity or full-message verification.
+Failure diagnostics retain only aggregate classified/unclassified card counts
+and a Boolean post-menu marker, never author/date strings, labels or action IDs.
+
 The scheduler owns bounded recovery within a scheduled check. A classified
 `RenderTimeoutError` permits at most three additional acquisitions after 5, 10,
 and 20 seconds. Each closes its failed context before the interruptible delay

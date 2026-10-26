@@ -60,4 +60,91 @@ HEADER_COMPONENT_SCRIPT = r"""
     }
     return {status: 'recognized', owner, timestamp: distinctTimestamps[0]};
   };
+
+  // This proves a known incomplete assembly, not which menu is the main one.
+  // Nothing from such a card is accepted; only a fresh acquisition may recover.
+  const headerMetadataOnly = (root, menu, result) => {
+    if (result.status !== 'recognized') return false;
+    const author = Array.from(root.querySelectorAll('[role="link"],a'))
+      .find(node => visible(node) && clean(node.innerText) === result.owner);
+    const buttons = Array.from(root.querySelectorAll('button,[role="button"]'))
+      .filter(visible);
+    const avatars = buttons.filter(node => node !== menu
+      && attachmentControlKind(node) === 'credit_picture'
+      && [result.owner + "'s picture", result.owner + '\u2019s picture',
+        result.owner + ' profile picture']
+          .includes(clean(node.getAttribute('aria-label')))
+      && !clean(node.innerText).replace(/\p{Co}/gu, '')
+      && node.querySelector('img,[data-mcomponent="ImageArea"],'
+        + '[data-mcomponent="ServerImageArea"]'));
+    if (buttons.some(node => node !== menu && !avatars.includes(node))
+      || root.querySelector('input,select,textarea,[contenteditable="true"],'
+        + '[role="textbox"],[role="radio"],[role="checkbox"],[role="switch"]')) {
+      return false;
+    }
+    const owned = [author, result.timestamp.node, menu, ...avatars];
+    const covered = node => owned.some(owner => owner && owner.contains(node));
+    if (Array.from(root.querySelectorAll('*')).filter(node =>
+      node.hasAttribute('data-action-id') || node.hasAttribute('tabindex')
+      || Array.from(node.attributes).some(attr => /^on/i.test(attr.name))).some(node =>
+      visible(node) && !owned.includes(node) && !menu.contains(node)
+      && !avatars.some(avatar => avatar.contains(node))
+      && !(author.contains(node) && clean(node.innerText) === result.owner)
+      && !(result.timestamp.node.contains(node)
+        && timestampPattern.test(clean(node.innerText)))
+      && !owned.some(owner => owner && node.contains(owner)))) return false;
+    if (Array.from(root.querySelectorAll('a,[role="link"]')).some(node =>
+      visible(node) && !covered(node))) return false;
+    if (Array.from(root.querySelectorAll('img,video,[data-mcomponent="ImageArea"],'
+      + '[data-mcomponent="ServerImageArea"]')).some(node => visible(node)
+        && !avatars.some(avatar => avatar.contains(node)))) return false;
+    let visited = 0;
+    const metadata = (node, depth = 0) => {
+      if (++visited > 12000 || depth > 192) return false;
+      if (node.nodeType === Node.TEXT_NODE) {
+        return !clean(node.textContent.replace(/\p{Co}/gu, ''));
+      }
+      if (!(node instanceof Element)) return true;
+      if (!visible(node) && getComputedStyle(node).display !== 'contents') return true;
+      if (covered(node)) return true;
+      const component = node.getAttribute('data-mcomponent');
+      if (component && !['MContainer','TextArea','ServerTextArea'].includes(component)
+        || node.hasAttribute('role') || node.matches(excludedSelector)
+        || Array.from(node.attributes).some(attr => /^on/i.test(attr.name))) {
+        return false;
+      }
+      if ((node.hasAttribute('data-action-id') || node.hasAttribute('tabindex'))
+        && !owned.some(owner => owner && node.contains(owner))) return false;
+      return Array.from(node.childNodes).every(child => metadata(child, depth + 1));
+    };
+    return metadata(root);
+  };
+
+  const recognizeHeaderAssembly = (card, menus) => {
+    if (menus.length < 2 || menus.length > 8) return false;
+    const sections = sectionsFor(card);
+    const headers = menus.map(menu => ({menu, root:branch(card, menu)}));
+    if (headers.some(header => !header.root)
+      || new Set(headers.map(header => header.root)).size !== menus.length) {
+      return false;
+    }
+    for (const header of headers) {
+      const result = recognizeHeader(header.root, header.menu);
+      if (!headerMetadataOnly(header.root, header.menu, result)) return false;
+    }
+    const first = Math.min(...headers.map(header => sections.indexOf(header.root)));
+    const footer = recognizeFooter(sections, first + 1);
+    if (first < 0 || footer.status !== 'recognized'
+      || headers.some(header => sections.indexOf(header.root) >= footer.index)) {
+      return false;
+    }
+    const headerRoots = new Set(headers.map(header => header.root));
+    const prefix = parseBody(sections.slice(0, first));
+    const body = parseBody(sections.slice(first + 1, footer.index)
+      .filter(section => !headerRoots.has(section)));
+    if (prefix.unsupported || prefix.text || prefix.bodyControlCount
+      || body.unsupported || (!body.text && !body.mediaCount)) return false;
+    for (const header of headers) roles.set(header.root, 'header');
+    return true;
+  };
 """

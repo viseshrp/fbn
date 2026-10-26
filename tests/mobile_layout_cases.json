@@ -1,5 +1,12 @@
 [
   {
+    "case": "complete_headers_with_unresolved_menu_ownership",
+    "evidence_date": "2026-10-26",
+    "expected_blocks": ["header", "message"],
+    "outcome": "accept_nothing_wait_for_coherent_dom_then_use_bounded_fresh_acquisition_only_with_closed_header_body_footer_evidence",
+    "tests": ["test_header_assembly_never_accepts_a_competing_menu", "test_header_assembly_cannot_disguise_unknown_ownership", "test_header_assembly_never_overrides_terminal_page_state", "test_header_assembly_waits_for_coherent_dom_without_reloading", "test_header_assembly_diagnostics_do_not_include_content", "test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end"]
+  },
+  {
     "case": "media_open_credit_and_event_response_controls",
     "evidence_date": "2026-10-25",
     "expected_blocks": ["message", "attachment"],

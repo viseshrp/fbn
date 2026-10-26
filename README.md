@@ -197,6 +197,13 @@ text. Media-only links require matching stable attachment identifiers rather
 than image counts. Link verification waits for the same document to finish
 rendering and still requires exact complete message equality and matching author,
 publication, group, and canonical post identity.
+Competing menus never select a post. A card with separate closed author/date
+headers, a supported body and a complete action footer can qualify only for
+bounded render recovery after its readiness deadline. Every candidate must be
+accounted for, with no other missing components or unknown header/body controls.
+The scheduler's existing 5/10/20-second fresh-acquisition policy applies; no
+ambiguous post is saved, copied or notified. Menus within the same header,
+unowned metadata, incomplete footers and other unknown layouts still stop.
 Failures log the exact failed comparison (author, body, publication time, or
 primary-post count), text-part lengths, control counts and partial/media flags,
 never private content.
