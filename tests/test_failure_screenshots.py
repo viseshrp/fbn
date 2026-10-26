@@ -107,6 +107,7 @@ def test_structural_snapshot_cannot_serialize_content_identifiers_or_unknown_val
                 "text": "SYNTHETIC_SECRET",
                 "href": "https://private.invalid/",
                 "actionId": "SYNTHETIC_SECRET",
+                "control": "SYNTHETIC_SECRET",
                 "textChars": 9999999,
             }
         ],
@@ -117,8 +118,20 @@ def test_structural_snapshot_cannot_serialize_content_identifiers_or_unknown_val
     assert b"SYNTHETIC_SECRET" not in data and b"https://" not in data
     decoded = json.loads(data)
     assert decoded["nodes"][0]["tag"] == "other"
+    assert decoded["nodes"][0]["control"] == "other"
     assert decoded["nodes"][0]["textChars"] == 100000
     assert len(data) <= screenshots.MAX_STRUCTURE_BYTES
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["photo", "video", "event_interest", "event_response", "event_open", "unknown"],
+)
+def test_structural_snapshot_retains_only_fixed_control_categories(kind):
+    data = screenshots._safe_structure(
+        {"nodes": [{"parent": -1, "tag": "DIV", "control": kind}], "truncated": False}
+    )
+    assert json.loads(data)["nodes"][0]["control"] == kind
 
 
 def test_structural_snapshot_is_node_bounded():

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from .extractor import _FACEBOOK_TIMESTAMP_RE
+from .mobile_attachments import ATTACHMENT_CONTROL_SCRIPT
 from .mobile_components import BODY_COMPONENTS_SCRIPT
 from .mobile_normalize import NORMALIZE_BODY_SCRIPT
 from .mobile_structure import HEADER_COMPONENT_SCRIPT
@@ -86,6 +87,7 @@ MOBILE_SCAN_SCRIPT = (
   };
 
   __FBN_BODY_NORMALIZER__
+  __FBN_ATTACHMENT_CONTROLS__
   __FBN_HEADER_COMPONENT__
   __FBN_BODY_COMPONENTS__
   for (const root of roots) {
@@ -169,6 +171,7 @@ MOBILE_SCAN_SCRIPT = (
 }
 """.replace("__FBN_TIMESTAMP_PATTERN__", json.dumps(_FACEBOOK_TIMESTAMP_RE.pattern))
     .replace("__FBN_BODY_NORMALIZER__", NORMALIZE_BODY_SCRIPT)
+    .replace("__FBN_ATTACHMENT_CONTROLS__", ATTACHMENT_CONTROL_SCRIPT)
     .replace("__FBN_BODY_COMPONENTS__", BODY_COMPONENTS_SCRIPT)
 )
 MOBILE_SCAN_SCRIPT = MOBILE_SCAN_SCRIPT.replace(
@@ -247,6 +250,7 @@ RENDER_SNAPSHOT_SCRIPT = r"""
 
 STRUCTURE_SNAPSHOT_SCRIPT = r"""
 () => {
+  __FBN_ATTACHMENT_CONTROLS__
   const allowed = {
     tag: ['BODY','DIV','SPAN','BUTTON','A','IMG','VIDEO','INPUT','TEXTAREA',
       'MAIN','SECTION','H1','H2','H3','P','UL','LI','SVG'],
@@ -270,6 +274,7 @@ STRUCTURE_SNAPSHOT_SCRIPT = r"""
       role:safe(node.getAttribute('role'),'role'),
       type:safe(node.getAttribute('data-type'),'type'),
       block:safe(roles?.get(node) || null,'block'),
+      control:attachmentControlKind(node),
       hasAction:node.hasAttribute('data-action-id'),hasLabel:node.hasAttribute('aria-label'),
       visible:node.checkVisibility({contentVisibilityAuto:true,
         visibilityProperty:true,opacityProperty:true}),
@@ -283,4 +288,4 @@ STRUCTURE_SNAPSHOT_SCRIPT = r"""
   return {version:1,nodes,truncated:queue.length >= 1000
     || nodes.some((node,index) => queue[index]?.[2] === 20)};
 }
-"""
+""".replace("__FBN_ATTACHMENT_CONTROLS__", ATTACHMENT_CONTROL_SCRIPT)

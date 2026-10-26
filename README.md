@@ -172,6 +172,10 @@ attachments, interface panels, and discussion. A recognized interest-feedback
 panel is excluded before preview expansion and comparison, even when it persists
 on the canonical page. Unknown interactive blocks stop the check; a generic
 extra-controls count never permits discarding content or reloading to hide it.
+Media-opening buttons need a recognized photo/video label and media-only owned
+children. Separate media credit/date metadata and image-backed event previews
+are attachments only when their complete control/content shape is recognized;
+nearby messages, unrelated buttons and inputs cannot inherit that ownership.
 Inline formatting and repeated paragraphs are preserved. Attachment previews,
 poll choices, sale-card actions, avatars, and interface images are not message
 text. Media-only links require matching stable attachment identifiers rather
@@ -293,8 +297,9 @@ and `post.png` when a post-link tab failed, plus secret-free `metadata.json`.
 Version 2 metadata also records the failed action phase, remaining scan budget,
 and structural-capture
 status. `feed-layout.json` and `post-layout.json` contain sanitized component
-ancestry, selected/excluded block roles, visibility, and character counts. These
-snapshots contain no post text, authors, URLs, action IDs, HTML, or input values;
+ancestry, selected/excluded block roles, visibility, character counts, and fixed
+photo/video/event control categories, never the actual labels. These snapshots
+contain no post text, authors, URLs, action IDs, HTML, or input values;
 each is limited to 1,000 nodes, 20 levels, and 256 KiB, with truncation reported.
 The log identifies the folder and whether capture succeeded. Only the latest 10
 failure folders are retained, with at most two 5 MiB images per folder.

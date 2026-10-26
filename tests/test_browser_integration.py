@@ -41,6 +41,7 @@ from fbn.state import SQLiteStateRepository
 from tests.dom_variations import DOM_VARIATION_SCRIPT
 from tests.mobile_fixtures import (
     app_prompt_fixture,
+    mobile_controlled_attachment_fixture,
     mobile_fixture,
     mobile_layout_fixture,
     mobile_loading_shell_fixture,
@@ -839,6 +840,288 @@ def test_media_only_destination_requires_stable_owned_attachment_id(tmp_path, wr
                 frozenset({"contract-group"}),
                 timeout_seconds=5,
             ).endswith("/posts/301/")
+
+
+@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event"])
+@pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
+@pytest.mark.parametrize("depth", [0, 4])
+def test_attachment_control_ownership_preserves_main_post_and_link(
+    tmp_path, kind, component, depth
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        html = mobile_controlled_attachment_fixture(
+            kind, component=component, depth=depth
+        )
+        page.set_content(html)
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            assert len(records) == 1
+            source = records[0][1]
+            assert source["text"] == "Synthetic authored message. Full continuation."
+            assert source["mediaCount"] == 1
+            assert source["bodyControlCount"] == source["previewControlCount"] == 0
+            assert source["partial"] is False
+        target = context.new_page()
+        context.unroute("**/*")
+        context.route(
+            "**/*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body=html.replace(
+                    "Synthetic attachment title", "Another preview title"
+                ),
+            ),
+        )
+        assert resolve_post_link(
+            target,
+            "https://m.facebook.com/groups/contract-group/posts/301/",
+            source,
+            frozenset({"contract-group"}),
+            timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
+        ).endswith("/posts/301/")
+
+
+@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event"])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '<button role="button" aria-label="Unknown control">Unexpected</button>',
+        '<input aria-label="Unknown input">',
+        '<div data-action-id="unowned-action" style="width:8px;height:8px"></div>',
+        "Unowned meaningful text",
+    ],
+)
+def test_attachment_control_ownership_rejects_unrelated_controls_or_text(
+    tmp_path, kind, extra
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture(kind, extra=extra))
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event"])
+def test_attachment_control_ownership_keeps_the_authored_expander(tmp_path, kind):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture(kind, partial=True))
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            menu, source = records[0]
+            assert source["previewControlCount"] == 1
+            complete = expand_post_preview(
+                page, menu, source, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+            )
+        assert complete["text"] == "Synthetic authored message. Full continuation."
+        assert complete["partial"] is False
+        assert page.evaluate("window.previewClicks") == 1
+
+
+@pytest.mark.parametrize("fault", ["credit_label", "credit_text", "extra_control"])
+def test_attachment_media_credit_requires_date_and_separate_owned_metadata(
+    tmp_path, fault
+):
+    html = mobile_controlled_attachment_fixture("photo_credit")
+    if fault == "credit_label":
+        html = html.replace(
+            'aria-label="Sunday, October 11, 2026 at 10:00 AM">Yesterday',
+            'aria-label="Unclassified caption">Yesterday',
+        )
+    elif fault == "credit_text":
+        html = html.replace(
+            'aria-label="Sunday, October 11, 2026 at 10:00 AM">Yesterday',
+            'aria-label="Sunday, October 11, 2026 at 10:00 AM">Unclassified caption',
+        )
+    else:
+        html = html.replace(
+            'data-action-id="synthetic-credit">',
+            'data-action-id="synthetic-credit"><button role="button">Unknown</button>',
+        )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(html)
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["no_image", "no_date", "unknown_root", "wrong_control_text", "empty_inner_action"],
+)
+def test_attachment_event_requires_a_complete_bounded_preview(tmp_path, fault):
+    html = mobile_controlled_attachment_fixture("event")
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(html)
+        page.evaluate(
+            """fault => {
+            const card = document.querySelector('[data-action-id=synthetic-event]');
+            if (fault === 'no_image') {
+              card.querySelector('[data-mcomponent=ServerImageArea]').remove();
+            }
+            if (fault === 'no_date') {
+              card.querySelectorAll('[data-mcomponent=ServerTextArea]')[0]
+                .textContent = 'Unknown metadata';
+            }
+            if (fault === 'unknown_root') {
+              card.setAttribute('role','button');
+              card.setAttribute('aria-label','Unknown root action');
+            }
+            if (fault === 'wrong_control_text') {
+              card.querySelector('[aria-label=Interested]')
+                .textContent = 'Unrelated meaningful words';
+            }
+            if (fault === 'empty_inner_action') {
+              const empty=document.createElement('div');
+              empty.setAttribute('data-action-id','unknown-empty');
+              empty.style.cssText='width:8px;height:8px';
+              card.querySelector('[aria-label=Interested]').append(empty);
+            }
+            }""",
+            fault,
+        )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize(
+    "label", ["Photo", "View photo", "Image: synthetic description"]
+)
+def test_attachment_media_labels_are_only_evidence_with_actual_media(tmp_path, label):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture("photo"))
+        node = page.locator("[data-action-id=synthetic-media-open]")
+        node.evaluate("(el,label) => el.setAttribute('aria-label',label)", label)
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        node.evaluate(
+            "el => el.replaceChildren(Object.assign(document.createElement('div'),"
+            "{textContent:'Unrelated authored words'}))"
+        )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        for date in ("Today at 4PM", "Tomorrow at 10:30 AM", "Jan 17, 2027 at 16:00"):
+            for label in ("Interested", "Going", "View event"):
+                html = mobile_controlled_attachment_fixture("event")
+                html = html.replace("Sun, Jan 17 at 4:00 PM", date)
+                html = html.replace("Interested", label)
+                page.set_content(html)
+                wait_for_mobile_page(page, timeout_seconds=0.1)
+                with mobile_records(page) as records:
+                    assert records[0][1]["text"] == (
+                        "Synthetic authored message. Full continuation."
+                    )
+                    assert records[0][1]["mediaCount"] == 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "category"),
+    [("photo", "photo"), ("video", "video"), ("event", "event_interest")],
+)
+def test_attachment_control_diagnostics_never_expose_accessible_labels(
+    tmp_path, kind, category
+):
+    from fbn.failure_screenshots import _safe_structure
+    from fbn.mobile_dom import STRUCTURE_SNAPSHOT_SCRIPT
+
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture(kind))
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        saved = json.loads(_safe_structure(page.evaluate(STRUCTURE_SNAPSHOT_SCRIPT)))
+        assert category in {node["control"] for node in saved["nodes"]}
+        assert "Synthetic" not in json.dumps(saved)
+        assert "description" not in json.dumps(saved)
+
+
+@pytest.mark.parametrize("kind", ["photo", "event"])
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_attachment_control_delivery_restart_and_rejection_are_atomic(
+    tmp_path, kind, mismatch
+):
+    from fbn.monitor import MonitorService
+
+    group = parse_group_ref("contract-group")
+    notifications = []
+    with _local_context(tmp_path) as context:
+        requests = []
+
+        def serve(route):
+            if route.request.resource_type != "document":
+                route.abort()
+                return
+            target = "/share/" in route.request.url
+            requests.append(target)
+            html = mobile_controlled_attachment_fixture(kind, partial=not target)
+            if target:
+                if mismatch:
+                    html = html.replace("Full continuation.", "Wrong continuation.")
+                html += (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        sink = type(
+            "RecordingSink", (), {"send": lambda self, n: notifications.append(n)}
+        )()
+        policy = ScanPolicy(
+            sample_count=1,
+            max_scrolls=0,
+            navigation_timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
+            settle_seconds=0,
+        )
+        path = tmp_path / "attachment.sqlite3"
+        with SQLiteStateRepository(path) as state:
+            monitor = MonitorService(source, state, sink)
+            if mismatch:
+                with pytest.raises(
+                    LayoutChangedError, match="resolved_primary_body_matches_source"
+                ):
+                    monitor.run_once(group, policy, notify_initial=True)
+                assert not state.pending(group) and not notifications
+                assert (
+                    state._connection.execute("SELECT COUNT(*) FROM posts").fetchone()[
+                        0
+                    ]
+                    == 0
+                )
+                return
+            result = monitor.run_once(group, policy, notify_initial=True)
+            assert result.delivered == 1 and result.pending == 0
+        with SQLiteStateRepository(path) as state:
+            result = MonitorService(source, state, sink).run_once(group, policy)
+            assert result.delivered == result.pending == 0
+        assert len(notifications) == 1
+        assert notifications[0].body == (
+            "Synthetic Author\nSynthetic authored message. Full continuation.\n"
+            "https://www.facebook.com/groups/contract-group/posts/301/"
+        )
+        assert requests == [False, True, False, True]
 
 
 def test_header_is_owned_by_boundaries_not_a_fixed_child_number(tmp_path):

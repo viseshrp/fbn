@@ -105,6 +105,14 @@ Facebook or external notification services.
    attachment ownership only when every child is already an attachment or
    transparent presentation. Nearby unclaimed text, empty actions, menus and
    controls prevent that inheritance.
+   Photo/video opening buttons require a matching fixed control category and a
+   media-only subtree. Media credit cards additionally require one linked credit
+   name and accessible/visible publication metadata in a separate action region.
+   Event cards require actual media, exactly one recognized response/open control,
+   a date/title pair, and no other controls, links or unowned actions/text. These
+   attachment claims precede expander discovery, so attachment captions/buttons
+   cannot become the main post's message or See more action. Structural captures
+   expose only the fixed control category, never arbitrary accessible labels.
 4. `mobile_view.post_view_issues` validates required content/evidence fields and
    completeness before crossing into application code. Expansion and permalink
    checks independently require preserved identity and matching full content.

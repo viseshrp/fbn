@@ -64,6 +64,112 @@ BODY_COMPONENTS_SCRIPT = r"""
         }
         if (attachment) claim(node, 'attachment', name);
       }
+      // A media-opening button is an attachment surface only when its label
+      // identifies that operation and every child is owned media/presentation.
+      // An arbitrary button near an image must remain an unknown control.
+      const mediaOnly = node => claims.get(node)?.role === 'attachment'
+        || (node.flags.media && !text(node))
+        || (node.kind === 'literal' ? !text(node)
+          : node.transparent && node.children.length > 0
+            && node.children.every(mediaOnly));
+      const supportedStructure = node => node.el.nodeType !== Node.ELEMENT_NODE
+        || ((!node.component || ['MContainer','TextArea','ServerTextArea',
+          'ImageArea','ServerImageArea','VideoArea','ServerVideoArea']
+          .includes(node.component))
+          && (node.component !== 'MContainer' || !node.el.hasAttribute('data-type')
+            || node.el.getAttribute('data-type') === 'container'));
+      const untypedAction = node => node.flags.action
+        && node.component === 'MContainer' && !node.el.hasAttribute('role')
+        && supportedStructure(node) && own(node);
+      for (const node of nodes.filter(node => own(node) && node.flags.button)) {
+        const kind = attachmentControlKind(node.el);
+        if (!['photo','video'].includes(kind) || !node.children.length) continue;
+        const media = descendants(node).filter(child => child.flags.media);
+        if (!media.length || !node.children.every(mediaOnly)) continue;
+        if (descendants(node).some(child => !supportedStructure(child)
+          || child.flags.button || child.flags.control
+          || child.flags.menu || child.flags.link || child.flags.action)) continue;
+        if (kind === 'video' && !media.some(child => child.el.matches(
+          'video,[data-mcomponent="VideoArea"],'
+          + '[data-mcomponent="ServerVideoArea"]'))) continue;
+        if (kind === 'photo' && !media.some(child => child.flags.image)) continue;
+        claim(node, 'attachment', name);
+      }
+      // A media card can place its credit/date beside the opening button.
+      // That metadata is not authored body text. Require the complete credit
+      // shape (one linked name and one accessible publication date), not merely
+      // two nearby text areas, before composing the attachment's ownership.
+      for (const node of nodes.filter(untypedAction)) {
+        if (claims.get(node)?.role === 'attachment') continue;
+        const content = descendants(node);
+        const surfaces = content.filter(child => child.flags.button
+          && claims.get(child)?.role === 'attachment'
+          && ['photo','video'].includes(attachmentControlKind(child.el)));
+        if (surfaces.length !== 1) continue;
+        const surface = surfaces[0];
+        const parts = leaves(node).filter(child => !contains(surface, child));
+        if (parts.length !== 2) continue;
+        const [credit, date] = parts;
+        const links = descendants(credit).filter(child => child.flags.link);
+        if (links.length !== 1 || text(links[0]) !== text(credit)
+          || !date.el.hasAttribute('aria-label')
+          || !timestampPattern.test(clean(date.el.getAttribute('aria-label')))
+          || !(timestampPattern.test(text(date))
+            || /^(?:today|yesterday)$/i.test(text(date)))) continue;
+        const caption = ancestors(credit, child => child !== node
+          && child.flags.action && contains(child, date));
+        if (!caption || !contains(node, caption)) continue;
+        if (content.some(child => !contains(surface, child)
+          && (!supportedStructure(child)
+            || child.flags.button || child.flags.control || child.flags.menu
+            || child.flags.discussion || child.flags.media
+            || (child.flags.link && !contains(credit, child))
+            || (child.flags.action && child !== caption
+              && !contains(credit, child))
+            || (child.kind === 'literal' && text(child)
+              && !ancestors(child.parent, owner => owner.flags.text))))) continue;
+        claim(node, 'attachment', name);
+      }
+      // Event previews have their own image, date/title and response control.
+      // Claim that bounded card, never an enclosing body or its authored text.
+      const eventDatePattern = new RegExp(
+        '^(?:(?:mon|tue|wed|thu|fri|sat|sun)'
+        + '(?:day|sday|nesday|rsday|urday)?[, ]+)?'
+        + '(?:today|tomorrow|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?'
+        + '|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?'
+        + '|nov(?:ember)?|dec(?:ember)?)\\s+\\d{1,2})'
+        + '(?:[, ]+(?:\\d{4}|at|\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?'
+        + '|[A-Z]{2,4}))*$', 'i');
+      const eventDate = value => /\d/.test(value) && eventDatePattern.test(value);
+      for (const node of nodes.filter(untypedAction)) {
+        if (claims.get(node)?.role === 'attachment') continue;
+        const content = descendants(node);
+        const buttons = content.filter(child => child.flags.button);
+        if (buttons.length !== 1 || !['event_interest','event_response','event_open']
+          .includes(attachmentControlKind(buttons[0].el))) continue;
+        const button = buttons[0];
+        const buttonText = clean(text(button).replace(/\p{Co}/gu, ''));
+        if (buttonText && !/^(?:interested|going|not going|(?:view|see|open) event)$/i
+          .test(buttonText)) continue;
+        if (!content.some(child => child.flags.image)
+          || content.some(child => !supportedStructure(child)
+            || child.flags.control || child.flags.menu
+            || child.flags.discussion || child.flags.link
+            || (child.flags.action && !contains(button, child))
+            || (child.flags.action && contains(button, child)
+              && !leaves(child).length)
+            || (child.component && !['MContainer','TextArea','ServerTextArea',
+              'ImageArea','ServerImageArea'].includes(child.component))
+            || (child.el.nodeType === Node.ELEMENT_NODE
+              && child.el.hasAttribute('role')
+              && !['button','img'].includes(child.el.getAttribute('role'))))) continue;
+        const parts = leaves(node).filter(child => !contains(button, child));
+        if (parts.length !== 2 || parts.filter(child => eventDate(text(child)))
+          .length !== 1) continue;
+        if (content.some(child => child.kind === 'literal' && text(child)
+          && !ancestors(child.parent, owner => owner.flags.text))) continue;
+        claim(node, 'attachment', name);
+      }
     };
     const recognizeSplitPreviews = name => {
       for (const image of nodes.filter(node => node.flags.link
@@ -139,7 +245,9 @@ BODY_COMPONENTS_SCRIPT = r"""
     };
     const recognizeMedia = name => {
       const media = nodes.filter(node => node.flags.media && own(node)
-        && !ancestors(node, owner => owner.flags.text || owner.flags.button));
+        && !ancestors(node, owner => owner.flags.text || (owner.flags.button
+          && !(claims.get(owner)?.role === 'attachment'
+            && ['photo','video'].includes(attachmentControlKind(owner.el))))));
       for (const node of media.filter(node => !media.some(other =>
         other !== node && contains(other, node)))) {
         mediaCount++; claim(node, 'attachment', name);

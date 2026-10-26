@@ -55,6 +55,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Compose media-opening, separate credit/date and event-preview attachment
+  ownership before message expansion. Require positive control/content evidence,
+  preserve media identifiers/counts, and reject unrelated controls or raw text.
+  Cover wrapper/text variants, source/destination equality, atomic rejection,
+  delivery and restart; retain fixed control categories in private diagnostics.
 - Recover recognized render failures inside the same scheduled check with at
   most three retries after 5/10/20 seconds. Preserve the routine slot, skip
   retries without full-scan/cleanup headroom, recheck after wakeup, and honor

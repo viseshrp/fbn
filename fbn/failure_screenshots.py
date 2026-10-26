@@ -58,6 +58,9 @@ _PHASES = frozenset(
     }
 )
 _VALUES = {
+    "control": frozenset(
+        {"photo", "video", "event_interest", "event_response", "event_open", "unknown"}
+    ),
     "tag": frozenset(
         {
             "BODY",

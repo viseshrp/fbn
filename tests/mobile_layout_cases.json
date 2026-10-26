@@ -1,5 +1,12 @@
 [
   {
+    "case": "media_open_credit_and_event_response_controls",
+    "evidence_date": "2026-10-25",
+    "expected_blocks": ["message", "attachment"],
+    "outcome": "compose_only_proven_media_credit_and_event_preview_ownership_preserve_authored_expander_and_atomic_delivery",
+    "tests": ["test_attachment_control_ownership_preserves_main_post_and_link", "test_attachment_control_ownership_rejects_unrelated_controls_or_text", "test_attachment_control_ownership_keeps_the_authored_expander", "test_attachment_media_credit_requires_date_and_separate_owned_metadata", "test_attachment_event_requires_a_complete_bounded_preview", "test_attachment_media_labels_are_only_evidence_with_actual_media", "test_attachment_event_date_and_control_variants_preserve_ownership", "test_attachment_control_diagnostics_never_expose_accessible_labels", "test_attachment_control_delivery_restart_and_rejection_are_atomic"]
+  },
+  {
     "case": "normalized_owned_dom_variation_families",
     "evidence_date": "2026-10-21",
     "expected_blocks": ["message", "attachment", "discussion"],

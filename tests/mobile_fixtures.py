@@ -267,6 +267,86 @@ def mobile_split_link_preview_fixture(
     )
 
 
+def mobile_controlled_attachment_fixture(
+    kind: str,
+    *,
+    component: str = "ServerTextArea",
+    depth: int = 0,
+    partial: bool = False,
+    extra: str = "",
+    caption: str = "Synthetic attachment title",
+) -> str:
+    """Synthetic media/event control families; no production values or HTML."""
+    body = "Synthetic authored message. Full continuation."
+    html = (
+        mobile_preview_fixture("Synthetic authored message.", body)
+        if partial
+        else mobile_fixture([("301", "Synthetic Author", body)])
+    )
+    image = (
+        '<div data-mcomponent="ServerImageArea" style="width:32px;height:32px">'
+        '<img width="32" height="32" '
+        'src="https://scontent.example.fbcdn.net/123456_234567_345_n.jpg"></div>'
+    )
+    if kind in {"photo", "video", "photo_credit"}:
+        media = (
+            '<video style="width:32px;height:32px"></video>'
+            if kind == "video"
+            else '<div data-mcomponent="MContainer" role="img">' + image + "</div>"
+        )
+        label = "Play video" if kind == "video" else "Photo: synthetic description"
+        attachment = (
+            '<div data-mcomponent="MContainer" role="button" '
+            f'aria-label="{label}" data-action-id="synthetic-media-open">'
+            + media
+            + extra
+            + "</div>"
+        )
+        if kind == "photo_credit":
+            attachment = (
+                '<div data-mcomponent="MContainer" '
+                'data-action-id="synthetic-media-card">'
+                + attachment
+                + '<div data-mcomponent="MContainer" data-action-id="synthetic-credit">'
+                f'<div data-mcomponent="{component}"><span role="link" '
+                'data-action-id="synthetic-credit-name">Synthetic Credit</span></div>'
+                f'<div data-mcomponent="{component}" '
+                'aria-label="Sunday, October 11, 2026 at 10:00 AM">Yesterday</div>'
+                "</div></div>"
+            )
+    elif kind == "event":
+        attachment = (
+            '<div data-mcomponent="MContainer" data-type="container" '
+            'data-action-id="synthetic-event">'
+            + image
+            + '<div data-mcomponent="TextArea"></div>'
+            '<div data-mcomponent="MContainer" data-type="container">'
+            f'<div data-mcomponent="{component}">Sun, Jan 17 at 4:00 PM</div>'
+            f'<div data-mcomponent="{component}">{escape(caption)}</div>'
+            '<div data-mcomponent="MContainer" role="button" aria-label="Interested">'
+            '<div data-mcomponent="MContainer" '
+            'data-action-id="synthetic-event-interest">'
+            f'<div data-mcomponent="{component}">\U000f0123</div>'
+            f'<div data-mcomponent="{component}">Interested</div>'
+            "</div></div>"
+            + extra
+            + '</div><div data-mcomponent="TextArea"></div></div>'
+        )
+    else:
+        raise ValueError("Unsupported synthetic attachment kind")
+    for _ in range(depth):
+        attachment = (
+            '<div data-mcomponent="MContainer" data-type="container">'
+            + attachment
+            + "</div>"
+        )
+    marker = (
+        '</div><div data-mcomponent="MContainer">'
+        '<button role="button" aria-label="Like,'
+    )
+    return html.replace(marker, attachment + marker, 1)
+
+
 def mobile_layout_fixture(
     *,
     partial: bool = False,
