@@ -1015,16 +1015,25 @@ def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path)
     with _local_context(tmp_path) as context:
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
-        for date in (
-            "Today",
-            "Tomorrow",
+        relative_dates = [
+            day + clock
+            for day in ("Yesterday", "Today", "Tomorrow")
+            for clock in ("", " at 4PM", " at 10:30 AM", " at 16:00", " at 4PM EDT")
+        ]
+        for date in [
+            *relative_dates,
             "Sun, Jan 17",
-            "Today at 4PM",
-            "Tomorrow at 10:30 AM",
             "Jan 17, 2027 at 16:00",
-            "\U000f0123 Today at 4PM",
-        ):
-            for label in ("Interested", "Going", "View event"):
+            "\U000f0123 Yesterday at 4PM",
+        ]:
+            for label in (
+                "Interested",
+                "Going",
+                "Not going",
+                "View event",
+                "See event",
+                "Open event",
+            ):
                 html = mobile_controlled_attachment_fixture("event")
                 html = html.replace("Sun, Jan 17 at 4:00 PM", date)
                 html = html.replace("Interested", label)

@@ -137,7 +137,8 @@ BODY_COMPONENTS_SCRIPT = r"""
       const eventDatePattern = new RegExp(
         '^(?:(?:mon|tue|wed|thu|fri|sat|sun)'
         + '(?:day|sday|nesday|rsday|urday)?[, ]+)?'
-        + '(?:today|tomorrow|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?'
+        + '(?:yesterday|today|tomorrow|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?'
+        + '|apr(?:il)?'
         + '|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?'
         + '|nov(?:ember)?|dec(?:ember)?)\\s+(?:0?[1-9]|[12][0-9]|3[01])'
         + '(?:[, ]+[12][0-9]{3})?)'
