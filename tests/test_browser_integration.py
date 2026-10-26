@@ -4086,6 +4086,9 @@ def _local_context(
     )
     source = MobilePostSource(settings)
     with source._context(headless=True, timezone_id=timezone_id) as context:
+        # Specific fixture routes registered later take precedence. An omitted
+        # route must never turn a synthetic page/image into a real request.
+        context.route("**/*", lambda route: route.abort())
         yield context
 
 

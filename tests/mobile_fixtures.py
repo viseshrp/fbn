@@ -592,7 +592,8 @@ def mobile_embedded_post_fixture(
           avatar.setAttribute('data-action-id','synthetic-header-avatar');
           avatar.style='width:'+size+'px;height:'+size+'px';
           const image=document.createElement('img');image.width=image.height=size;
-          image.src='https://scontent.example.fbcdn.net/avatar_n.jpg';
+          image.src='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"'
+            + ' width="1" height="1"/%3E';
           avatar.append(image);header.prepend(avatar);
         }
       }
