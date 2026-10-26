@@ -549,6 +549,7 @@ def mobile_embedded_post_fixture(
     permalink: bool = False,
     embedded_menu: str = "visible",
     include_boundary: bool = False,
+    flat_root: bool = False,
 ) -> str:
     """Unlabelled shared group-post attribution in a flat Bloks outer card."""
     stories = [
@@ -600,9 +601,13 @@ def mobile_embedded_post_fixture(
       const menu=outer.querySelector('[data-action-id="menu-301"]');
       if(__EMBEDDED_MENU__==='absent')menu.remove();
       else if(__EMBEDDED_MENU__==='hidden')menu.hidden=true;
-    </script>""".replace("__PERMALINK__", json.dumps(permalink)).replace(
-            "__EMBEDDED_MENU__", json.dumps(embedded_menu)
-        )
+      if(__FLAT_ROOT__) {
+        const root=outer.closest('[data-type="vscroller"]');
+        root.replaceChildren(...Array.from(outer.childNodes));
+      }
+    </script>""".replace("__PERMALINK__", json.dumps(permalink))
+        .replace("__EMBEDDED_MENU__", json.dumps(embedded_menu))
+        .replace("__FLAT_ROOT__", json.dumps(flat_root))
     )
 
 

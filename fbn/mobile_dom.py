@@ -96,9 +96,10 @@ MOBILE_SCAN_SCRIPT = (
     let cards = presentationChildren(root).map(unwrapPresentation);
     if (permalink) {
       // Single-post pages can put header/body/actions directly in the scroller.
-      // Only use that shape when one primary header precedes its own footer.
+      // One primary header or a fully recognized embedded-card grammar must
+      // precede the outer footer; menu visibility alone is not ownership.
       const menus = primaryMenus(root), sections = sectionsFor(root);
-      if (menus.length === 1) {
+      if (menus.length === 1 || recognizeEmbeddedCard(root, menus)) {
         const start = sections.indexOf(branch(root, menus[0])) + 1;
         if (recognizeFooter(sections, start).index >= start) cards = [root];
       }

@@ -183,6 +183,9 @@ group attribution, avatar-sized media and no nested controls or actions. Main
 author/body/publication and same-group canonical-link verification is unchanged.
 This shared grammar prevents a permalink's embedded message being concatenated
 with the main author's shortened or expanded text. Only the main menu is copied.
+The same ownership recognizer handles direct-scroller permalink rows as well as
+wrapped cards, including visible, hidden and absent embedded menus. Root choice
+does not depend on the raw number of descendant menus.
 
 Unresolved competing menus are never resolved by picking one. A header-assembly
 classifier validates every header's author/date and closed metadata ownership,

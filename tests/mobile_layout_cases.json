@@ -4,7 +4,7 @@
     "evidence_date": "2026-10-26",
     "expected_blocks": ["header", "message", "discussion", "footer"],
     "outcome": "keep_one_outer_primary_post_and_verify_its_full_message_without_embedded_post_text_or_menu",
-    "tests": ["test_flat_embedded_post_has_one_primary_owner", "test_embedded_post_menus_do_not_change_main_link_verification", "test_embedded_post_recognition_never_discards_unknown_ownership", "test_embedded_post_with_same_author_and_message_is_not_a_second_primary"]
+    "tests": ["test_flat_embedded_post_has_one_primary_owner", "test_embedded_post_menus_do_not_change_main_link_verification", "test_embedded_post_recognition_never_discards_unknown_ownership", "test_embedded_post_with_same_author_and_message_is_not_a_second_primary", "test_embedded_permalink_direct_scroller_has_one_primary_owner"]
   },
   {
     "case": "complete_headers_with_unresolved_menu_ownership",

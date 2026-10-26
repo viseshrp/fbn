@@ -4435,8 +4435,9 @@ def test_flat_embedded_post_has_one_primary_owner(
 @pytest.mark.parametrize("target_partial", [False, True])
 @pytest.mark.parametrize("menu_state", ["visible", "hidden", "absent"])
 @pytest.mark.parametrize("wrong_main", [False, True])
+@pytest.mark.parametrize("flat_root", [False, True])
 def test_embedded_post_menus_do_not_change_main_link_verification(
-    tmp_path, source_partial, target_partial, menu_state, wrong_main
+    tmp_path, source_partial, target_partial, menu_state, wrong_main, flat_root
 ):
     from types import SimpleNamespace
 
@@ -4453,7 +4454,10 @@ def test_embedded_post_menus_do_not_change_main_link_verification(
                 fetched.append(number)
                 if number == "302":
                     html = mobile_embedded_post_fixture(
-                        partial=target_partial, permalink=True, embedded_menu=menu_state
+                        partial=target_partial,
+                        permalink=True,
+                        embedded_menu=menu_state,
+                        flat_root=flat_root,
                     )
                     html = html.replace("Embedded body.", "Different embedded body.")
                     if wrong_main:
@@ -4608,6 +4612,25 @@ def test_embedded_post_with_same_author_and_message_is_not_a_second_primary(
         with mobile_records(page, permalink=permalink) as records:
             assert len(records) == 1
             menu, payload = records[0]
+            assert payload["text"] == "First body. Full continuation."
+            assert copy_post_link(
+                page, menu, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+            ).endswith("/302/")
+
+
+@pytest.mark.parametrize("mode", ["visible", "hidden", "absent"])
+def test_embedded_permalink_direct_scroller_has_one_primary_owner(tmp_path, mode):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_embedded_post_fixture(
+                permalink=True, embedded_menu=mode, flat_root=True
+            )
+        )
+        with mobile_records(page, permalink=True) as records:
+            assert len(records) == 1
+            menu, payload = records[0]
+            assert payload["author"] == "Synthetic First"
             assert payload["text"] == "First body. Full continuation."
             assert copy_post_link(
                 page, menu, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
