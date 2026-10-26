@@ -9,10 +9,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Parse distinct sibling header/body units inside a shared feed wrapper instead
-  of assuming one wrapper means one post. A following validated header can bound
-  an earlier unit whose footer is not rendered; every unit still requires its
-  own copied link and exact complete same-group permalink verification.
+- Recognize unlabelled embedded group-post headers in feed and permalink views,
+  including missing embedded menus and group/avatar metadata. Only the outer
+  post's message is extracted; embedded posts are not additional feed entries.
+  Full-message, author, publication and canonical-link checks remain unchanged.
 - Recognize closed author/date header assemblies with competing menus as
   non-accepting render failures eligible for the existing bounded in-check retry.
   Unknown headers/controls, incomplete footers and identity failures still stop.

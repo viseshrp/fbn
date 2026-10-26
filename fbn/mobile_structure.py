@@ -1,8 +1,9 @@
 """Named header recognition, independent of body extraction and acceptance."""
 
 HEADER_COMPONENT_SCRIPT = r"""
-  const recognizeHeader = (header, menu) => {
-    const owner = clean(menu.getAttribute('aria-label').slice(17));
+  const recognizeHeader = (header, menu, inferredOwner = null) => {
+    const owner = inferredOwner === null
+      ? clean(menu.getAttribute('aria-label').slice(17)) : inferredOwner;
     const authors = Array.from(header.querySelectorAll('[role="link"],a'))
       .filter(node => visible(node) && clean(node.innerText) === owner);
     if (!owner || authors.length !== 1) {
@@ -63,32 +64,60 @@ HEADER_COMPONENT_SCRIPT = r"""
 
   // This proves a known incomplete assembly, not which menu is the main one.
   // Nothing from such a card is accepted; only a fresh acquisition may recover.
-  const headerMetadataOnly = (root, menu, result) => {
+  const headerMetadataOnly = (root, menu, result, groups = []) => {
     if (result.status !== 'recognized') return false;
     const author = Array.from(root.querySelectorAll('[role="link"],a'))
       .find(node => visible(node) && clean(node.innerText) === result.owner);
-    const buttons = Array.from(root.querySelectorAll('button,[role="button"]'))
-      .filter(visible);
-    const avatars = buttons.filter(node => node !== menu
-      && attachmentControlKind(node) === 'credit_picture'
-      && [result.owner + "'s picture", result.owner + '\u2019s picture',
-        result.owner + ' profile picture']
-          .includes(clean(node.getAttribute('aria-label')))
-      && !clean(node.innerText).replace(/\p{Co}/gu, '')
+    const groupLinks = Array.from(root.querySelectorAll('[role="link"],a'))
+      .filter(node => visible(node) && groups.includes(clean(node.innerText)));
+    const identities = [result.owner, ...groups];
+    const pictures = Array.from(root.querySelectorAll(
+      'button,[role="button"],[role="link"],a')).filter(node => visible(node)
+      && node !== menu && !clean(node.innerText).replace(/\p{Co}/gu, '')
+      && identities.some(name => [name, name + "'s picture", name + '\u2019s picture',
+        name + ' profile picture'].includes(clean(node.getAttribute('aria-label'))))
       && node.querySelector('img,[data-mcomponent="ImageArea"],'
         + '[data-mcomponent="ServerImageArea"]'));
+    const buttons = Array.from(root.querySelectorAll('button,[role="button"]'))
+      .filter(visible);
+    // Group-post headers also use unlabelled image-only action branches for
+    // the group thumbnail and author's avatar. They are metadata only with a
+    // verified group attribution, avatar-sized bounds and no nested actions.
+    const untypedPictures = groups.length ? Array.from(root.querySelectorAll(
+      '[data-mcomponent="MContainer"][data-action-id]:not([role])'
+    )).filter(node => {
+      if (!visible(node) || clean(node.innerText).replace(/\p{Co}/gu, '')
+        || !node.querySelector('img,[data-mcomponent="ImageArea"],'
+          + '[data-mcomponent="ServerImageArea"]')) return false;
+      const media = Array.from(node.querySelectorAll(
+        'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
+      )).map(image => image.getBoundingClientRect());
+      // Hit areas may be wider than the thumbnail. Unloaded image children
+      // may have zero bounds while their fixed ImageArea is already rendered.
+      if (!media.some(rect => rect.width > 0 && rect.height > 0)
+        || media.some(rect => rect.width > 80 || rect.height > 80)) return false;
+      return Array.from(node.querySelectorAll('*')).every(child =>
+        !child.matches('button,a,input,select,textarea,[role],'
+          + '[contenteditable="true"],[data-action-id]')
+        && !Array.from(child.attributes).some(attr => /^on/i.test(attr.name))
+        && (!child.hasAttribute('data-mcomponent')
+          || ['MContainer','ImageArea','ServerImageArea']
+            .includes(child.getAttribute('data-mcomponent'))));
+    }) : [];
+    const avatars = [...pictures, ...untypedPictures];
     if (buttons.some(node => node !== menu && !avatars.includes(node))
       || root.querySelector('input,select,textarea,[contenteditable="true"],'
         + '[role="textbox"],[role="radio"],[role="checkbox"],[role="switch"]')) {
       return false;
     }
-    const owned = [author, result.timestamp.node, menu, ...avatars];
+    const owned = [author, result.timestamp.node, menu, ...avatars, ...groupLinks];
     const covered = node => owned.some(owner => owner && owner.contains(node));
     if (Array.from(root.querySelectorAll('*')).filter(node =>
       node.hasAttribute('data-action-id') || node.hasAttribute('tabindex')
       || Array.from(node.attributes).some(attr => /^on/i.test(attr.name))).some(node =>
-      visible(node) && !owned.includes(node) && !menu.contains(node)
+      visible(node) && !owned.includes(node) && !(menu && menu.contains(node))
       && !avatars.some(avatar => avatar.contains(node))
+      && !groupLinks.some(group => group.contains(node))
       && !(author.contains(node) && clean(node.innerText) === result.owner)
       && !(result.timestamp.node.contains(node)
         && timestampPattern.test(clean(node.innerText)))
@@ -97,7 +126,9 @@ HEADER_COMPONENT_SCRIPT = r"""
       visible(node) && !covered(node))) return false;
     if (Array.from(root.querySelectorAll('img,video,[data-mcomponent="ImageArea"],'
       + '[data-mcomponent="ServerImageArea"]')).some(node => visible(node)
-        && !avatars.some(avatar => avatar.contains(node)))) return false;
+        && ![...avatars, ...groupLinks].some(avatar => avatar.contains(node)))) {
+      return false;
+    }
     let visited = 0;
     const metadata = (node, depth = 0) => {
       if (++visited > 12000 || depth > 192) return false;
@@ -148,70 +179,69 @@ HEADER_COMPONENT_SCRIPT = r"""
     return true;
   };
 
-  // A feed wrapper is not a post boundary. Some chronological-feed wrappers
-  // hold several sibling header/body units and paint only the last footer.
-  // These are acquisition candidates: every unit still needs an independently
-  // copied, same-group permalink and exact complete destination comparison.
-  const recognizeCompoundPosts = (card, menus) => {
-    if (menus.length < 2 || menus.length > 8) return null;
-    const sections = sectionsFor(card);
-    const headers = menus.map(menu => ({menu, header:branch(card, menu)}));
-    if (headers.some(unit => !unit.header)
-      || new Set(headers.map(unit => unit.header)).size !== menus.length) {
+  // One outer card owns its header and action row. A bounded chain of complete
+  // attributed post headers/bodies before that row is embedded content, not a
+  // continuation of the author's message or additional primary feed entries.
+  const recognizeEmbeddedCard = (card, menus) => {
+    if (!menus.length || menus.length > 8) return null;
+    const sections = sectionsFor(card), menu = menus[0];
+    const header = branch(card, menu), start = sections.indexOf(header) + 1;
+    if (!header || start <= 0) return null;
+    const main = recognizeHeader(header, menu);
+    if (main.status !== 'recognized') return null;
+    const names = Array.from(header.querySelectorAll('[role="link"],a'))
+      .filter(visible).map(node => clean(node.innerText))
+      .filter(name => name && name !== main.owner);
+    const groups = Array.from(new Set(names));
+    if (groups.length > 1 || !headerMetadataOnly(header, menu, main, groups)) {
       return null;
     }
-    let previous = -1;
-    for (const unit of headers) {
-      unit.index = sections.indexOf(unit.header);
-      unit.headerResult = recognizeHeader(unit.header, unit.menu);
-      if (unit.index <= previous
-        || !headerMetadataOnly(unit.header, unit.menu, unit.headerResult)) {
-        return null;
+    const prefix = parseBody(sections.slice(0, start - 1));
+    if (prefix.unsupported || prefix.text || prefix.bodyControlCount) return null;
+    const footer = recognizeFooter(sections, start);
+    if (footer.status !== 'recognized') return null;
+    const embedded = [];
+    for (let index = start; index < footer.index; index++) {
+      const section = sections[index];
+      if (section.matches(excludedSelector)) continue;
+      const options = Array.from(section.querySelectorAll(menuSelector));
+      if (options.length > 1) return null;
+      let result, option = options[0] || null;
+      if (option) result = recognizeHeader(section, option);
+      else {
+        // Permalinks omit embedded menus. A group attribution must agree with
+        // the primary header, and exactly one linked author must own the date.
+        const links = Array.from(section.querySelectorAll('[role="link"],a'))
+          .filter(visible).map(node => clean(node.innerText)).filter(Boolean);
+        if (groups.length !== 1 || !links.includes(groups[0])) continue;
+        const candidates = Array.from(new Set(links))
+          .filter(name => !groups.includes(name))
+          .map(name => recognizeHeader(section, null, name))
+          .filter(value => value.status === 'recognized');
+        if (candidates.length !== 1) continue;
+        result = candidates[0];
       }
-      previous = unit.index;
+      if (!headerMetadataOnly(section, option, result, groups)) continue;
+      embedded.push({index, menu:option});
     }
-    const prefix = parseBody(sections.slice(0, headers[0].index));
-    if (prefix.unsupported || prefix.text || prefix.mediaKeys.length
-      || prefix.bodyControlCount || prefix.partial
-      || sections.slice(0, headers[0].index).some(section =>
-        section.matches('img,video,[role="img"]')
-        || section.querySelector('img,video,[role="img"]'))) return null;
-    for (let index = 0; index < headers.length; index++) {
-      const unit = headers[index], next = headers[index + 1];
-      unit.start = unit.index + 1;
-      const footer = recognizeFooter(sections, unit.start);
-      if (next) {
-        if (footer.status === 'incomplete') return null;
-        const ownFooter = footer.status === 'recognized' && footer.index < next.index;
-        unit.end = ownFooter ? footer.index : next.index;
-        unit.footer = ownFooter ? sections[footer.index] : null;
-        if (ownFooter) {
-          const gap = parseBody(sections.slice(footer.index + 1, next.index));
-          if (gap.unsupported || gap.text || gap.mediaCount
-            || gap.bodyControlCount || gap.partial) return null;
-        }
-      } else {
-        if (footer.status !== 'recognized' || footer.index < unit.start) {
-          return null;
-        }
-        unit.end = footer.index;
-        unit.footer = sections[footer.index];
-      }
-      unit.sections = sections;
-      unit.body = parseBody(sections.slice(unit.start, unit.end));
-      if (unit.body.unsupported || (!unit.body.text && !unit.body.mediaCount)
-        || unit.body.partial && unit.body.expanders.length !== 1) return null;
+    if (!embedded.length || embedded.length > 8) return null;
+    if (menus.some(option => option !== menu
+      && !embedded.some(unit => unit.menu === option))) return null;
+    const ownBody = parseBody(sections.slice(start, embedded[0].index));
+    if (ownBody.unsupported || (!ownBody.text && !ownBody.mediaCount)) return null;
+    for (let index = 0; index < embedded.length; index++) {
+      const from = embedded[index].index + 1;
+      const end = embedded[index + 1]?.index ?? footer.index;
+      const body = parseBody(sections.slice(from, end));
+      if (body.unsupported || (!body.text && !body.mediaCount)) return null;
     }
-    return headers;
-  };
-
-  const postUnitMenus = card => {
-    const initial = primaryMenus(card);
-    return Array.from(card.querySelectorAll(menuSelector)).filter(menu => {
-      if (!visible(menu) || menu.closest(excludedSelector)) return false;
-      if (initial.includes(menu)) return true;
-      const header = branch(card, menu);
-      return header && headerMetadataOnly(header, menu, recognizeHeader(header, menu));
-    });
+    for (const section of sections.slice(embedded[0].index, footer.index)) {
+      roles.set(section, 'discussion');
+      ownBody.regions.push({role:'discussion', node:section});
+      ownBody.blocks.push({role:'discussion', textChars:clean(section.innerText).length,
+        component:section.getAttribute('data-mcomponent')});
+    }
+    ownBody.recognizers.find(item => item.name === 'discussion').status = 'recognized';
+    return {menu, body:ownBody};
   };
 """

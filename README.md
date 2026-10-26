@@ -197,13 +197,16 @@ text. Media-only links require matching stable attachment identifiers rather
 than image counts. Link verification waits for the same document to finish
 rendering and still requires exact complete message equality and matching author,
 publication, group, and canonical post identity.
-Feed wrappers can contain several posts. A named compound-unit recognizer
-requires separate closed author/date headers and an independently supported,
-nonempty body for each. The next validated sibling header may bound an earlier
-unit before a footer is rendered; the last unit still needs its own complete
-action row. Each unit is expanded separately and must match its own copied
-same-group permalink, including its complete message, author and publication.
-Comments, replies and bounded shared-post regions remain excluded.
+One outer card still owns one primary post. A named embedded-content recognizer
+requires its primary header, supported authored body and complete outer action
+row. Later complete author/date headers and their supported bodies are embedded
+content, not extra feed posts or part of the primary message. On permalinks an
+embedded menu may be hidden or absent: the group attribution must match the
+primary header and exactly one linked author must own the date. Group thumbnails
+and avatars can use closed, image-only action branches; unknown controls and
+unowned metadata still reject the layout. This grammar is shared by feed and
+permalink parsing, so quote text cannot prevent an otherwise matching main post
+from passing full-message verification. The main menu's copied link is unchanged.
 Unresolved competing menus never select a post. A card with separate author/date
 headers, a supported body and a complete action footer can qualify only for
 bounded render recovery after its readiness deadline. Every candidate must be

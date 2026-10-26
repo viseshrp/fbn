@@ -543,19 +543,23 @@ def mobile_header_assembly_fixture(
     )
 
 
-def mobile_compound_fixture(
+def mobile_embedded_post_fixture(
     *,
     partial: bool = False,
+    permalink: bool = False,
+    embedded_menu: str = "visible",
     include_boundary: bool = False,
-    intermediate_footer: bool = False,
 ) -> str:
-    """Two real sibling post units; only the last has a rendered footer."""
+    """Unlabelled shared group-post attribution in a flat Bloks outer card."""
     stories = [
         ("302", "Synthetic First", "First body. Full continuation."),
-        ("301", "Synthetic Second", "Second body."),
+        ("301", "Synthetic Embedded", "Embedded body."),
     ]
     if include_boundary:
-        stories.append(("300", "Synthetic Boundary", "Old body."))
+        stories += [
+            ("303", "Synthetic Other", "Another main body."),
+            ("300", "Synthetic Boundary", "Old body."),
+        ]
     html = mobile_fixture(stories).replace("10:00 AM", "11:00 AM", 1)
     if partial:
         html = html.replace(
@@ -569,16 +573,36 @@ def mobile_compound_fixture(
     return (
         html
         + """<script>
-      const first=document.querySelector('[data-story="302"]');
-      const second=document.querySelector('[data-story="301"]');
-      if(!__INTERMEDIATE_FOOTER__)
-        first.querySelector('[aria-label="Make a comment"]').parentElement.remove();
-      first.lastElementChild.remove();
-      second.firstElementChild.remove();
-      while(second.firstChild)first.append(second.firstChild);
-      second.remove();
-    </script>"""
-    ).replace("__INTERMEDIATE_FOOTER__", json.dumps(intermediate_footer))
+      const outer=document.querySelector('[data-story="302"]');
+      const inner=document.querySelector('[data-story="301"]');
+      const footer=outer.children[3],reply=outer.lastElementChild;
+      footer.remove();reply.remove();
+      inner.firstElementChild.remove();
+      outer.append(inner.children[0],inner.children[1],footer,reply);
+      inner.remove();
+      const headers=[outer.children[1],outer.children[3]];
+      if(__PERMALINK__) for(const header of headers) {
+        const text=document.createElement('div');
+        text.setAttribute('data-mcomponent','ServerTextArea');
+        const link=document.createElement('span');link.setAttribute('role','link');
+        link.textContent='Synthetic Group';text.append(link);header.prepend(text);
+        for(const size of [44,20]) {
+          const avatar=document.createElement('div');
+          avatar.setAttribute('data-mcomponent','MContainer');
+          avatar.setAttribute('data-action-id','synthetic-header-avatar');
+          avatar.style='width:'+size+'px;height:'+size+'px';
+          const image=document.createElement('img');image.width=image.height=size;
+          image.src='https://scontent.example.fbcdn.net/avatar_n.jpg';
+          avatar.append(image);header.prepend(avatar);
+        }
+      }
+      const menu=outer.querySelector('[data-action-id="menu-301"]');
+      if(__EMBEDDED_MENU__==='absent')menu.remove();
+      else if(__EMBEDDED_MENU__==='hidden')menu.hidden=true;
+    </script>""".replace("__PERMALINK__", json.dumps(permalink)).replace(
+            "__EMBEDDED_MENU__", json.dumps(embedded_menu)
+        )
+    )
 
 
 def app_prompt_fixture(*, known: bool = True, delay_ms: int = 0) -> str:

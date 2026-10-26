@@ -167,17 +167,22 @@ arrives between the earlier state check and that deadline snapshot, the scan
 aborts for backoff; it neither accepts a late view against stale state nor
 reports a layout failure with no missing components.
 
-The outer feed wrapper is not a post boundary. The compound-unit recognizer
-requires distinct sibling metadata-only headers in document order, a supported
-nonempty body between every pair, no unowned prefix or controls, and a complete
-final action footer. A following validated header bounds an earlier unit even
-when its footer is not rendered. Empty units, nested headers, unknown controls
-and incomplete action rows cannot become this shape. This grammar is feed-only;
-permalinks still require exactly one primary post and its own footer.
-Every source unit retains its own menu and expansion region. Acquisition copies
-that menu's link before expansion and independently requires exact complete
-message, author, publication and same-group canonical identity on the destination.
-One failed unit aborts observation and delivery for the entire acquisition.
+An outer card retains one primary header and action row. The embedded-content
+recognizer composes complete metadata-only author/date headers and supported
+nonempty bodies inside that ownership boundary. It requires supported primary
+content before any embedded header and accounts for every extra visible menu.
+Embedded regions become discussion/attachment evidence, never additional primary
+records and never part of the main message. Unknown controls or empty/ambiguous
+regions cannot be discarded by this recognizer.
+
+Feed cards can expose an embedded menu that permalinks omit. With no menu,
+embedded attribution must name the same group as the primary header and exactly
+one visible linked author must own its accessible publication date. Group/avatar
+images may be unlabelled image-only action branches: they require the verified
+group attribution, avatar-sized media and no nested controls or actions. Main
+author/body/publication and same-group canonical-link verification is unchanged.
+This shared grammar prevents a permalink's embedded message being concatenated
+with the main author's shortened or expanded text. Only the main menu is copied.
 
 Unresolved competing menus are never resolved by picking one. A header-assembly
 classifier validates every header's author/date and closed metadata ownership,

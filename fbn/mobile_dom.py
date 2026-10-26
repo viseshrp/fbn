@@ -52,7 +52,7 @@ MOBILE_SCAN_SCRIPT = (
   const missing = new Set();
   let candidateCount = 0;
   let headerAssemblyCount = 0, unclassifiedMenuCards = 0;
-  let compoundCardCount = 0;
+  let embeddedCardCount = 0;
   if (roots.length !== 1) missing.add('unique_mobile_scroller');
   const branch = (root, node) => presentationChildren(root)
     .find(child => child === node || child.contains(node)) || null;
@@ -104,20 +104,18 @@ MOBILE_SCAN_SCRIPT = (
       }
     }
     for (const card of cards) {
-      const primary = postUnitMenus(card);
+      const primary = primaryMenus(card);
       if (!primary.length) continue;
       candidateCount++;
-      const compound = !permalink && primary.length > 1
-        ? recognizeCompoundPosts(card, primary) : null;
-      if (primary.length !== 1 && !compound) {
+      const embedded = recognizeEmbeddedCard(card, primary);
+      if (primary.length !== 1 && !embedded) {
         if (recognizeHeaderAssembly(card, primary)) headerAssemblyCount++;
         else unclassifiedMenuCards++;
         missing.add('unique_primary_menu'); continue;
       }
-      if (compound) { candidateCount += compound.length - 1; compoundCardCount++; }
-      for (const unit of compound || [{menu:primary[0]}]) {
-      const menu = unit.menu;
-      const header = unit.header || branch(card, menu);
+      if (embedded) embeddedCardCount++;
+      const menu = embedded ? embedded.menu : primary[0];
+      const header = branch(card, menu);
       roles.set(header, 'header');
       const headerResult = recognizeHeader(header, menu);
       if (headerResult.status !== 'recognized') {
@@ -126,15 +124,13 @@ MOBILE_SCAN_SCRIPT = (
       const {owner, timestamp} = headerResult;
       const sections = sectionsFor(card);
       const start = sections.indexOf(header) + 1;
-      const footer = unit.body ? {status:'recognized', index:unit.end}
-        : recognizeFooter(sections, start);
+      const footer = recognizeFooter(sections, start);
       const end = footer.index;
       if (footer.status !== 'recognized' || end < start) {
         missing.add('primary_action_footer'); continue;
       }
-      const footerNode = unit.body ? unit.footer : sections[end];
-      if (footerNode) roles.set(footerNode, 'footer');
-      const body = unit.body || parseBody(sections.slice(start, end));
+      roles.set(sections[end], 'footer');
+      const body = embedded ? embedded.body : parseBody(sections.slice(start, end));
       if (body.unsupported) {
         for (const issue of body.issues) missing.add('body_' + issue);
         missing.add('supported_primary_body_controls'); continue;
@@ -156,7 +152,7 @@ MOBILE_SCAN_SCRIPT = (
       ) && !body.regions.some(region => region.role !== 'message'
         && actionRegion.contains(region.node))) expand = actionRegion;
       records.push({card, menu, expand, regions: body.regions,
-        header, footer: footerNode,
+        header, footer: sections[end],
         payload: {
         author: owner, text, timestamp: clean(timestamp.node.innerText),
         timestampLabel: timestamp.label,
@@ -173,7 +169,6 @@ MOBILE_SCAN_SCRIPT = (
         parserVersion: 1, recognizers: body.recognizers,
         normalization: body.normalization,
       }});
-      }
     }
   }
   const counts = {
@@ -181,7 +176,7 @@ MOBILE_SCAN_SCRIPT = (
     containerCount: candidateCount, authorCount: records.length,
     storyMessageCount: records.length, postCount: records.length,
     hasFeed: roots.length === 1, missing: Array.from(missing),
-    headerAssemblyCount, unclassifiedMenuCards, compoundCardCount,
+    headerAssemblyCount, unclassifiedMenuCards, embeddedCardCount,
   };
   return includeContent ? {...counts, records} : counts;
 }
