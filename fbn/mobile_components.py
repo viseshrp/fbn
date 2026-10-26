@@ -76,6 +76,8 @@ BODY_COMPONENTS_SCRIPT = r"""
         || ((!node.component || ['MContainer','TextArea','ServerTextArea',
           'ImageArea','ServerImageArea','VideoArea','ServerVideoArea']
           .includes(node.component))
+          && (!node.el.hasAttribute('role')
+            || ['button','img','link'].includes(node.el.getAttribute('role')))
           && (node.component !== 'MContainer' || !node.el.hasAttribute('data-type')
             || node.el.getAttribute('data-type') === 'container'));
       const untypedAction = node => node.flags.action
@@ -136,11 +138,15 @@ BODY_COMPONENTS_SCRIPT = r"""
         '^(?:(?:mon|tue|wed|thu|fri|sat|sun)'
         + '(?:day|sday|nesday|rsday|urday)?[, ]+)?'
         + '(?:today|tomorrow|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?'
-        + '|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?'
-        + '|nov(?:ember)?|dec(?:ember)?)\\s+\\d{1,2})'
-        + '(?:[, ]+(?:\\d{4}|at|\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?'
-        + '|[A-Z]{2,4}))*$', 'i');
-      const eventDate = value => /\d/.test(value) && eventDatePattern.test(value);
+        + '|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?'
+        + '|nov(?:ember)?|dec(?:ember)?)\\s+(?:0?[1-9]|[12][0-9]|3[01])'
+        + '(?:[, ]+[12][0-9]{3})?)'
+        + '(?:[, ]+(?:at\\s+)?(?:(?:0?[1-9]|1[0-2])'
+        + '(?::[0-5][0-9])?\\s*(?:am|pm)'
+        + '|(?:[01]?[0-9]|2[0-3]):[0-5][0-9])'
+        + '(?:\\s+(?:UTC|GMT|[ECMP][SD]T))?)?$', 'i');
+      const eventDate = value => eventDatePattern.test(
+        clean(value.replace(/\p{Co}/gu, '')));
       for (const node of nodes.filter(untypedAction)) {
         if (claims.get(node)?.role === 'attachment') continue;
         const content = descendants(node);

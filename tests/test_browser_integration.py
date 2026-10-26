@@ -1015,7 +1015,15 @@ def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path)
     with _local_context(tmp_path) as context:
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
-        for date in ("Today at 4PM", "Tomorrow at 10:30 AM", "Jan 17, 2027 at 16:00"):
+        for date in (
+            "Today",
+            "Tomorrow",
+            "Sun, Jan 17",
+            "Today at 4PM",
+            "Tomorrow at 10:30 AM",
+            "Jan 17, 2027 at 16:00",
+            "\U000f0123 Today at 4PM",
+        ):
             for label in ("Interested", "Going", "View event"):
                 html = mobile_controlled_attachment_fixture("event")
                 html = html.replace("Sun, Jan 17 at 4:00 PM", date)
@@ -1027,6 +1035,41 @@ def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path)
                         "Synthetic authored message. Full continuation."
                     )
                     assert records[0][1]["mediaCount"] == 1
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Today is fun 4", "Jan 99 at 4PM", "Today at 29:99", "Jan 17, 2027 at 4PM fun"],
+)
+def test_attachment_event_requires_calendar_and_clock_metadata(tmp_path, value):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        html = mobile_controlled_attachment_fixture("event")
+        page.set_content(html.replace("Sun, Jan 17 at 4:00 PM", value))
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
+@pytest.mark.parametrize("kind", ["photo", "photo_credit", "event"])
+def test_attachment_ownership_cannot_erase_unknown_media_roles(tmp_path, kind):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture(kind))
+        owner = "synthetic-event" if kind == "event" else "synthetic-media-open"
+        page.locator(
+            f'[data-action-id="{owner}"] [data-mcomponent="ServerImageArea"]'
+        ).evaluate(
+            """el => {
+              const unknown=document.createElement('div');
+              unknown.setAttribute('role','alert');
+              unknown.style.cssText='width:8px;height:8px';
+              el.append(unknown);
+            }"""
+        )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
 
 
 @pytest.mark.parametrize(
