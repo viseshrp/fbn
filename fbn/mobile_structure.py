@@ -228,17 +228,21 @@ HEADER_COMPONENT_SCRIPT = r"""
         if (!result || !headerMetadataOnly(section, null, result, groups)) {
           // A metadata-shaped unresolved header must not fall through into
           // authored text. Ordinary message and supported attachment sections
-          // remain the body recognizer's responsibility.
+          // remain the body recognizer's responsibility. An empty link or an
+          // arbitrary image/region label is not author/date evidence.
           const dates = Array.from(section.querySelectorAll('[aria-label]'))
             .filter(node => visible(node) && !node.matches(menuSelector)
               && !node.closest(excludedSelector)
               && !links.some(link => link.contains(node))
               && (node.matches(textSelector)
-                || node.matches('[data-mcomponent="MContainer"]')));
+                || node.matches('[data-mcomponent="MContainer"]'))
+              && (result?.status === 'recognized' && result.timestamp.node === node
+                || timestampPattern.test(clean(node.getAttribute('aria-label'))
+                  .replace(/, (?:Private|Public) group$/, ''))));
           const media = Array.from(section.querySelectorAll(
             'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
           )).filter(node => !node.closest(excludedSelector));
-          if ((!links.length && !dates.length) || (!dates.length && !media.length)) {
+          if ((!names.length && !dates.length) || (!dates.length && !media.length)) {
             continue;
           }
           const owned = [...links, ...dates];
