@@ -1,5 +1,12 @@
 [
   {
+    "case": "menu_free_feed_embedded_header_without_group_heading",
+    "evidence_date": "2026-10-27",
+    "expected_blocks": ["header", "message", "discussion", "footer"],
+    "outcome": "infer_only_closed_author_date_metadata_reject_ambiguity_without_message_fallback_and_verify_main_post_atomically",
+    "tests": ["test_flat_embedded_post_has_one_primary_owner", "test_embedded_post_menus_do_not_change_main_link_verification", "test_menu_free_embedded_header_owns_only_author_date_and_avatar", "test_menu_free_embedded_header_never_falls_back_to_main_message"]
+  },
+  {
     "case": "unlabelled_embedded_group_post_and_permalink_group_avatars",
     "evidence_date": "2026-10-26",
     "expected_blocks": ["header", "message", "discussion", "footer"],

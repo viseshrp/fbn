@@ -80,13 +80,14 @@ HEADER_COMPONENT_SCRIPT = r"""
         + '[data-mcomponent="ServerImageArea"]'));
     const buttons = Array.from(root.querySelectorAll('button,[role="button"]'))
       .filter(visible);
-    // Group-post headers also use unlabelled image-only action branches for
-    // the group thumbnail and author's avatar. They are metadata only with a
-    // verified group attribution, avatar-sized bounds and no nested actions.
-    const untypedPictures = groups.length ? Array.from(root.querySelectorAll(
+    // An independently recognized author/date header can own image-only avatar
+    // branches even when the feed omits repeated group attribution. Bounds and
+    // the closed subtree, never a picture alone, prove metadata ownership.
+    const untypedPictures = Array.from(root.querySelectorAll(
       '[data-mcomponent="MContainer"][data-action-id]:not([role])'
     )).filter(node => {
       if (!visible(node) || clean(node.innerText).replace(/\p{Co}/gu, '')
+        || Array.from(node.attributes).some(attr => /^on/i.test(attr.name))
         || !node.querySelector('img,[data-mcomponent="ImageArea"],'
           + '[data-mcomponent="ServerImageArea"]')) return false;
       const media = Array.from(node.querySelectorAll(
@@ -103,7 +104,7 @@ HEADER_COMPONENT_SCRIPT = r"""
         && (!child.hasAttribute('data-mcomponent')
           || ['MContainer','ImageArea','ServerImageArea']
             .includes(child.getAttribute('data-mcomponent'))));
-    }) : [];
+    });
     const avatars = [...pictures, ...untypedPictures];
     if (buttons.some(node => node !== menu && !avatars.includes(node))
       || root.querySelector('input,select,textarea,[contenteditable="true"],'
@@ -183,6 +184,9 @@ HEADER_COMPONENT_SCRIPT = r"""
   // attributed post headers/bodies before that row is embedded content, not a
   // continuation of the author's message or additional primary feed entries.
   const recognizeEmbeddedCard = (card, menus) => {
+    const ambiguous = (missing = 'supported_embedded_post_ownership') => ({
+      status:'ambiguous', missing,
+    });
     if (!menus.length || menus.length > 8) return null;
     const sections = sectionsFor(card), menu = menus[0];
     const header = branch(card, menu), start = sections.indexOf(header) + 1;
@@ -197,43 +201,90 @@ HEADER_COMPONENT_SCRIPT = r"""
       return null;
     }
     const prefix = parseBody(sections.slice(0, start - 1));
-    if (prefix.unsupported || prefix.text || prefix.bodyControlCount) return null;
+    const unsupportedPrefix = prefix.unsupported || prefix.text
+      || prefix.bodyControlCount;
     const footer = recognizeFooter(sections, start);
     if (footer.status !== 'recognized') return null;
     const embedded = [];
     for (let index = start; index < footer.index; index++) {
       const section = sections[index];
       if (section.matches(excludedSelector)) continue;
-      const options = Array.from(section.querySelectorAll(menuSelector));
-      if (options.length > 1) return null;
+      const options = Array.from(section.querySelectorAll(menuSelector))
+        .filter(node => !node.closest(excludedSelector));
+      if (options.length > 1) return ambiguous('unique_embedded_header_menu');
       let result, option = options[0] || null;
       if (option) result = recognizeHeader(section, option);
       else {
-        // Permalinks omit embedded menus. A group attribution must agree with
-        // the primary header, and exactly one linked author must own the date.
+        // Both views can omit this menu. Infer only one visible linked author
+        // in a closed author/date header. When either header supplies a group,
+        // that attribution must still agree; no group name is guessed.
         const links = Array.from(section.querySelectorAll('[role="link"],a'))
-          .filter(visible).map(node => clean(node.innerText)).filter(Boolean);
-        if (groups.length !== 1 || !links.includes(groups[0])) continue;
-        const candidates = Array.from(new Set(links))
-          .filter(name => !groups.includes(name))
-          .map(name => recognizeHeader(section, null, name))
-          .filter(value => value.status === 'recognized');
-        if (candidates.length !== 1) continue;
-        result = candidates[0];
+          .filter(node => visible(node) && !node.closest(excludedSelector));
+        const names = links.map(node => clean(node.innerText)).filter(Boolean);
+        const owners = names.filter(name => !groups.includes(name));
+        if (owners.length === 1) {
+          result = recognizeHeader(section, null, owners[0]);
+        }
+        if (!result || !headerMetadataOnly(section, null, result, groups)) {
+          // A metadata-shaped unresolved header must not fall through into
+          // authored text. Ordinary message and supported attachment sections
+          // remain the body recognizer's responsibility.
+          const dates = Array.from(section.querySelectorAll('[aria-label]'))
+            .filter(node => visible(node) && !node.matches(menuSelector)
+              && !node.closest(excludedSelector)
+              && !links.some(link => link.contains(node))
+              && (node.matches(textSelector)
+                || node.matches('[data-mcomponent="MContainer"]')));
+          const media = Array.from(section.querySelectorAll(
+            'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
+          )).filter(node => !node.closest(excludedSelector));
+          if ((!links.length && !dates.length) || (!dates.length && !media.length)) {
+            continue;
+          }
+          const owned = [...links, ...dates];
+          const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+          let node, visited = 0, metadataText = true;
+          while ((node = walker.nextNode())) {
+            if (++visited > 12000) return ambiguous('embedded_header_node_budget');
+            if (node.parentElement.closest(excludedSelector)) continue;
+            if (clean(node.textContent.replace(/\p{Co}/gu, ''))
+              && visible(node.parentElement)
+              && !owned.some(owner => owner.contains(node))) {
+              metadataText = false; break;
+            }
+          }
+          if (metadataText && (links.length || dates.length)
+            && (dates.length || media.length)) {
+            const body = parseBody([section]);
+            if (body.unsupported || body.text || !body.mediaCount) {
+              return ambiguous('embedded_header_author_date_or_metadata');
+            }
+          }
+          continue;
+        }
       }
-      if (!headerMetadataOnly(section, option, result, groups)) continue;
+      if (!headerMetadataOnly(section, option, result, groups)) {
+        return ambiguous('embedded_header_metadata');
+      }
       embedded.push({index, menu:option});
     }
     if (!embedded.length || embedded.length > 8) return null;
+    if (unsupportedPrefix) return ambiguous('embedded_card_prefix');
     if (menus.some(option => option !== menu
-      && !embedded.some(unit => unit.menu === option))) return null;
+      && !embedded.some(unit => unit.menu === option))) {
+      return ambiguous('unique_embedded_header_menu');
+    }
     const ownBody = parseBody(sections.slice(start, embedded[0].index));
-    if (ownBody.unsupported || (!ownBody.text && !ownBody.mediaCount)) return null;
+    if (ownBody.unsupported || (!ownBody.text && !ownBody.mediaCount)) {
+      return ambiguous('primary_body_before_embedded');
+    }
     for (let index = 0; index < embedded.length; index++) {
       const from = embedded[index].index + 1;
       const end = embedded[index + 1]?.index ?? footer.index;
       const body = parseBody(sections.slice(from, end));
-      if (body.unsupported || (!body.text && !body.mediaCount)) return null;
+      if (body.unsupported || (!body.text && !body.mediaCount)) {
+        return ambiguous('supported_embedded_body');
+      }
     }
     for (const section of sections.slice(embedded[0].index, footer.index)) {
       roles.set(section, 'discussion');
@@ -242,6 +293,6 @@ HEADER_COMPONENT_SCRIPT = r"""
         component:section.getAttribute('data-mcomponent')});
     }
     ownBody.recognizers.find(item => item.name === 'discussion').status = 'recognized';
-    return {menu, body:ownBody};
+    return {status:'recognized', menu, body:ownBody};
   };
 """

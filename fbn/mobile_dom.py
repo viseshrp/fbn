@@ -99,7 +99,8 @@ MOBILE_SCAN_SCRIPT = (
       // One primary header or a fully recognized embedded-card grammar must
       // precede the outer footer; menu visibility alone is not ownership.
       const menus = primaryMenus(root), sections = sectionsFor(root);
-      if (menus.length === 1 || recognizeEmbeddedCard(root, menus)) {
+      if (menus.length === 1
+        || recognizeEmbeddedCard(root, menus)?.status === 'recognized') {
         const start = sections.indexOf(branch(root, menus[0])) + 1;
         if (recognizeFooter(sections, start).index >= start) cards = [root];
       }
@@ -108,7 +109,16 @@ MOBILE_SCAN_SCRIPT = (
       const primary = primaryMenus(card);
       if (!primary.length) continue;
       candidateCount++;
-      const embedded = recognizeEmbeddedCard(card, primary);
+      const ownership = recognizeEmbeddedCard(card, primary);
+      if (ownership?.status === 'ambiguous') {
+        if (primary.length > 1) {
+          if (recognizeHeaderAssembly(card, primary)) headerAssemblyCount++;
+          else unclassifiedMenuCards++;
+          missing.add('unique_primary_menu');
+        } else missing.add(ownership.missing);
+        continue;
+      }
+      const embedded = ownership?.status === 'recognized' ? ownership : null;
       if (primary.length !== 1 && !embedded) {
         if (recognizeHeaderAssembly(card, primary)) headerAssemblyCount++;
         else unclassifiedMenuCards++;

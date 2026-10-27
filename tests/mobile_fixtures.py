@@ -550,6 +550,9 @@ def mobile_embedded_post_fixture(
     embedded_menu: str = "visible",
     include_boundary: bool = False,
     flat_root: bool = False,
+    group_attribution: bool | None = None,
+    embedded_group_attribution: bool | None = None,
+    unlabelled_avatar: bool = False,
 ) -> str:
     """Unlabelled shared group-post attribution in a flat Bloks outer card."""
     stories = [
@@ -582,12 +585,17 @@ def mobile_embedded_post_fixture(
       outer.append(inner.children[0],inner.children[1],footer,reply);
       inner.remove();
       const headers=[outer.children[1],outer.children[3]];
-      if(__PERMALINK__) for(const header of headers) {
+      for(const header of headers) {
+        const attributed=header===headers[0] ? __GROUP_ATTRIBUTION__
+          : __EMBEDDED_GROUP_ATTRIBUTION__;
+       if(attributed) {
         const text=document.createElement('div');
         text.setAttribute('data-mcomponent','ServerTextArea');
         const link=document.createElement('span');link.setAttribute('role','link');
         link.textContent='Synthetic Group';text.append(link);header.prepend(text);
-        for(const size of [44,20]) {
+       }
+        for(const size of (attributed ? [44,20]
+          : (__UNLABELLED_AVATAR__ ? [44] : []))) {
           const avatar=document.createElement('div');
           avatar.setAttribute('data-mcomponent','MContainer');
           avatar.setAttribute('data-action-id','synthetic-header-avatar');
@@ -605,7 +613,21 @@ def mobile_embedded_post_fixture(
         const root=outer.closest('[data-type="vscroller"]');
         root.replaceChildren(...Array.from(outer.childNodes));
       }
-    </script>""".replace("__PERMALINK__", json.dumps(permalink))
+    </script>""".replace(
+            "__GROUP_ATTRIBUTION__",
+            json.dumps(permalink if group_attribution is None else group_attribution),
+        )
+        .replace("__UNLABELLED_AVATAR__", json.dumps(unlabelled_avatar))
+        .replace(
+            "__EMBEDDED_GROUP_ATTRIBUTION__",
+            json.dumps(
+                embedded_group_attribution
+                if embedded_group_attribution is not None
+                else permalink
+                if group_attribution is None
+                else group_attribution
+            ),
+        )
         .replace("__EMBEDDED_MENU__", json.dumps(embedded_menu))
         .replace("__FLAT_ROOT__", json.dumps(flat_root))
     )

@@ -200,11 +200,14 @@ publication, group, and canonical post identity.
 One outer card still owns one primary post. A named embedded-content recognizer
 requires its primary header, supported authored body and complete outer action
 row. Later complete author/date headers and their supported bodies are embedded
-content, not extra feed posts or part of the primary message. On permalinks an
-embedded menu may be hidden or absent: the group attribution must match the
-primary header and exactly one linked author must own the date. Group thumbnails
-and avatars can use closed, image-only action branches; unknown controls and
-unowned metadata still reject the layout. This grammar is shared by feed and
+content, not extra feed posts or part of the primary message. Either view may
+omit the embedded menu and repeated group heading. The closed header must still
+contain exactly one linked author and one accessible publication date; any group
+attribution must agree with the primary header. Avatars can use bounded,
+image-only action branches without inline handlers or nested actions. Unresolved
+metadata-shaped headers reject the card instead of falling back into message
+text. Unknown controls and unowned metadata still reject the layout. This grammar
+is shared by feed and
 permalink parsing, so quote text cannot prevent an otherwise matching main post
 from passing full-message verification. The main menu's copied link is unchanged.
 Unresolved competing menus never select a post. A card with separate author/date

@@ -13,6 +13,15 @@ or other credentials in source, fixtures, commands, logs, test output, commits,
 or reports. Tests must use synthetic data and local sanitized fixtures; they
 must never contact Facebook or send a real notification.
 
+## Incident follow-through
+
+A reported FBN operational failure is authorization to diagnose it, implement
+the repair, add regression coverage, validate, commit/push, and perform a guarded
+Pi deployment without another routine approval request. Preserve failure evidence,
+authentication, notification history, schedule eligibility, and rollback images.
+Still stop for missing credentials, account-security decisions, destructive data
+changes, or work materially outside the reported failure.
+
 ## Main-branch-only workflow
 
 All work must be performed directly on `main`. Before making changes, verify

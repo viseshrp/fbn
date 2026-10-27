@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Separate embedded post text when the feed omits both its menu and repeated
+  group heading. Require one linked author/date, reject unresolved metadata
+  rather than treating it as message text, and preserve strict link verification.
+- Cross feed and permalink menu states independently in delivery/restart
+  regressions, including malformed headers and unsafe avatar branches.
+
 ### Added
 
 - Recognize unlabelled embedded group-post headers in feed and permalink views,

@@ -4392,10 +4392,8 @@ def test_header_assembly_waits_for_coherent_dom_without_reloading(tmp_path):
         assert page.url == "about:blank" and page.evaluate("activePost === null")
 
 
-@pytest.mark.parametrize(
-    "permalink,menu_state",
-    [(False, "visible"), (True, "visible"), (True, "hidden"), (True, "absent")],
-)
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("menu_state", ["visible", "hidden", "absent"])
 @pytest.mark.parametrize("partial", [False, True])
 def test_flat_embedded_post_has_one_primary_owner(
     tmp_path, permalink, menu_state, partial
@@ -4434,10 +4432,17 @@ def test_flat_embedded_post_has_one_primary_owner(
 @pytest.mark.parametrize("source_partial", [False, True])
 @pytest.mark.parametrize("target_partial", [False, True])
 @pytest.mark.parametrize("menu_state", ["visible", "hidden", "absent"])
+@pytest.mark.parametrize("source_menu", ["visible", "hidden", "absent"])
 @pytest.mark.parametrize("wrong_main", [False, True])
 @pytest.mark.parametrize("flat_root", [False, True])
 def test_embedded_post_menus_do_not_change_main_link_verification(
-    tmp_path, source_partial, target_partial, menu_state, wrong_main, flat_root
+    tmp_path,
+    source_partial,
+    target_partial,
+    menu_state,
+    source_menu,
+    wrong_main,
+    flat_root,
 ):
     from types import SimpleNamespace
 
@@ -4476,7 +4481,9 @@ def test_embedded_post_menus_do_not_change_main_link_verification(
                 )
             else:
                 html = mobile_embedded_post_fixture(
-                    partial=source_partial, include_boundary=True
+                    partial=source_partial,
+                    embedded_menu=source_menu,
+                    include_boundary=True,
                 )
             route.fulfill(status=200, content_type="text/html", body=html)
 
@@ -4579,10 +4586,8 @@ def test_embedded_post_recognition_never_discards_unknown_ownership(tmp_path, fa
         assert page.evaluate("activePost === null")
 
 
-@pytest.mark.parametrize(
-    "permalink,menu_state",
-    [(False, "visible"), (True, "visible"), (True, "hidden"), (True, "absent")],
-)
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("menu_state", ["visible", "hidden", "absent"])
 def test_embedded_post_with_same_author_and_message_is_not_a_second_primary(
     tmp_path, permalink, menu_state
 ):
@@ -4635,6 +4640,123 @@ def test_embedded_permalink_direct_scroller_has_one_primary_owner(tmp_path, mode
             assert copy_post_link(
                 page, menu, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
             ).endswith("/302/")
+
+
+@pytest.mark.parametrize("permalink", [False, True])
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize(
+    "group_attribution,embedded_group_attribution",
+    [(False, False), (True, True), (True, False)],
+)
+def test_menu_free_embedded_header_owns_only_author_date_and_avatar(
+    tmp_path, permalink, partial, group_attribution, embedded_group_attribution
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_embedded_post_fixture(
+                permalink=permalink,
+                embedded_menu="absent",
+                partial=partial,
+                group_attribution=group_attribution,
+                embedded_group_attribution=embedded_group_attribution,
+                unlabelled_avatar=True,
+            )
+        )
+        with mobile_records(page, permalink=permalink) as records:
+            assert len(records) == 1
+            menu, payload = records[0]
+            if partial:
+                payload = expand_post_preview(
+                    page,
+                    menu,
+                    payload,
+                    timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
+                    permalink=permalink,
+                )
+            assert payload["text"] == "First body. Full continuation."
+            assert any(block["role"] == "discussion" for block in payload["blocks"])
+            assert copy_post_link(
+                page, menu, timeout_seconds=OFFLINE_NAVIGATION_SECONDS
+            ).endswith("/302/")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "no_author",
+        "two_authors",
+        "no_date",
+        "two_dates",
+        "header_control",
+        "body_control",
+        "footer",
+        "prefix",
+        "avatar_handler",
+        "large_avatar",
+        "foreign_group",
+        "empty_primary_body",
+        "empty_embedded_body",
+    ],
+)
+def test_menu_free_embedded_header_never_falls_back_to_main_message(tmp_path, fault):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_embedded_post_fixture(
+                embedded_menu="absent",
+                unlabelled_avatar=True,
+                group_attribution=fault == "foreign_group",
+            )
+        )
+        page.evaluate(
+            """fault => {
+          const card=document.querySelector('[data-story]');
+          const header=card.children[3],body=card.children[4];
+          const author=header.querySelector('[role=link]');
+          const date=header.querySelector('[aria-label]');
+          if(fault==='no_author')author.remove();
+          if(fault==='two_authors'){
+            const other=author.cloneNode(true);other.textContent='Another author';
+            author.parentElement.append(other);
+          }
+          if(fault==='no_date')date.remove();
+          if(fault==='two_dates'){
+            const other=date.cloneNode(true);
+            other.setAttribute('aria-label','Sunday, October 11, 2026 at 9:00 AM');
+            header.append(other);
+          }
+          if(fault==='foreign_group'){
+            for(const link of header.querySelectorAll('[role=link]'))
+              if(link.textContent==='Synthetic Group')link.textContent='Other group';
+          }
+          if(fault==='empty_primary_body')card.children[2].replaceChildren();
+          if(fault==='empty_embedded_body')body.replaceChildren();
+          if(fault==='header_control'||fault==='body_control'){
+            const button=document.createElement('button');button.textContent='Unknown';
+            (fault==='header_control'?header:body).append(button);
+          }
+          if(fault==='footer'){
+            card.querySelector('[aria-label="Make a comment"]').remove();
+          }
+          if(fault==='prefix'){
+            const text=document.createElement('div');
+            text.setAttribute('data-mcomponent','ServerTextArea');
+            text.textContent='Unknown prefix';card.prepend(text);
+          }
+          const avatar=header.querySelector(
+            '[data-action-id="synthetic-header-avatar"]');
+          if(fault==='avatar_handler')avatar.setAttribute('onclick','void 0');
+          if(fault==='large_avatar'){
+            avatar.style.width=avatar.style.height='160px';
+            const image=avatar.querySelector('img');image.width=image.height=160;
+          }
+        }""",
+            fault,
+        )
+        with pytest.raises(LayoutChangedError):
+            wait_for_mobile_page(page, timeout_seconds=0.05)
+        assert page.evaluate("activePost === null")
 
 
 def test_header_assembly_diagnostics_do_not_include_content(tmp_path, monkeypatch):

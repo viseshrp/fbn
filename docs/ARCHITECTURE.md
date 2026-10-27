@@ -175,17 +175,24 @@ Embedded regions become discussion/attachment evidence, never additional primary
 records and never part of the main message. Unknown controls or empty/ambiguous
 regions cannot be discarded by this recognizer.
 
-Feed cards can expose an embedded menu that permalinks omit. With no menu,
-embedded attribution must name the same group as the primary header and exactly
-one visible linked author must own its accessible publication date. Group/avatar
-images may be unlabelled image-only action branches: they require the verified
-group attribution, avatar-sized media and no nested controls or actions. Main
+Feed cards and permalinks can independently omit an embedded menu and repeated
+group attribution. Without a menu, exactly one visible linked author must own one
+accessible publication date in a closed metadata-only header. If group attribution
+is present, it must match the primary header; no group identity is inferred from
+an arbitrary extra link. Unlabelled image-only avatar branches require the
+recognized author/date, avatar-sized media, no inline handlers and no nested
+controls or actions. A metadata-shaped unresolved header has an explicit ambiguous
+outcome and cannot fall through into ordinary message extraction. Supported
+attachment regions retain their own recognizer. Main
 author/body/publication and same-group canonical-link verification is unchanged.
 This shared grammar prevents a permalink's embedded message being concatenated
 with the main author's shortened or expanded text. Only the main menu is copied.
 The same ownership recognizer handles direct-scroller permalink rows as well as
 wrapped cards, including visible, hidden and absent embedded menus. Root choice
 does not depend on the raw number of descendant menus.
+Regression coverage crosses source and destination menu states independently,
+including absent feed menus without a repeated group heading, previews/full text,
+wrapped/direct-scroller destinations, bundled delivery and reopened databases.
 
 Unresolved competing menus are never resolved by picking one. A header-assembly
 classifier validates every header's author/date and closed metadata ownership,
