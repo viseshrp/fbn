@@ -23,4 +23,5 @@ build
 dist
 docs
 htmlcov
+scripts
 tests

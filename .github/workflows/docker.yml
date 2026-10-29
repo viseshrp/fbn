@@ -1,0 +1,250 @@
+name: Container
+
+on:
+  schedule:
+    # Off the hour to avoid the busiest scheduler window; always UTC.
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.event.release.tag_name || github.ref_name || github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/viseshrp/fbn
+
+jobs:
+  prepare:
+    if: >-
+      github.repository == 'viseshrp/fbn' &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref_type == 'tag' ||
+       github.event_name == 'release')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      revision: ${{ steps.metadata.outputs.revision }}
+      version: ${{ steps.metadata.outputs.version }}
+      tags: ${{ steps.metadata.outputs.tags }}
+      primary_tag: ${{ steps.metadata.outputs.primary_tag }}
+      created: ${{ steps.metadata.outputs.created }}
+      mode: ${{ steps.metadata.outputs.mode }}
+      publish: ${{ steps.metadata.outputs.publish }}
+    steps:
+      - name: Check out target ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || '' }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Resolve version and image tags
+        id: metadata
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          base_version="$(make -s version)"
+
+          if [[ "$EVENT_NAME" == "release" || "$REF_TYPE" == "tag" ]]; then
+            release_tag="${RELEASE_TAG_NAME:-$REF_NAME}"
+            make check-version RELEASE_TAG="$release_tag"
+            version="$base_version"
+            if [[ "$release_tag" == "v${version}" ]]; then
+              tags="${release_tag} ${version}"
+            else
+              tags="v${version} ${version}"
+            fi
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              tags="$tags latest"
+            fi
+            primary_tag="$release_tag"
+            mode="release"
+            publish="true"
+          else
+            stamp="$(date -u +%Y%m%d)"
+            exact_tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+            if [[ "$exact_tag" == "v${base_version}" || "$exact_tag" == "$base_version" ]]; then
+              version="$base_version"
+            else
+              version="${base_version}.dev${stamp}${GITHUB_RUN_NUMBER}${GITHUB_RUN_ATTEMPT}"
+            fi
+            build_tag="nightly-${stamp}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+            tags="nightly ${build_tag}"
+            if [[ -z "$(git tag -l 'v[0-9]*')" ]]; then
+              tags="${tags} latest"
+            fi
+            primary_tag="nightly"
+            mode="nightly"
+            publish="true"
+          fi
+
+          {
+            echo "revision=$revision"
+            echo "version=$version"
+            echo "tags=$tags"
+            echo "primary_tag=$primary_tag"
+            echo "created=$created"
+            echo "mode=$mode"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and smoke test (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            machine: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+
+      - name: Validate Compose configuration
+        run: make docker-config
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GHCR
+        if: needs.prepare.outputs.publish == 'true'
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Tags move only in the publish job, after both pushed digests pass smoke.
+      - name: Push untagged platform image by digest
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          DOCKER_REPO: ${{ env.IMAGE }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+          DOCKER_VERSION: ${{ needs.prepare.outputs.version }}
+          DOCKER_VCS_REF: ${{ needs.prepare.outputs.revision }}
+          DOCKER_CREATED: ${{ needs.prepare.outputs.created }}
+          DOCKER_NO_CACHE: "1"
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+        run: make docker-push-digest
+
+      - name: Select the image to smoke-test
+        id: subject
+        shell: bash
+        env:
+          PUBLISH: ${{ needs.prepare.outputs.publish }}
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+          LOCAL_IMAGE: ${{ env.IMAGE }}:ci-${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH" == "true" ]]; then
+            digests=("$DIGESTS_DIR"/*)
+            test "${#digests[@]}" -eq 1
+            echo "image=$IMAGE@sha256:$(basename "${digests[0]}")" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=$LOCAL_IMAGE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Smoke test container image
+        env:
+          DOCKER_IMAGE: ${{ steps.subject.outputs.image }}
+          DOCKER_VERSION: ${{ needs.prepare.outputs.version }}
+          DOCKER_VCS_REF: ${{ needs.prepare.outputs.revision }}
+          EXPECTED_ARCH: ${{ matrix.machine }}
+        run: make docker-smoke
+
+      - name: Export the verified platform digest
+        if: needs.prepare.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish container manifest
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+
+      - name: Download verified platform digests
+        uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Publish tags after both platforms pass
+        env:
+          DOCKER_REPO: ${{ env.IMAGE }}
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+          TAGS: ${{ needs.prepare.outputs.tags }}
+          PRIMARY_TAG: ${{ needs.prepare.outputs.primary_tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REVISION: ${{ needs.prepare.outputs.revision }}
+          MODE: ${{ needs.prepare.outputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          make docker-publish-manifest
+          {
+            echo "Mode: $MODE"
+            echo "Version: $VERSION"
+            echo "Source revision: $REVISION"
+            echo "Platforms: linux/amd64, linux/arm64"
+            echo "Tags:"
+            for tag in $TAGS; do
+              echo "- $IMAGE:$tag"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -18,17 +18,41 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/fbn/venv \
-    && python -m pip install --upgrade pip setuptools wheel
+    && python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install "playwright==${PLAYWRIGHT_VERSION}"
 
 WORKDIR /build
 
 COPY pyproject.toml README.md LICENSE ./
 COPY fbn/ fbn/
 
-RUN python -m pip install "playwright==${PLAYWRIGHT_VERSION}" \
-    && python -m pip install . \
+ARG VERSION=0.2.0
+
+RUN VERSION="${VERSION}" python - <<'PY'
+import os
+import re
+from pathlib import Path
+
+version = os.environ.get("VERSION", "").strip()
+if version:
+    init_py = Path("fbn/__init__.py")
+    content = init_py.read_text(encoding="utf-8")
+    updated, count = re.subn(
+        r'^__version__ = "[^"]+"$',
+        f'__version__ = "{version}"',
+        content,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    assert count == 1, "Could not update __version__ in fbn/__init__.py"
+    init_py.write_text(updated, encoding="utf-8")
+PY
+
+RUN python -m pip install . \
+    && python -m pip check \
     && EXPECTED_PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION}" \
-        python -c "import os; from importlib.metadata import version; assert version('playwright') == os.environ['EXPECTED_PLAYWRIGHT_VERSION']"
+       EXPECTED_FBN_VERSION="${VERSION}" \
+        python -c "import os; from importlib.metadata import version; assert version('playwright') == os.environ['EXPECTED_PLAYWRIGHT_VERSION']; assert version('fbn') == os.environ['EXPECTED_FBN_VERSION']"
 
 
 FROM ubuntu:24.04 AS runtime
@@ -45,10 +69,6 @@ ENV HOME=/home/fbn \
     PYTHONUNBUFFERED=1 \
     FBN_HEALTH_FILE=/tmp/fbn-monitor-health.json \
     XDG_DATA_HOME=/home/fbn/.local/share
-
-LABEL org.opencontainers.image.source="https://github.com/viseshrp/fbn" \
-      org.opencontainers.image.description="Local Playwright-based Facebook group monitor" \
-      org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
@@ -102,6 +122,16 @@ VOLUME ["/home/fbn/.local/share/fbn"]
 
 USER fbn:fbn
 WORKDIR /home/fbn
+
+ARG VERSION=0.2.0
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="fbn" \
+      org.opencontainers.image.source="https://github.com/viseshrp/fbn" \
+      org.opencontainers.image.description="Local Playwright-based Facebook group monitor" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 STOPSIGNAL SIGTERM
 

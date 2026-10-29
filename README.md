@@ -1,68 +1,324 @@
 # fbn
 
-`fbn` watches the recent visible posts in one Facebook group and sends new-post
-notifications through [Apprise](https://github.com/caronc/apprise). Version 0.2
-uses Playwright with a dedicated, persistent browser profile instead of direct
-mobile-page requests.
+[![CI](https://github.com/viseshrp/fbn/actions/workflows/ci.yml/badge.svg)](https://github.com/viseshrp/fbn/actions/workflows/ci.yml)
+[![Container](https://github.com/viseshrp/fbn/actions/workflows/docker.yml/badge.svg)](https://github.com/viseshrp/fbn/actions/workflows/docker.yml)
+[![License: MIT](https://img.shields.io/github/license/viseshrp/fbn)](https://github.com/viseshrp/fbn/blob/main/LICENSE)
 
-This version is an unreleased research tool for local academic use.
+`fbn` watches a Facebook group you belong to and sends you a notification
+whenever a new post appears. Notifications are delivered through
+[Apprise](https://github.com/caronc/apprise/wiki), so you can send alerts to
+email, Telegram, Discord, Ntfy, Pushover, Slack, or 100+ other services.
 
-## Requirements
+Instead of relying on brittle raw HTTP requests or asking for your Facebook
+password, `fbn` runs a dedicated headless Chromium browser through Playwright,
+verifies every post and its canonical link, and stores your session and seen-post
+history locally on your own machine.
 
-- Python 3.10 or newer.
-- One supported Chromium-family browser:
-  - Playwright Chromium (`--browser chromium`);
-  - installed Google Chrome (`--browser chrome`);
-  - installed Microsoft Edge (`--browser msedge`); or
-  - system Chromium through `--browser executable --executable-path ...`.
+> **Note:** Version 0.2 is an unreleased research tool for local academic use.
 
-`pip` installs the Python package but does not silently download a browser.
+---
 
-## Install
+## Why run `fbn` with Docker? (Recommended)
 
-Clone the repository, create a virtual environment if desired, and install the
-local checkout:
+Running `fbn` with Docker is the **easiest and most preferred way** to use the
+app:
+
+- **Zero browser or Python setup on your host:** Python, Playwright, and the
+  matching Chromium browser are already installed inside the container.
+- **Works on laptops, servers, and Raspberry Pi:** Official multi-architecture
+  images (`linux/amd64` and `linux/arm64`) are published to GitHub Container
+  Registry (`ghcr.io/viseshrp/fbn`).
+- **One-command management:** Simple `make` commands handle volume creation,
+  cookie import, dry-run checks, background monitoring, and live logs.
+- **Safe by design:** Runs as a non-root user, mounts your exported cookie file
+  only during one-time bootstrap, and keeps your browser profile and post
+  history in a persistent Docker volume.
+
+---
+
+## Quick start with Docker (Beginner Guide)
+
+### What you need before starting
+
+1. **Docker** with Docker Compose (`docker compose`) and `make` installed:
+   - macOS or Windows: [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+   - Linux or Raspberry Pi 4 (64-bit OS): Docker Engine + Docker Compose plugin
+2. **A Facebook account** that is already a member of the group you want to
+   watch.
+3. **A notification destination** supported by
+   [Apprise](https://github.com/caronc/apprise/wiki). Common examples:
+
+   | Service | Example `FBN_APPRISE_URL` |
+   | --- | --- |
+   | Email (Gmail / SMTP app password) | `mailto://user:app-password@gmail.com` |
+   | [Ntfy](https://ntfy.sh/) | `ntfy://ntfy.sh/my-private-topic` |
+   | Discord webhook | `discord://webhook_id/webhook_token` |
+   | Telegram bot | `tgram://bot_token/chat_id` |
+   | Pushover | `pover://user_key@token` |
+
+### Step 1: Clone the repository
 
 ```console
-python -m pip install .
+git clone https://github.com/viseshrp/fbn.git
+cd fbn
 ```
 
-Install the default Playwright-managed Chromium build:
+### Step 2: Export your Facebook cookies once
+
+`fbn` never asks for your Facebook username or password. Instead, you export
+cookies from a browser where you are already signed in to Facebook:
+
+1. Open Facebook in your normal desktop browser, make sure you are signed in,
+   and visit the group you want to monitor so you know your account can view it.
+2. Export your browser cookies for `facebook.com` to a file. `fbn`
+   automatically accepts any of these common formats:
+   - a JSON array from a browser cookie-exporter extension;
+   - a Netscape `cookies.txt` file; or
+   - a Playwright storage-state JSON file.
+3. Save that file in a **private folder outside this repository** (never inside
+   the `fbn` git folder or a shared cloud folder) and restrict its permissions:
 
 ```console
+mkdir -p ~/.config/fbn
+chmod 700 ~/.config/fbn
+# Move your exported cookie file to ~/.config/fbn/facebook-auth.json, then run:
+chmod 600 ~/.config/fbn/facebook-auth.json
+```
+
+### Step 3: Create your `.env` configuration file
+
+In the `fbn` repository folder, create a `.env` file with your group ID (or URL
+slug), your Apprise notification URL, and the full path to your cookie file:
+
+```dotenv
+# The Facebook group slug, numeric ID, or full group URL:
+FBN_GROUP=my-group
+
+# Where to send notifications (see the Apprise wiki for 100+ services):
+FBN_APPRISE_URL=mailto://user:app-password@example.com
+
+# Absolute path to your private cookie file (keep outside this repo):
+FBN_AUTH_FILE=/Users/yourname/.config/fbn/facebook-auth.json
+
+# Optional settings (shown with sensible defaults):
+FBN_TIMEZONE=America/New_York
+FBN_EVERY=1h
+FBN_TO=3h
+FBN_DATA_VOLUME=fbn-monitor-data
+FBN_IMAGE=ghcr.io/viseshrp/fbn:latest
+FBN_UID=1000
+FBN_GID=1000
+```
+
+> **Linux tip:** Set `FBN_UID` and `FBN_GID` to the output of `id -u` and
+> `id -g` on your Linux machine so files inside the persistent volume match your
+> user account.
+
+Lock down your `.env` file permissions:
+
+```console
+chmod 600 .env
+```
+
+### Step 4: Test your setup (Optional dry run)
+
+If you want to verify that your cookies work and see what `fbn` finds before
+turning on continuous notifications:
+
+```console
+make docker-bootstrap
+make docker-check-dry
+```
+
+- `make docker-bootstrap` creates the persistent Docker volume if needed,
+  imports only `facebook.com` cookies from `FBN_AUTH_FILE`, and confirms that
+  the container can open the group feed headlessly.
+- `make docker-check-dry` runs one check in `--dry-run` mode and prints the
+  summary to your terminal without sending notifications.
+
+### Step 5: Start 24/7 monitoring
+
+Start the background monitor with a single command:
+
+```console
+make docker-up
+```
+
+`make docker-up` (or simply `make up`) pulls `ghcr.io/viseshrp/fbn:latest` if
+needed, creates the `fbn-monitor-data` Docker volume, runs the one-time
+`bootstrap` container, and starts the long-running `fbn` monitor container.
+
+Watch live logs at any time:
+
+```console
+make docker-logs
+```
+
+Check whether the container is running and healthy:
+
+```console
+make docker-status
+```
+
+Stop the monitor without losing your saved login session or post history:
+
+```console
+make docker-down
+```
+
+> **What happens on the very first check?**
+> The first successful check records a **baseline** of current posts in the
+> group so your phone or inbox isn't flooded with old posts. After that first
+> baseline check, `fbn` notifies you whenever new posts appear!
+
+---
+
+## Everyday `make` commands
+
+Run `make help` at any time to see all available commands.
+
+### Running & managing `fbn` (Docker)
+
+| Command | Alias | What it does |
+| --- | --- | --- |
+| `make docker-up` | `make up`, `make docker-run` | Create the data volume if needed, bootstrap cookies, and start the monitor in the background |
+| `make docker-down` | `make down` | Stop the monitor container while keeping your persistent profile and post history volume |
+| `make docker-logs` | `make logs` | Follow live, secret-free monitor logs (`Ctrl+C` stops viewing logs without stopping the container) |
+| `make docker-status` | `make status` | Show container status and health |
+| `make docker-bootstrap` | — | Import and validate `FBN_AUTH_FILE` into the persistent Docker volume |
+| `make docker-check-dry` | — | Run a one-time check in `--dry-run` mode (prints results without sending notifications) |
+| `make docker-check` | — | Run a one-time check and send any pending notifications via `FBN_APPRISE_URL` |
+| `make docker-doctor` | — | Run read-only browser and environment diagnostics inside the container |
+| `make docker-pull` | — | Pull the latest prebuilt container image (`FBN_IMAGE` or `DOCKER_IMAGE`) from GHCR |
+| `make docker-build` | — | Build the container image locally from this checkout (`ghcr.io/viseshrp/fbn:local`) |
+
+### Development, testing & CI commands
+
+| Command | What it does |
+| --- | --- |
+| `make docker-config` | Validate `compose.yaml`, `docker-compose.yml`, and `deploy/fbn.service` |
+| `make docker-smoke` | Build/inspect the container image and run offline smoke, screenshot, and persistence checks |
+| `make docker-test` | Run lint, unit tests, package build/Twine/wheel smoke checks, and Playwright browser tests inside a disposable `--network none` container |
+| `make docker-test-matrix` | Run unit tests across Python 3.10–3.14 inside disposable `--network none` containers |
+| `make docker-push TAGS="..."` | Smoke-test and push a multi-arch (`linux/amd64,linux/arm64`) image to GHCR using `gh` CLI credentials |
+| `make install-dev` | Install `fbn` and development dependencies into the active Python environment (used by CI) |
+| `make lint` | Run Ruff lint, Ruff format check, and `git diff --check` |
+| `make test-unit` | Run unit tests with coverage |
+| `make test-browser` | Run sanitized local-page Playwright integration tests |
+| `make build` / `make check-dist` / `make smoke-wheel` | Build sdist/wheel, validate with Twine, and smoke-test the built wheel in a clean virtualenv |
+
+---
+
+## Container images on GHCR (`ghcr.io/viseshrp/fbn`)
+
+Multi-architecture images (`linux/amd64` and `linux/arm64`, including 64-bit
+Raspberry Pi 4) are automatically built, smoke-tested on native runners, and
+published to `ghcr.io/viseshrp/fbn`:
+
+| Tag | Description |
+| --- | --- |
+| `ghcr.io/viseshrp/fbn:latest` | Latest published image (default in `compose.yaml`) |
+| `ghcr.io/viseshrp/fbn:vX.Y.Z` / `ghcr.io/viseshrp/fbn:X.Y.Z` | Version-pinned release images built from git tags / GitHub releases |
+| `ghcr.io/viseshrp/fbn:nightly` | Nightly build from `main` (updated daily at `07:23 UTC` and on manual dispatch) |
+| `ghcr.io/viseshrp/fbn:nightly-YYYYMMDD-RUN-ATTEMPT` | Immutable timestamped nightly build tag |
+
+To use the nightly image or pin a specific version, set `FBN_IMAGE` in your
+`.env` file:
+
+```dotenv
+FBN_IMAGE=ghcr.io/viseshrp/fbn:nightly
+```
+
+Then pull and restart:
+
+```console
+make docker-pull
+make docker-up
+```
+
+If you prefer to build the image locally instead of pulling from GHCR:
+
+```console
+make docker-build DOCKER_IMAGE=ghcr.io/viseshrp/fbn:local
+FBN_IMAGE=ghcr.io/viseshrp/fbn:local make docker-up
+```
+
+### How the Docker Compose setup works
+
+The included image is based on Ubuntu 24.04, installs Playwright 1.61.0 and its
+matching managed Chromium build, and runs `fbn` as a non-root user (`fbn:fbn`).
+The default image command is `fbn --help`; starting the bare image never
+contacts Facebook.
+
+When you run `make docker-up` (or `docker compose up --detach`):
+
+1. **One-shot `bootstrap` runs first:** It mounts your cookie export read-only
+   at `/run/secrets/facebook_auth`, validates access to the group headlessly,
+   and updates the persistent browser profile inside the `fbn-monitor-data`
+   volume (`/home/fbn/.local/share/fbn`).
+2. **Long-running `fbn` monitor starts only after bootstrap succeeds:** The
+   monitor service never mounts your raw cookie export file. It runs
+   `fbn monitor --browser chromium --headless --verbose --include-errors ...`
+   with a 1 GiB memory limit, swap disabled, a 1 GiB `/dev/shm` allocation for
+   Chromium, and `init: true` for clean signal forwarding.
+3. **Fail-closed restart policy (`restart: "no"`):** The internal scheduler
+   automatically backs off on temporary network or loading glitches. If
+   Facebook asks for re-authentication, a security checkpoint, or changes its
+   page layout, the container stops cleanly and sends one secret-free alert
+   (because `--include-errors` is enabled) instead of looping forever.
+4. **Passive `HEALTHCHECK`:** Docker runs `python -m fbn.health`, which checks
+   a container-local scheduler lease file. It never launches a browser, opens
+   your profile, or contacts Facebook.
+
+### Supervise Docker Compose with `systemd` (Optional for Linux servers / Raspberry Pi)
+
+After bootstrapping your profile once, you can use `deploy/fbn.service` to
+supervise the Compose monitor on a Linux server or Raspberry Pi (assuming a
+checkout at `/opt/fbn-compose`):
+
+```console
+sudo install -m 644 deploy/fbn.service /etc/systemd/system/fbn.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now fbn.service
+systemctl status fbn.service
+```
+
+The systemd unit runs Compose in the foreground with `--no-deps` (so reboots
+reuse your already-authenticated volume without re-importing the cookie file)
+and propagates the monitor's exit code. Unexpected process crashes restart after
+15 minutes (up to 3 starts per hour), while known authentication, checkpoint,
+access, layout, or configuration exit codes stay stopped via
+`RestartPreventExitStatus`.
+
+---
+
+## Alternative: Install and run locally with Python (Without Docker)
+
+Docker is the recommended way to run `fbn`, but you can also run it directly in
+a Python 3.10+ virtual environment on macOS, Linux, or Windows.
+
+### 1. Install `fbn` and a browser
+
+```console
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install .
 python -m playwright install chromium
 fbn doctor --browser chromium
 ```
 
-On a minimal Linux server, Playwright can install Chromium and its operating
-system packages:
+On a minimal Linux server, install Chromium along with its system libraries:
 
 ```console
 python -m playwright install --with-deps chromium
 ```
 
-An existing stable Chrome installation is an optional alternative that needs
-no separate browser download:
+You can also use an existing Google Chrome (`--browser chrome`), Microsoft Edge
+(`--browser msedge`), or system Chromium binary
+(`--browser executable --executable-path /usr/bin/chromium`). `fbn doctor` is
+read-only and checks browser and path readiness without contacting Facebook.
 
-```console
-fbn doctor --browser chrome
-```
-
-For a distribution-provided Chromium executable, use:
-
-```console
-fbn doctor \
-  --browser executable \
-  --executable-path /usr/bin/chromium
-```
-
-`fbn doctor` is read-only. It reports package, path, and browser readiness
-without opening Facebook or printing session or notification secrets.
-
-## Bootstrap authentication once
-
-Export the Facebook cookies from a browser session that already has access to
-the group, save them to a private local file, and run:
+### 2. Bootstrap authentication once
 
 ```console
 chmod 600 /private/path/facebook-auth.json
@@ -73,51 +329,16 @@ fbn bootstrap \
   --browser chromium
 ```
 
-`bootstrap` is fully headless and noninteractive. It auto-detects these input
-formats:
-
-- a Playwright storage-state JSON object with a top-level `cookies` array;
-- a JSON array produced by a cookie exporter; or
-- a Netscape `cookies.txt` file.
-
-Only cookies for `facebook.com` or its subdomains are imported. Playwright
-storage-state `origins` are ignored. `fbn` does not infer validity from
-particular cookie names: it launches the selected browser, opens the requested
-group, and requires an authenticated, accessible group feed before bootstrap
-succeeds. Cookie names and values are never printed.
-
-Pass authentication material only through `--auth-file`. Do not paste cookie
-JSON, cookie values, or a Facebook password into a command, environment
-variable, issue, log, or support conversation. Keep the source file outside the
-repository and cloud-synced directories. `fbn` reads it without modifying it;
-after a successful bootstrap, either remove the source securely or retain it
-with owner-only permissions according to your recovery policy.
-
-The dedicated profile is separate from an ordinary Chrome profile so Playwright
-does not contend with or modify day-to-day browser state. By default, the
-profile and SQLite state file live in the operating system's per-user
-application-data directory. They can be overridden with:
+By default, the dedicated browser profile and SQLite state file are stored in
+your operating system's private per-user application-data directory. You can
+override their locations with environment variables or CLI flags:
 
 ```console
 export FBN_PROFILE_DIR=/private/path/to/fbn/profile
 export FBN_STATE_FILE=/private/path/to/fbn/state.sqlite3
 ```
 
-The equivalent options are `--profile-dir` and `--state-file`. Keep the profile
-private, outside the repository and out of backup or cloud-sync locations that
-other people can access. Anyone who obtains it may be able to use the Facebook
-session. Only one process may use an `fbn` profile at a time.
-Each profile is bound to the browser selection that initialized it. Reuse the
-same `--browser` and, for `executable`, the same `--executable-path`; use a
-separate profile directory when changing browser configurations.
-
-If the session expires, export fresh authentication data and repeat
-`fbn bootstrap` with the same group, browser, and profile settings. On a
-workstation with a trusted display, `fbn login` remains available as an
-optional headed recovery path for account actions that cannot be completed
-headlessly.
-
-## Check once
+### 3. Run a single check or monitor continuously
 
 Start with a dry run:
 
@@ -128,14 +349,7 @@ fbn check \
   --dry-run
 ```
 
-`--id` accepts a Facebook group ID, group slug, or canonical group URL. The
-first non-empty successful check records a baseline and does not send a backlog
-of existing posts. Use `--notify-initial` only if notifying for the initial
-visible sample is intentional.
-
-For real delivery, configure one of
-[Apprise's supported notification URLs](https://github.com/caronc/apprise/wiki)
-through the environment:
+Run a real check with notifications:
 
 ```console
 export FBN_APPRISE_URL='mailto://user:app-password@example.com'
@@ -145,147 +359,8 @@ fbn check \
   --browser chromium
 ```
 
-Keeping `FBN_APPRISE_URL` out of shell history is safer than passing
-`--apprise-url` on the command line. The URL is treated as a secret and redacted
-from `fbn` errors. A notification includes visible post text and links, so that
-content is sent to the notification service selected in the Apprise URL.
-
-### Mobile reader
-
-`check`, `monitor`, `bootstrap`, and `login` use mobile Facebook. The desktop
-parser, reader switch, temporary post IDs, and content-fingerprint matching have
-been removed. Existing cookies and notification settings are unchanged.
-
-The mobile reader is a separate parser for the rendered English-language Bloks
-layout at `m.facebook.com`, using Playwright's standard Pixel 7 emulation. It
-explicitly selects and verifies **New posts**. It reads each main post's body
-and ignores quoted posts, comments, replies, and comment previews. Each link
-comes from that main post's own **Copy link** menu. The resolved page must have
-the same author, body, and publication time and a canonical post URL for the verified
-group. A missing or mismatched link stops the check; mobile never substitutes
-the group feed or a previous clipboard value.
-
-The post's first action row is the outer content boundary, even when its painting
-is deferred. An incomplete row is not replaced with a later reply's action row.
-Within that boundary the reader separately identifies authored message blocks,
-attachments, interface panels, and discussion. A recognized interest-feedback
-panel is excluded before preview expansion and comparison, even when it persists
-on the canonical page. Unknown interactive blocks stop the check; a generic
-extra-controls count never permits discarding content or reloading to hide it.
-Media-opening buttons need a recognized photo/video label and media-only owned
-children. Separate media credit/date metadata and image-backed event previews
-are attachments only when their complete control/content shape is recognized;
-nearby messages, unrelated buttons and inputs cannot inherit that ownership.
-Event response labels may include their selected state. A credited profile-picture
-control must name the adjacent credit exactly. A photo-album `+N more` overlay
-must match its visible count inside a media-only mosaic. None of these attachment
-controls is clicked, and their labels never become notification text.
-Known attachment dates can be focusable without being actions. Font-icon glyphs
-are ignored only within an otherwise verified attachment; authored message text
-and ordinary Unicode emoji are unchanged. Explicit handlers and unknown actions
-in date metadata still stop the check.
-Accessible publication labels are split into a validated date and, when present,
-a known audience label. Unknown prefixes, suffixes or extra fields are rejected.
-For a truncated message, the reader records the visible text before and after
-the single See more control. Expansion must preserve both sides and grow only
-between them. The complete destination message must still match exactly.
-Rich image previews require media-only branches and a linked heading with a
-validated author/date byline. Adjacent authored paragraphs remain message text.
-Inline formatting and repeated paragraphs are preserved. Attachment previews,
-poll choices, sale-card actions, avatars, and interface images are not message
-text. Media-only links require matching stable attachment identifiers rather
-than image counts. Link verification waits for the same document to finish
-rendering and still requires exact complete message equality and matching author,
-publication, group, and canonical post identity.
-One outer card still owns one primary post. A named embedded-content recognizer
-requires its primary header, supported authored body and complete outer action
-row. Later complete author/date headers and their supported bodies are embedded
-content, not extra feed posts or part of the primary message. Either view may
-omit the embedded menu and repeated group heading. The closed header must still
-contain exactly one linked author and one accessible publication date; any group
-attribution must agree with the primary header. Avatars can use bounded,
-image-only action branches without inline handlers or nested actions. Unresolved
-metadata-shaped headers reject the card instead of falling back into message
-text. Unknown controls and unowned metadata still reject the layout. This grammar
-is shared by feed and
-permalink parsing, so quote text cannot prevent an otherwise matching main post
-from passing full-message verification. The main menu's copied link is unchanged.
-Unresolved competing menus never select a post. A card with separate author/date
-headers, a supported body and a complete action footer can qualify only for
-bounded render recovery after its readiness deadline. Every candidate must be
-accounted for, with no other missing components or unknown header/body controls.
-The scheduler's existing 5/10/20-second fresh-acquisition policy applies; no
-ambiguous post is saved, copied or notified. Menus within the same header,
-unowned metadata, incomplete footers and other unknown layouts still stop.
-Failures log the exact failed comparison (author, body, publication time, or
-primary-post count), text-part lengths, control counts and partial/media flags,
-never private content.
-
-Later checks scroll toward the saved notification marker and read at least one
-additional pass after finding it. Known publication times correct visible
-reordering; posts tied with the marker's coarse relative time are included
-conservatively. A missing marker, unknown time, or exhausted scan limit leaves
-the old marker in place so a later check can keep catching up. Scrolling is
-bounded by `--max-scrolls`, the catch-up sample limit, and a 90-second scan
-budget. Every post action shares that budget in addition to its own limit. If
-it expires during a post, only previously verified posts are returned, with the
-old marker preserved; the unfinished post is neither saved nor notified. Genuine
-layout/identity failures still abort the entire check before observation or
-delivery. None of this guarantees recovery of a post Facebook never displays.
-Logs distinguish the scan budget, scroll/post limits, idle feed, unknown dates,
-and successful marker-plus-overlap completion. Re-rendered cards reuse a link
-verification only within that scan, after a fresh Copy link and complete match.
-
-Numeric group IDs may become readable slugs through an HTTP redirect or the
-initial group document's history API. The latter is accepted only with
-browser-observed main-frame navigation evidence tied to the successful original
-group response, collected before sorting or opening post menus. An unrelated
-group, child frame, later document, or unproven alias stops the check.
-
-Off-screen cards whose rendering Facebook defers are read after scrolling makes
-them available. A visible but incomplete card still stops the check and logs the
-missing component names. The permalink reader supports both wrapped cards and
-separate header/body/action sections, stopping before comments in either layout.
-Feed hydration and sorting use the configured navigation timeout instead of a
-five-second cap. Each post link has one shared navigation/rendering budget of
-at most 30 seconds. A missing scroller logs fixed structural counts (mobile
-screens, total/visible scrollers, post menus, loading indicators, and dialogs),
-never page text, links, or account data. A timeout does not trigger a reload.
-Each destination opens in a fresh tab that closes immediately after verification,
-including on failure, to limit retained browser memory between posts.
-The recognized app-install prompt may be dismissed once through its own
-**Not now** action after account-state checks. Unknown blocking dialogs stop
-the check; no app-install, engagement, message, or account action is clicked.
-Scroll settling waits for DOM progress instead of sleeping unconditionally;
-`--settle-seconds` bounds an idle wait and never establishes rendering readiness.
-Opening a post menu and copying its link share the configured timeout, capped
-at 30 seconds. Closing the menu has a separate cleanup budget of at most five
-seconds; clipboard interception is always removed, including after a timeout.
-
-Post identity is the permanent post ID in the verified canonical URL, never a
-share token or a hash of rendered text. Text changes, emoji labels, and truncation
-do not create a new post. Different IDs remain separate even with identical text.
-
-Schema version 4 upgrades saved direct links to canonical IDs and merges their
-seen history and outbox receipts atomically. A delivered alias wins over a
-pending duplicate. Original changed records are retained in `identity_archive`.
-Historical entries without direct links are archived, not assigned guessed IDs;
-FBN cannot reliably identify those old entries if Facebook shows them again.
-Schema version 5 repairs an archived, unreachable delivered marker once using
-the latest later canonical delivery receipt. It keeps that real marker fixed
-until catch-up reaches it; the original archive is unchanged. This does not map
-the old ID or prove coverage of unmappable historical posts. Without a later
-verified delivery receipt, an unresolved marker remains open. An
-unresolved pending delivery stops migration so it cannot be silently dropped.
-Keep a private database backup before upgrading; rollback requires both the old
-image and the old database. The obsolete fingerprint column and index are removed.
-
-State is committed before notification delivery and pending deliveries survive
-restarts. Delivery is at least once: a crash after a successful send but before
-the state commit may produce a duplicate, but notifier failure does not silently
-discard the post.
-
-## Monitor continuously
+Or monitor continuously on a randomized interval (defaults to 1–3 hours; minimum
+15 minutes, maximum 365 days, units `s`, `m`, `h`, `d`, `w`):
 
 ```console
 fbn monitor \
@@ -296,253 +371,32 @@ fbn monitor \
   --to 3h
 ```
 
-If `--every` and `--to` are omitted, `monitor` waits a randomized 1–3 hours
-between checks. The minimum accepted interval is 15 minutes. Supported units are
-`s`, `m`, `h`, `d`, and `w`, although the 15-minute floor still applies.
-The maximum accepted interval is 365 days.
+Useful options for `check` and `monitor`:
 
-Checks and monitoring are headless by default. `--headed` is an explicit
-troubleshooting choice on a trusted display. Authentication, account-action,
-access-denied, browser-profile,
-configuration, and unsupported-layout failures stop the loop with a nonzero
-exit code. Recognized loading/stalled-render failures may retry within the same
-scheduled check after 5, 10, and 20 seconds. Retries keep the next routine slot
-fixed and are skipped if a full scan plus cleanup/guard time cannot fit before
-it. Exhaustion waits for that normal slot; restarting also honors the saved slot.
-Generic network/rate-limit failures retain their separate slower backoff.
+- `--sample-count`: normal number of recent posts checked per scan (default `10`).
+- `--timezone`: IANA timezone used to render and parse Facebook timestamps
+  (default `UTC`).
+- `--notify-initial`: send notifications for the first visible sample instead of
+  recording a silent baseline.
+- `--include-errors`: send a concise, secret-free notification if `monitor`
+  stops on a hard error.
+- `-v` / `--verbose`: emit readable, secret-free timestamped lifecycle logs.
 
-Useful options include:
+### Optional: Run local checks with a `systemd` user timer or `n8n`
 
-- `--sample-count`: set the normal number of recent posts checked; the catch-up
-  limit is this number multiplied by the allowed extraction passes;
-- `--timezone`: set the IANA timezone used to render and interpret Facebook
-  timestamps; the default is `UTC`;
-- `--notify-initial`: notify for the first visible sample instead of baselining;
-- `--include-errors`: notify a concise, redacted operational error; and
-- `-v` / `--verbose`: emit secret-free lifecycle and browser diagnostics as
-  readable timestamped lines to standard output, without page or cookie dumps.
+<details>
+<summary><strong>Click to expand: systemd user timer setup</strong></summary>
 
-Use `fbn COMMAND --help` for the complete command-specific options.
+A `systemd` user timer that runs `fbn check` periodically is a lightweight way
+to schedule bounded runs on a native Linux host. Bootstrap the profile first as
+the same Unix user.
 
-Feed/layout and post-link failures automatically save private viewport screenshots
-before closing the failing tabs. Find them in `failure-screenshots/` beside the
-profile directory (Docker default: `/home/fbn/.local/share/fbn/failure-screenshots/`
-inside the persistent data volume). Each timestamped folder contains `feed.png`,
-and `post.png` when a post-link tab failed, plus secret-free `metadata.json`.
-Version 2 metadata also records the failed action phase, remaining scan budget,
-and structural-capture
-status. `feed-layout.json` and `post-layout.json` contain sanitized component
-ancestry, selected/excluded block roles, visibility, character counts, and fixed
-photo/video/event control categories, never the actual labels. These snapshots
-contain no post text, authors, URLs, action IDs, HTML, or input values;
-each is limited to 1,000 nodes, 20 levels, and 256 KiB, with truncation reported.
-The log identifies the folder and whether capture succeeded. Only the latest 10
-failure folders are retained, with at most two 5 MiB images per folder.
-Directories are owner-only and files are owner-readable/writable. Inputs and
-editable fields are masked; images can still contain private group content, so
-they are never sent through notifications or included in Git/Docker builds.
-Known login/checkpoint failures are excluded for privacy. Screenshot capture is
-best effort, takes at most 3 seconds per tab, and never replaces the original
-error; a closed or crashed browser may leave only metadata.
-
-## Docker deployment
-
-The included image is based on Ubuntu 24.04, installs Playwright 1.61.0 and its
-matching managed Chromium build, and runs `fbn` as a non-root user. The default
-image command is `fbn --help`; building or starting the bare image does not open
-Facebook.
-
-The Dockerfile builds natively on `linux/amd64` and `linux/arm64`. A Raspberry
-Pi 4 must run a 64-bit (`aarch64`) operating system. On any supported host,
-Compose builds the image for that host's architecture:
-
-```console
-docker compose build
-```
-
-To produce a multi-platform OCI archive:
-
-```console
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  --output type=oci,dest=/tmp/fbn-multiarch.oci \
-  .
-```
-
-### Configure Compose
-
-Create a repository-local `.env` file. It is excluded from the Docker build
-context and Git, but it is still sensitive:
-
-```dotenv
-FBN_GROUP=my-group
-FBN_APPRISE_URL=mailto://user:app-password@example.com
-FBN_AUTH_FILE=/absolute/private/path/facebook-auth.json
-FBN_DATA_VOLUME=fbn-monitor-data
-FBN_TIMEZONE=America/New_York
-FBN_EVERY=50m
-FBN_TO=50m
-FBN_UID=1000
-FBN_GID=1000
-```
-
-Set `FBN_UID` and `FBN_GID` to the output of `id -u` and `id -g` on Linux. This
-keeps files in the persistent volume owned by the intended non-root account.
-Protect the file before building:
-
-```console
-chmod 600 .env
-docker compose build
-```
-
-Compose refuses to start unless the group, Apprise URL, and authentication-file
-path are present. The authentication file must remain outside the repository.
-Cookies, browser state, and group content are not baked into the image. Docker
-does retain container environment metadata, including the Apprise URL, so only
-users trusted with the Docker daemon should be able to inspect the deployment.
-
-### Start bootstrap and monitoring together
-
-The external volume named by `FBN_DATA_VOLUME` is mounted at
-`/home/fbn/.local/share/fbn`. It holds both the dedicated browser profile and
-SQLite state. Create it once on a new installation; an existing
-`fbn-monitor-data` volume is reused by default:
-
-```console
-docker volume create fbn-monitor-data
-```
-
-Protect the local configuration and authentication export, then start the
-Compose application:
-
-```console
-chmod 600 .env /absolute/private/path/facebook-auth.json
-docker compose up --detach
-```
-
-Compose runs the one-shot `bootstrap` service first. It mounts the
-authentication export read-only at `/run/secrets/facebook_auth`, validates the
-group headlessly, and updates only the persistent profile. The long-running
-`fbn` service starts only after bootstrap exits successfully. The source file
-is not placed in an environment variable, copied into the image, or mounted
-into the monitor service. Bootstrap requires no display, X11, VNC, or browser
-debugging port.
-
-The Compose command is explicitly
-`fbn monitor --browser chromium --headless --verbose --include-errors ...`.
-Hard failures send one secret-free notification with the failure category and
-the appropriate recovery step. Each service has a 1 GiB memory limit with
-container swap disabled, and Chromium has a 1 GiB shared memory allocation.
-Bootstrap finishes before the monitor starts, so only one browser session is
-active. `init: true` forwards termination cleanly.
-The monitor writes human-readable Loguru records to standard output, so the
-`docker compose logs --follow` shows bootstrap, startup, waits, scan
-counts, delivery counts, and retry categories as they happen. Each line has a
-UTC timestamp, level, component, plain-language event, and safe `key=value`
-context. Non-interactive container output contains no ANSI color codes. Records
-never include page text, cookie values, authentication-file paths, or Apprise
-URLs. The monitor has no authentication-file secret mount. Both services allow
-two minutes for graceful termination so bootstrap has time to verify cookie
-rollback and the monitor can close Chromium.
-
-The monitor restart policy is deliberately `no`. Its internal scheduler already
-backs off transient navigation failures; authentication, checkpoint, access,
-profile, and layout hard stops must leave the container stopped instead of
-causing a rapid Docker restart loop. Inspect the logs, resolve the condition,
-replace the authentication export when required, and run
-`docker compose up --detach` again. If startup after a host reboot
-is required, configure it explicitly without an automatic failure restart.
-Stop the container without deleting its profile/state volume:
-
-```console
-docker compose down
-```
-
-Do not add `--volumes` unless permanently deleting the authenticated profile and
-deduplication history is intentional. The image `HEALTHCHECK` runs
-`python -m fbn.health`. The scheduler publishes a private, container-local lease
-before each bounded check and scheduled wait. Health becomes false when the
-monitor process dies or its work deadline expires. A normal scheduled wait,
-including transient backoff, remains healthy. This check never opens a browser,
-reads the profile, sends a notification, or contacts Facebook. Bootstrap has no
-healthcheck because it is a one-shot command.
-
-### Supervise Compose with systemd
-
-After a successful bootstrap, `deploy/fbn.service` supervises the monitor in a
-checkout at `/opt/fbn-compose`:
-
-```console
-sudo install -m 644 deploy/fbn.service /etc/systemd/system/fbn.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now fbn.service
-systemctl status fbn.service
-```
-
-The unit runs [Compose in the foreground](https://docs.docker.com/reference/cli/docker/compose/up/)
-and returns the monitor's exit status, so a hard failure appears as `failed`
-instead of a one-shot unit remaining `active (exited)`. Unexpected process
-failures restart after 15 minutes, with a limit of three starts per hour.
-Known configuration, browser, authentication, account-action, access, layout,
-delivery, and profile errors remain stopped using
-[`RestartPreventExitStatus`](https://man7.org/linux/man-pages/man5/systemd.service.5.html).
-Resolve the reported condition before `sudo systemctl restart fbn.service`.
-
-The unit deliberately starts only the monitor with `--no-deps`. It reuses the
-authenticated profile and does not reimport a potentially old cookie export
-after every reboot. Run bootstrap explicitly when fresh authentication is
-needed. Stop a running detached Compose monitor before enabling this unit;
-afterward, use systemd to start and stop the application.
-The unit explicitly selects `compose.yaml`. The legacy `docker-compose.yml`
-filename links to that same file, so an existing
-`COMPOSE_FILE=docker-compose.yml` override uses the current monitor settings.
-
-## Run checks with a systemd user timer
-
-A timer that launches `fbn check` is safer than an always-restarting service:
-each browser session is bounded, systemd prevents overlapping activations, and
-the persistent SQLite state handles restarts. Bootstrap the profile first as
-the same Unix user that owns the timer.
-
-The following example assumes a virtual environment at
-`/home/alice/.local/venvs/fbn` and the default Linux data directory. Substitute
-your actual user, group, and paths.
-
-Create `~/.config/fbn/fbn.env`:
+Create `~/.config/fbn/fbn.env` (`chmod 600 ~/.config/fbn/fbn.env`):
 
 ```dotenv
 FBN_APPRISE_URL=mailto://user:app-password@example.com
 FBN_PROFILE_DIR=/home/alice/.local/share/fbn/profile
 FBN_STATE_FILE=/home/alice/.local/share/fbn/state.sqlite3
-```
-
-Protect the environment file:
-
-```console
-chmod 600 ~/.config/fbn/fbn.env
-```
-
-Store an authentication export outside the repository, then bootstrap that
-exact profile headlessly before enabling the timer:
-
-```console
-chmod 600 /home/alice/.config/fbn/facebook-auth.json
-
-/home/alice/.local/venvs/fbn/bin/fbn bootstrap \
-  --auth-file /home/alice/.config/fbn/facebook-auth.json \
-  -i my-group \
-  --browser chromium \
-  --profile-dir /home/alice/.local/share/fbn/profile
-```
-
-After bootstrap succeeds, remove or continue protecting the source file. It is
-not needed by the timer. The headed command below is only an optional recovery
-path on a trusted workstation:
-
-```console
-/home/alice/.local/venvs/fbn/bin/fbn login \
-  --browser chromium \
-  --profile-dir /home/alice/.local/share/fbn/profile
 ```
 
 Create `~/.config/systemd/user/fbn-check.service`:
@@ -583,7 +437,7 @@ Unit=fbn-check.service
 WantedBy=timers.target
 ```
 
-Load and inspect the timer:
+Enable and inspect the timer:
 
 ```console
 systemctl --user daemon-reload
@@ -592,15 +446,13 @@ systemctl --user list-timers fbn-check.timer
 journalctl --user -u fbn-check.service
 ```
 
-Do not place a Facebook password, exported cookies, an authentication-file path,
-or the Apprise URL directly in `ExecStart`. If your profile or state paths
-differ, update `ReadWritePaths`. A server with no installed browser may need
-`python -m playwright install --with-deps chromium` before the timer is enabled.
+</details>
 
-## Use n8n only as an optional scheduler
+<details>
+<summary><strong>Click to expand: n8n external scheduler setup</strong></summary>
 
-`n8n` is not a browser backend or an `fbn` dependency. A self-hosted n8n
-schedule may invoke the one-shot command:
+`n8n` is not a browser backend or an `fbn` dependency, but a self-hosted `n8n`
+schedule can invoke the one-shot command:
 
 ```console
 fbn check \
@@ -609,119 +461,164 @@ fbn check \
   --headless
 ```
 
-Set `FBN_APPRISE_URL`, `FBN_PROFILE_DIR`, and `FBN_STATE_FILE` in the execution
-environment, not in the workflow command. Before enabling the workflow,
-bootstrap the profile outside n8n with the same headless procedure documented
-above. The n8n worker must run locally as the same user, have access to that
-profile, and prevent concurrent runs.
-Facebook n8n nodes generally use the Graph API; they do not replace `fbn`'s
-browser acquisition. Never give the workflow or n8n worker the authentication
-export.
+Set `FBN_APPRISE_URL`, `FBN_PROFILE_DIR`, and `FBN_STATE_FILE` in the worker's
+execution environment, not in the workflow command. Bootstrap the profile
+outside `n8n` first, ensure the worker runs as the same user, and prevent
+overlapping runs. Never pass your cookie export file into `n8n`.
 
-## Troubleshooting
+</details>
 
-### Browser executable not found
+---
 
-Run `fbn doctor` with the same browser options used by `bootstrap`, `login`,
-`check`, or `monitor`. Install Playwright Chromium, select an installed
-Chrome/Edge channel, or supply an explicit system Chromium path.
+## Troubleshooting & FAQ
 
-### Authentication required
+### Why didn't I get a notification on the first check?
 
-Create a fresh private authentication export and repeat `fbn bootstrap` with
-the same group, browser, and profile directory. On a trusted workstation,
-headed `fbn login` is an optional recovery path. Never paste authentication
-values into the terminal.
+This is intentional! The first non-empty check records a **baseline** so you
+aren't spammed with existing posts. Any new post that appears after the baseline
+will trigger a notification. If you want to preview output without marking posts
+as delivered, run `make docker-check-dry` (or `fbn check --dry-run`). If you
+truly want notifications for the initial batch, pass `--notify-initial`.
 
-### Checkpoint, CAPTCHA, consent, or account action
+### `AuthenticationRequiredError` — "not signed in"
 
-Automation stops deliberately. Open `fbn login`, resolve the page personally,
-then resume the local monitor.
+Your Facebook session cookies have expired or could not access the group.
+Export fresh `facebook.com` cookies from your browser, save them to your
+private `FBN_AUTH_FILE`, and run `make docker-bootstrap` (or `make docker-up`).
+On a workstation with a display, native users can also run `fbn login` for
+interactive recovery.
 
-### Profile already in use
+### `AccountActionRequiredError` — Checkpoint, CAPTCHA, or consent screen
 
-Close the other `fbn` or browser process using the dedicated profile. The
-profile lock prevents concurrent processes from corrupting browser state.
+Automation stops immediately so it never triggers repeated security challenges.
+Sign in to Facebook in your personal browser (or via `fbn login` on a trusted
+desktop), resolve the prompt, export fresh cookies, and run
+`make docker-bootstrap`.
 
-### Unsupported or changed layout
+### `ProfileInUseError` — "Profile already in use"
 
-`fbn` fails closed instead of treating an unrecognized page as an empty group.
-Update `fbn` and retry once. Repeated retries do not repair a selector change.
+Only one `fbn` browser process may use a profile directory at a time so browser
+state is never corrupted. Stop any other running `fbn` container (`make docker-down`)
+or local process before starting a new one.
+
+### `BrowserUnavailableError` — Browser executable not found
+
+In Docker, Chromium is pre-installed; run `make docker-doctor` to verify. For a
+native Python install, run `python -m playwright install chromium` and verify
+with `fbn doctor --browser chromium`.
+
+### `LayoutChangedError` — Unsupported or changed layout
+
+`fbn` fails closed rather than guessing or treating an unrecognized page as an
+empty group. Update to the latest image (`make docker-pull && make docker-up`)
+and inspect `make docker-logs`.
+
+When a feed/layout or post-link check fails, `fbn` automatically saves private
+viewport screenshots (`feed.png`, optional `post.png`) and content-free
+structural diagnostics (`metadata.json`, `feed-layout.json`, `post-layout.json`)
+under `failure-screenshots/` inside the data directory (in Docker:
+`/home/fbn/.local/share/fbn/failure-screenshots/` inside `fbn-monitor-data`).
+Only the latest 10 failure folders are kept, with inputs masked and owner-only
+permissions (`0700`/`0600`).
 
 ### Blank post page or loading spinner
 
-FBN waits for actual mobile post content within the navigation/scan deadline.
-If the deadline expires on a blank shell with no readable text, controls, media,
-scroller, or primary post, it records private screenshots and content-free
-counters, discards the failed observation, and uses the existing transient
-backoff. The first delay is the configured minimum interval; subsequent failures
-double it up to 24 hours. The delay survives a restart. There is no immediate
-reload or link-reopening loop. Login/account-action prompts, unsupported visible
-layouts, and post-identity mismatches remain hard stops.
+`fbn` waits for actual mobile post content within the navigation/scan deadline.
+If a page remains a blank loading shell with no readable text, controls, media,
+scroller, or primary post, `fbn` captures private failure diagnostics, discards
+the incomplete scan without losing state, and retries up to 3 times within the
+same check (after 5, 10, and 20 seconds) if schedule headroom permits, or backs
+off until the next scheduled slot.
 
-### No notification on the first check
+### Why did an older post appear in a notification?
 
-This is the expected baseline behavior. A later unseen post creates a pending
-notification. To test rendering without delivery, use `--dry-run`; dry-run
-events remain pending and may appear again.
+Facebook can reorder, pin, or later expose a post that `fbn` had not seen
+before. After the first check, `fbn` remembers the newest post it handled (the
+notification boundary marker) and scrolls to find it on subsequent checks,
+notifying you about any unsent post above that marker. If the marker isn't
+reached before the scan limit, `fbn` sends visible unsent posts while keeping
+the old marker in place so later scans can finish catching up.
 
-### An older post appeared in the feed
+---
 
-Facebook can reorder, pin, or later expose a post that `fbn` has not identified
-before. After the first check, `fbn` remembers the newest post it has handled.
-On later checks, it notifies you about every unsent post above that remembered
-post. It will scroll farther than the normal sample when needed to find it.
+## How `fbn` works under the hood (Technical Reference)
 
-If the remembered post is not found before the scan limit, `fbn` sends every
-visible post it has not sent before, but it does not move the marker. That keeps
-the gap open: posts that appear in a later scan are still sent instead of being
-mistaken for old posts. Publication dates do not decide whether a notification
-is sent.
+### Mobile reader and post verification
 
-## Migrating from fbn 0.1
+`check`, `monitor`, `bootstrap`, and `login` use the mobile Facebook layout at
+`m.facebook.com` with Playwright's standard Pixel 7 emulation:
 
-The package name and `fbn` executable remain the same, but the command line now
-has subcommands.
+- **Explicit chronological sorting:** Selects and verifies **New posts** before
+  reading cards.
+- **Strict primary-post boundary:** Reads each main post's authored body and
+  ignores quoted/embedded posts, comments, replies, and comment previews. The
+  post's first action row forms the outer content boundary. Within that
+  boundary, `fbn` partitions authored message blocks, attachments (photo/video
+  buttons, media credit cards, album overlays, rich image previews, event
+  cards), recognized interface panels, and discussion. Unknown interactive
+  controls or unclaimed text fail closed.
+- **Truncated post expansion:** For shortened posts (`See more`), `fbn` records
+  the visible text before and after the expander, expands the message, and
+  verifies that both sides are preserved.
+- **Canonical link verification:** Every post link is copied from that main
+  post's own **Copy link** menu and opened in a fresh tab (closed immediately
+  after verification). The destination page must match the author, full body,
+  publication time, group identity, and a permanent canonical post ID.
+- **Bounded catch-up scanning:** Later checks scroll toward the saved
+  notification marker and read at least one additional pass after finding it,
+  bounded by `--max-scrolls`, the catch-up sample limit, and a shared 90-second
+  scan budget.
 
-| 0.1 | 0.2 |
+### Durable state and schema migrations
+
+State is stored in SQLite (WAL mode) and committed before notification delivery
+so pending notifications survive restarts (at-least-once delivery):
+
+- **Schema version 4** upgrades saved direct links to canonical post IDs, merges
+  seen history and outbox receipts atomically, and archives unlinked legacy
+  records in `identity_archive`.
+- **Schema version 5** repairs an archived, unreachable delivered marker once
+  using the latest later canonical delivery receipt while keeping the archive
+  intact.
+
+### Migrating from `fbn` 0.1
+
+| `fbn` 0.1 | `fbn` 0.2 |
 | --- | --- |
-| `fbn --id GROUP ...` | `fbn check --id GROUP ...` or `fbn monitor --id GROUP ...` |
-| `--username` / `FBN_FB_USERNAME` | Removed; use one-time `fbn bootstrap` or optional recovery `fbn login` |
-| `--password` / `FBN_FB_PASSWORD` | Removed; use one-time `fbn bootstrap` or optional recovery `fbn login` |
-| `--cookies-file` | Removed from monitoring; use bounded `fbn bootstrap --auth-file FILE -i GROUP` once |
+| `fbn --id GROUP ...` | `make docker-up` (Docker) or `fbn check` / `fbn monitor` |
+| `--username` / `FBN_FB_USERNAME` | Removed; use one-time `bootstrap` with a cookie export |
+| `--password` / `FBN_FB_PASSWORD` | Removed; use one-time `bootstrap` with a cookie export |
+| `--cookies-file` | Replaced by one-time `bootstrap --auth-file FILE -i GROUP` |
 | `--user-agent` | Removed; the selected browser uses its native user agent |
 | `FBN_APPRISE_URL` | Still supported |
 
-The in-memory seen-post set is replaced by SQLite. Expect the first successful
-0.2 check to establish a fresh baseline.
+---
 
-## Design and development
+## Design documents & contributor testing
 
-The rewrite is documented in:
+Architecture and design decisions are documented in:
 
-- [research](https://github.com/viseshrp/fbn/blob/main/docs/RESEARCH.md);
-- [specification](https://github.com/viseshrp/fbn/blob/main/docs/SPEC.md);
-- [architecture](https://github.com/viseshrp/fbn/blob/main/docs/ARCHITECTURE.md);
-- [decision record](https://github.com/viseshrp/fbn/blob/main/docs/ADR.md); and
-- [implementation plan](https://github.com/viseshrp/fbn/blob/main/docs/IMPLEMENTATION_PLAN.md).
+- [Research](https://github.com/viseshrp/fbn/blob/main/docs/RESEARCH.md)
+- [Specification](https://github.com/viseshrp/fbn/blob/main/docs/SPEC.md)
+- [Architecture](https://github.com/viseshrp/fbn/blob/main/docs/ARCHITECTURE.md)
+- [Architecture Decision Record (ADR)](https://github.com/viseshrp/fbn/blob/main/docs/ADR.md)
+- [Implementation Plan](https://github.com/viseshrp/fbn/blob/main/docs/IMPLEMENTATION_PLAN.md)
 
-For a development checkout:
+To validate a development checkout inside isolated Docker containers (matching CI
+without installing test dependencies on the host):
 
 ```console
-python -m pip install -e '.[dev]'
-python -m ruff check .
-python -m ruff format --check .
-python -m pytest --ignore=tests/test_browser_integration.py
-python -m playwright install chromium
-python -m pytest tests/test_browser_integration.py
-python -m build
-python -m twine check dist/*
-docker build --tag fbn:local .
+make docker-config
+make docker-build
+make docker-smoke
+make docker-test
+make docker-test-matrix
 ```
 
-Automated tests use synthetic local pages and fake notification transports.
+All automated tests run offline against synthetic local HTML fixtures and fake
+notification transports; they never contact Facebook or send real notifications.
 
 ## License
 
-The source code is available under the MIT License. See the
-[license](https://github.com/viseshrp/fbn/blob/main/LICENSE).
+The source code is available under the MIT License. See
+[LICENSE](https://github.com/viseshrp/fbn/blob/main/LICENSE).

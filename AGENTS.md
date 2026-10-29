@@ -13,6 +13,17 @@ or other credentials in source, fixtures, commands, logs, test output, commits,
 or reports. Tests must use synthetic data and local sanitized fixtures; they
 must never contact Facebook or send a real notification.
 
+## Preferred runtime: Docker first
+
+Running the app via Docker is the most preferred way to install, bootstrap,
+check, monitor, and deploy `fbn`. Prefer the container workflow (`docker compose`
+with `ghcr.io/viseshrp/fbn` and the `make docker-up`, `make docker-down`,
+`make docker-logs`, `make docker-status`, `make docker-bootstrap`,
+`make docker-check`, `make docker-check-dry`, `make docker-doctor`,
+`make docker-pull`, and `make docker-build` targets) in user guidance,
+documentation, runbooks, and deployments unless the user explicitly asks for a
+host-installed browser or native Python environment.
+
 ## Incident follow-through
 
 A reported FBN operational failure is authorization to diagnose it, implement
@@ -63,7 +74,9 @@ cannot run, stop and report validation as not run.
   application-data directory, browser profile, state database, Docker socket,
   SSH agent, cloud credentials, or a deployment `fbn-data` volume.
 - Use the smallest relevant test first, then run every applicable CI-equivalent
-  check before calling the change ready. The CI contract currently includes:
+  check before calling the change ready (`make docker-config`,
+  `make docker-build`, `make docker-smoke`, `make docker-test`, and
+  `make docker-test-matrix`). The CI contract currently includes:
   unit tests on Python 3.10–3.14; dependency consistency; Ruff lint and format
   checks; distribution build, Twine validation, and clean-wheel smoke tests;
   sanitized Playwright integration tests; and native-architecture Docker image

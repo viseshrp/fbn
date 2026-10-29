@@ -4,10 +4,12 @@ x-fbn-build: &fbn-build
     FBN_GID: "${FBN_GID:-1000}"
     FBN_UID: "${FBN_UID:-1000}"
     PLAYWRIGHT_VERSION: "1.61.0"
+    VCS_REF: "${FBN_VCS_REF:-unknown}"
+    VERSION: "${FBN_VERSION:-0.2.0}"
 
 services:
   fbn:
-    image: fbn:local
+    image: "${FBN_IMAGE:-ghcr.io/viseshrp/fbn:latest}"
     build: *fbn-build
     init: true
     restart: "no"
@@ -40,7 +42,7 @@ services:
       - "${FBN_TO:-50m}"
 
   bootstrap:
-    image: fbn:local
+    image: "${FBN_IMAGE:-ghcr.io/viseshrp/fbn:latest}"
     build: *fbn-build
     init: true
     restart: "no"

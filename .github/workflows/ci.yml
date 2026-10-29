@@ -40,19 +40,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install package and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+        run: make install-dev
 
       - name: Check installed dependency consistency
-        run: python -m pip check
+        run: make check-deps
 
       - name: Run unit tests
-        run: >-
-          python -m pytest
-          --ignore=tests/test_browser_integration.py
-          --cov=fbn
-          --cov-report=term-missing
+        run: make test-unit
 
   quality:
     name: Lint, format, and build
@@ -73,30 +67,18 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install package and build dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+        run: make install-dev
 
       - name: Run Ruff
-        run: |
-          python -m ruff check .
-          python -m ruff format --check .
-          git diff --check
+        run: make lint
 
       - name: Build and validate distributions
         run: |
-          python -m build
-          python -m twine check dist/*
+          make build
+          make check-dist
 
       - name: Smoke test the built wheel
-        run: |
-          python -m venv "$RUNNER_TEMP/fbn-wheel-smoke"
-          "$RUNNER_TEMP/fbn-wheel-smoke/bin/python" -m pip install dist/*.whl
-          cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/fbn-wheel-smoke/bin/python" -m pip check
-          "$RUNNER_TEMP/fbn-wheel-smoke/bin/fbn" --help
-          "$RUNNER_TEMP/fbn-wheel-smoke/bin/fbn" --version
-          "$RUNNER_TEMP/fbn-wheel-smoke/bin/python" -m fbn --help
+        run: make smoke-wheel
 
   browser-integration:
     name: Sanitized local browser integration
@@ -118,15 +100,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install package and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+        run: make install-dev
 
       - name: Install Playwright Chromium and Linux dependencies
-        run: python -m playwright install --with-deps chromium
+        run: make install-browser
 
       - name: Run local-page browser integration test
-        run: python -m pytest tests/test_browser_integration.py -q
+        run: make test-browser
 
   docker:
     name: Docker (${{ matrix.platform }})
@@ -147,122 +127,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
       - name: Validate Compose configuration
-        env:
-          FBN_APPRISE_URL: json://127.0.0.1:9
-          FBN_AUTH_FILE: /dev/null
-          FBN_GROUP: test-group
-        run: |
-          test -L docker-compose.yml
-          test "$(readlink docker-compose.yml)" = compose.yaml
-          grep -F 'ExecStart=/usr/bin/docker compose --file compose.yaml up ' deploy/fbn.service
-          grep -F 'ExecStop=/usr/bin/docker compose --file compose.yaml stop ' deploy/fbn.service
-          cmp <(COMPOSE_FILE=docker-compose.yml docker compose --env-file /dev/null config --format json) <(docker compose --file compose.yaml --env-file /dev/null config --format json)
-          docker compose config --quiet
-          docker compose config --format json |
-            python -c 'import json, sys; config = json.load(sys.stdin); bootstrap = config["services"]["bootstrap"]; monitor = config["services"]["fbn"]; secret = bootstrap["secrets"][0]; assert bootstrap["command"][:4] == ["bootstrap", "--auth-file", "/run/secrets/facebook_auth", "-i"]; assert "--verbose" in monitor["command"]; assert "--include-errors" in monitor["command"]; assert bootstrap["healthcheck"]["disable"] is True; assert bootstrap["restart"] == monitor["restart"] == "no"; assert int(bootstrap["mem_limit"]) == int(monitor["mem_limit"]) == 1073741824; assert int(bootstrap["memswap_limit"]) == int(monitor["memswap_limit"]) == 1073741824; assert bootstrap["stop_grace_period"] == monitor["stop_grace_period"] == "2m0s"; assert monitor["depends_on"]["bootstrap"]["condition"] == "service_completed_successfully"; assert "secrets" not in monitor; assert secret["source"] == secret["target"] == "facebook_auth"; assert bootstrap["volumes"][0]["source"] == monitor["volumes"][0]["source"] == "fbn-data"; assert config["volumes"]["fbn-data"]["external"] is True'
+        run: make docker-config
 
       - name: Build the native-architecture image
-        run: >-
-          docker build
-          --platform ${{ matrix.platform }}
-          --tag fbn:ci
-          .
-
-      - name: Verify the installed package
-        run: |
-          docker run --rm --network none fbn:ci --version
-          docker run --rm --network none fbn:ci bootstrap --help
-          docker run --rm --network none fbn:ci --help
-
-      - name: Verify readable secret-free logs reach the container log driver
-        run: |
-          container_id="$(docker create --entrypoint python fbn:ci -c 'from fbn.cli import _configure_logging; from fbn.logging import get_logger; _configure_logging(True); get_logger("monitor").info("Container logging probe", probe=True)')"
-          docker start "$container_id"
-          docker wait "$container_id"
-          docker logs "$container_id" | grep -F 'Container logging probe | probe=yes'
-          docker rm "$container_id"
-
-      - name: Verify non-root and image secret boundaries
-        run: |
-          docker image inspect fbn:ci |
-            python -c 'import json, sys; image = json.load(sys.stdin)[0]; config = image["Config"]; assert config["User"] == "fbn:fbn"; assert config["Healthcheck"]["Test"] == ["CMD", "python", "-m", "fbn.health"]; values = "\n".join(config.get("Env", []) + [str(config.get("Labels", {}))]); assert "FBN_APPRISE_URL" not in values; assert "FBN_AUTH_FILE" not in values'
-          python -c 'import subprocess; history = subprocess.check_output(["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", "fbn:ci"], text=True); assert "FBN_APPRISE_URL" not in history; assert "facebook-auth.json" not in history'
-          docker run --rm --network none --entrypoint sh fbn:ci -c 'test "$(id -u)" -ne 0; test -w /home/fbn/.local/share/fbn; test ! -e /run/secrets/facebook_auth'
-
-      - name: Verify Playwright Chromium
-        run: >-
-          docker run
-          --rm
-          --network none
-          fbn:ci
-          doctor
-          --browser chromium
-
-      - name: Verify foreground Compose propagates monitor failures
         env:
-          FBN_TEST_IMAGE: fbn:ci
-        run: |
-          project="fbn-ci-exit-${{ github.run_id }}"
-          trap 'docker compose --project-name "$project" -f tests/fixtures/compose_exit.yaml down --volumes --remove-orphans' EXIT
-          for expected in 8 5 1; do
-            export FBN_TEST_EXIT="$expected"
-            set +e
-            docker compose --project-name "$project" -f tests/fixtures/compose_exit.yaml up --no-build --pull never --no-deps --exit-code-from fbn --no-color fbn
-            actual="$?"
-            set -e
-            test "$actual" -eq "$expected"
-          done
+          DOCKER_IMAGE: fbn:ci
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: make docker-build
 
-      - name: Exercise a sanitized local DOM fixture
-        run: |
-          docker run --rm \
-            --entrypoint python \
-            --network none \
-            --shm-size 1gb \
-            --volume "${{ github.workspace }}/tests/mobile_fixtures.py:/fixtures/mobile_fixtures.py:ro" \
-            --env PYTHONPATH=/fixtures \
-            fbn:ci \
-            -c "from playwright.sync_api import sync_playwright; \
-          from fbn.mobile import MOBILE_SCAN_SCRIPT, wait_for_mobile_page; \
-          from mobile_fixtures import mobile_fixture; \
-          runtime = sync_playwright().start(); \
-          browser = runtime.chromium.launch(channel='chromium', headless=True); \
-          page = browser.new_page(); \
-          page.set_content(mobile_fixture([('101','Synthetic Author','Synthetic body')])); \
-          wait_for_mobile_page(page, timeout_seconds=2); \
-          assert page.evaluate(MOBILE_SCAN_SCRIPT, False)['postCount'] == 1; \
-          browser.close(); \
-          runtime.stop()"
-
-      - name: Verify private failure screenshots using offline pages
-        run: |
-          docker run --rm \
-            --network none \
-            --shm-size 1gb \
-            --volume "${{ github.workspace }}/tests/mobile_fixtures.py:/fixtures/mobile_fixtures.py:ro" \
-            --volume "${{ github.workspace }}/tests/container_failure_screenshot_smoke.py:/fixtures/screenshot_smoke.py:ro" \
-            --entrypoint python \
-            fbn:ci \
-            /fixtures/screenshot_smoke.py
-
-      - name: Verify profile and state survive container replacement
-        run: |
-          docker volume create fbn-ci-persistence
-          docker run --rm \
-            --network none \
-            --shm-size 1gb \
-            --volume fbn-ci-persistence:/home/fbn/.local/share/fbn \
-            --volume "${{ github.workspace }}/tests/container_persistence_smoke.py:/smoke.py:ro" \
-            --entrypoint python \
-            fbn:ci \
-            /smoke.py write
-          docker run --rm \
-            --network none \
-            --shm-size 1gb \
-            --volume fbn-ci-persistence:/home/fbn/.local/share/fbn \
-            --volume "${{ github.workspace }}/tests/container_persistence_smoke.py:/smoke.py:ro" \
-            --entrypoint python \
-            fbn:ci \
-            /smoke.py read
-          docker volume rm fbn-ci-persistence
+      - name: Run container smoke and persistence checks
+        env:
+          DOCKER_IMAGE: fbn:ci
+        run: make docker-smoke
