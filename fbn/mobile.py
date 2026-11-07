@@ -35,6 +35,7 @@ from .exceptions import (
     ConfigurationError,
     LayoutChangedError,
     RenderTimeoutError,
+    RetryableTimestampLayoutError,
     TransientNavigationError,
 )
 from .extractor import (
@@ -263,11 +264,15 @@ def verified_group_keys(
     return frozenset({group.key, final_key})
 
 
-def _layout_failure(*missing: str, phase: str = "layout") -> LayoutChangedError:
+def _layout_failure(
+    *missing: str,
+    phase: str = "layout",
+    error_type: type[LayoutChangedError] = LayoutChangedError,
+) -> LayoutChangedError:
     # All component names are constants, never server content or selectors.
     components = ",".join(sorted(set(missing)))
     LOGGER.warning("Mobile layout incomplete", missing_components=components)
-    error = LayoutChangedError(f"Mobile layout incomplete: missing={components}.")
+    error = error_type(f"Mobile layout incomplete: missing={components}.")
     _annotate_failure(error, phase)
     return error
 
@@ -454,6 +459,40 @@ def _is_header_assembly(result: dict[str, Any]) -> bool:
     )
 
 
+def _is_retryable_feed_timestamp(
+    result: dict[str, Any], structure: dict[str, Any], signals: PageSignals
+) -> bool:
+    """Retry one ambiguous header only within an otherwise supported feed."""
+
+    names = (
+        "feedRootCount",
+        "itemCount",
+        "postCount",
+        "headerAssemblyCount",
+        "unclassifiedMenuCards",
+    )
+    if any(type(result.get(name)) is not int or result[name] < 0 for name in names):
+        return False
+    return (
+        result.get("missing") == ["unique_primary_timestamp"]
+        and result["feedRootCount"] == 1
+        and result["postCount"] > 0
+        and result["itemCount"] == result["postCount"] + 1
+        and result["headerAssemblyCount"] == 0
+        and result["unclassifiedMenuCards"] == 0
+        and type(structure.get("dialogs")) is int
+        and structure["dialogs"] == 0
+        and not any(
+            (
+                signals.has_login,
+                signals.has_account_action,
+                signals.has_access_denied,
+                signals.has_rate_limit,
+            )
+        )
+    )
+
+
 def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
     missing = result.get("missing", [])
     if not missing and result.get("postCount", 0) == 0:
@@ -477,6 +516,7 @@ def _inspect_failed_render(
     """
 
     script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
+    original_url = page.url
     signals = read_page_signals(page, dom_scan_script=script)
     result = page.evaluate(script, False)
     structure = _log_layout_snapshot(
@@ -496,6 +536,40 @@ def _inspect_failed_render(
             _raise_render_timeout(phase)
         if _is_header_assembly(result):
             _raise_render_timeout(phase, loading_shell=False, header_assembly=True)
+        if (
+            phase == "page_render"
+            and not permalink
+            and _is_retryable_feed_timestamp(result, structure, signals)
+        ):
+            fresh_signals = read_page_signals(page, dom_scan_script=script)
+            with suppress(LayoutChangedError):
+                classify_page(fresh_signals)
+            if fresh_signals.has_access_denied:
+                raise AccessDeniedError(
+                    "This profile cannot access the requested group."
+                )
+            if fresh_signals.has_rate_limit:
+                raise TransientNavigationError(
+                    "Facebook asked this profile to slow down."
+                )
+            if page.url != original_url:
+                raise _layout_failure("unchanged_feed_navigation", phase=phase)
+            fresh_result = page.evaluate(script, False)
+            fresh_structure = page.evaluate(RENDER_SNAPSHOT_SCRIPT)
+            if (
+                type(fresh_structure.get("dialogs")) is not int
+                or fresh_structure["dialogs"]
+            ):
+                raise _layout_failure("supported_blocking_dialog", phase=phase)
+            if _is_retryable_feed_timestamp(
+                fresh_result, fresh_structure, fresh_signals
+            ):
+                raise _layout_failure(
+                    "unique_primary_timestamp",
+                    phase=phase,
+                    error_type=RetryableTimestampLayoutError,
+                )
+            return fresh_result
     except Exception as error:
         _annotate_failure(error, phase)
         error._fbn_render_classified = True

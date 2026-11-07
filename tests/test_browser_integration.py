@@ -2791,6 +2791,7 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
         "permalink_preview",
         "header_assembly",
         "short_link_stalled",
+        "timestamp_ambiguous",
     ],
 )
 @pytest.mark.parametrize("failed_attempts", [1, 2])
@@ -2815,11 +2816,16 @@ def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
     def bounded_loading_readiness(page, **kwargs):
         # Shorten only the blank-shell readiness wait, never navigation to it.
         if (
-            failure_kind in {"initial", "header_assembly"}
+            failure_kind in {"initial", "header_assembly", "timestamp_ambiguous"}
             and len(attempts) <= failed_attempts
-            and (failure_kind == "header_assembly" or kwargs.get("permalink"))
+            and (
+                failure_kind in {"header_assembly", "timestamp_ambiguous"}
+                or kwargs.get("permalink")
+            )
         ):
-            kwargs["timeout_seconds"] = 0.1
+            kwargs["timeout_seconds"] = (
+                0.5 if failure_kind == "timestamp_ambiguous" else 0.1
+            )
         return original_readiness(page, **kwargs)
 
     monkeypatch.setattr(mobile, "wait_for_mobile_page", bounded_loading_readiness)
@@ -2874,6 +2880,15 @@ def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
                     and len(attempts) <= failed_attempts
                 ):
                     html = mobile_header_assembly_fixture()
+                elif (
+                    failure_kind == "timestamp_ambiguous"
+                    and len(attempts) <= failed_attempts
+                ):
+                    html = html.replace(
+                        'aria-label="Sunday, October 11, 2026 at 11:00 AM"',
+                        'aria-label="Synthetic unrecognized timestamp"',
+                        1,
+                    )
             route.fulfill(status=200, content_type="text/html", body=html)
 
         context.route("**/*", serve)

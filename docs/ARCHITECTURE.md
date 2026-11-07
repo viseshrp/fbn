@@ -175,6 +175,12 @@ signal, unknown layout, query/fragment, or intervening canonical post navigation
 This recognition commits nothing and does not accept the unresolved link. A
 fresh acquisition still has to prove the canonical group and post identity.
 
+One ambiguous timestamp in an otherwise supported feed can also trigger the
+same bounded in-check retries. The final snapshot is checked again for account
+actions, navigation changes, dialogs, and other missing structures. Nothing is
+accepted from the failed attempt, and ambiguity that persists through all
+retries becomes a hard layout failure rather than a silently deferred scan.
+
 An outer card retains one primary header and action row. The embedded-content
 recognizer composes complete metadata-only author/date headers and supported
 nonempty bodies inside that ownership boundary. It requires supported primary

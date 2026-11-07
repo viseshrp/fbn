@@ -12,8 +12,10 @@ from typing import Protocol
 from .config import MOBILE_SCAN_BUDGET_SECONDS, ScheduleSettings
 from .exceptions import (
     ConfigurationError,
+    LayoutChangedError,
     MonitorInUseError,
     RenderTimeoutError,
+    RetryableTimestampLayoutError,
     TransientNavigationError,
 )
 from .logging import get_logger
@@ -255,6 +257,7 @@ class MonitorLoop:
         """
 
         routine_at = None
+        last_timestamp_error = None
         # Include the shared scan budget, four initial navigation/render/sort
         # phases, and conservative browser startup/cleanup time before admitting
         # a retry. Do not borrow time from the next routine check.
@@ -275,7 +278,9 @@ class MonitorLoop:
                     commit_delivery=commit_delivery,
                 )
                 return summary, routine_at
-            except RenderTimeoutError:
+            except (RenderTimeoutError, RetryableTimestampLayoutError) as error:
+                if isinstance(error, RetryableTimestampLayoutError):
+                    last_timestamp_error = error
                 failed_at = self._now()
                 if routine_at is None:
                     if self._state.next_eligible(group) != guard_at:
@@ -289,6 +294,14 @@ class MonitorLoop:
                         group, next_eligible_at=routine_at, at=failed_at
                     )
                 if retry_index == len(RENDER_RETRY_DELAYS):
+                    if last_timestamp_error is not None:
+                        LOGGER.warning(
+                            "Timestamp layout retries exhausted; stopping safely",
+                            retry_count=retry_index,
+                        )
+                        raise LayoutChangedError(
+                            str(last_timestamp_error)
+                        ) from last_timestamp_error
                     LOGGER.warning(
                         "Render retries exhausted; waiting for routine check",
                         retry_count=retry_index,

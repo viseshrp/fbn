@@ -16,7 +16,11 @@ from loguru import logger
 import fbn.cli as cli
 import fbn.scheduling as scheduling
 from fbn.config import BrowserSettings, ScheduleSettings
-from fbn.exceptions import AuthenticationRequiredError, LayoutChangedError
+from fbn.exceptions import (
+    AuthenticationRequiredError,
+    LayoutChangedError,
+    RetryableTimestampLayoutError,
+)
 from fbn.models import GroupRef, RunSummary, ScanPolicy
 
 
@@ -462,9 +466,13 @@ def test_desktop_reader_option_is_removed():
     assert "No such option" in result.output
 
 
+@pytest.mark.parametrize(
+    "error_type", [LayoutChangedError, RetryableTimestampLayoutError]
+)
 def test_monitor_alerts_on_layout_failure_and_clears_health(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    error_type: type[LayoutChangedError],
 ) -> None:
     sent: list[cli.Notification] = []
 
@@ -473,7 +481,7 @@ def test_monitor_alerts_on_layout_failure_and_clears_health(
             pass
 
         def run(self, *args: object, **kwargs: object) -> None:
-            raise LayoutChangedError("synthetic unsupported layout")
+            raise error_type("synthetic unsupported layout")
 
     class FakeSink:
         def __init__(self, url: str) -> None:

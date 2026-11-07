@@ -21,6 +21,7 @@ from .exceptions import (
     BrowserUnavailableError,
     ConfigurationError,
     FbnError,
+    LayoutChangedError,
 )
 from .extractor import parse_group_ref
 from .health import MonitorHealth
@@ -292,7 +293,11 @@ def _safe_error_notification(
 ) -> None:
     if apprise_url is None or not apprise_url.strip():
         return
-    category = type(error).__name__
+    category = (
+        "LayoutChangedError"
+        if isinstance(error, LayoutChangedError)
+        else type(error).__name__
+    )
     recovery = {
         "AuthenticationRequiredError": (
             "Export fresh authentication and run `fbn bootstrap`."

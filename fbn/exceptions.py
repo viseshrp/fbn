@@ -55,6 +55,10 @@ class LayoutChangedError(FbnError):
     exit_code = 8
 
 
+class RetryableTimestampLayoutError(LayoutChangedError):
+    """An unsafe feed timestamp may recover during bounded in-check retries."""
+
+
 class DeliveryError(FbnError):
     """A notification could not be accepted or delivered."""
 

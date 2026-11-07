@@ -9,6 +9,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Retry a feed with one ambiguous post timestamp within the current check.
+  Keep the posts unsaved until the feed is readable; stop and alert if the
+  ambiguity persists through all retries.
 - Retry a stalled short post link within the existing check only when the
   unchanged destination shows the same complete, supported post. Never save a
   post until its canonical group link and identity have been verified.

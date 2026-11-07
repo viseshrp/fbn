@@ -16,6 +16,7 @@ from fbn.exceptions import (
     LayoutChangedError,
     MonitorInUseError,
     RenderTimeoutError,
+    RetryableTimestampLayoutError,
     TransientNavigationError,
 )
 from fbn.models import GroupRef, RunSummary, ScanPolicy
@@ -359,6 +360,55 @@ def test_render_retry_exhaustion_waits_for_the_normal_check_without_growing_dela
     assert state.next_at == START + timedelta(minutes=88)
     assert state.failures == 2
     assert len(state.failure_history) == len(samples) == 2
+
+
+@pytest.mark.parametrize("later_loading", [False, True])
+def test_timestamp_ambiguity_stops_safely_after_bounded_retries(later_loading):
+    clock = FakeClock()
+    state = FakeState()
+    error = RetryableTimestampLayoutError("unique_primary_timestamp")
+    later = RenderTimeoutError("loading") if later_loading else error
+    service = FakeService(state, clock, [error, later, later, later])
+    event = FakeEvent(clock, [False, False, False])
+
+    with pytest.raises(LayoutChangedError) as raised:
+        MonitorLoop(
+            service,
+            state,
+            ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+            clock=clock,
+            uniform=lambda lower, upper: lower,
+        ).run(GROUP, POLICY, stop_event=event)
+
+    assert type(raised.value) is LayoutChangedError
+    assert raised.value.__cause__ is error
+    assert service.calls == 4
+    assert event.waits == [5, 10, 20]
+    assert state.next_at == START + timedelta(minutes=44)
+    assert state.failures == 1
+
+
+def test_timestamp_retry_yields_when_the_routine_check_is_near():
+    clock = FakeClock()
+    state = FakeState()
+    service = FakeService(
+        state,
+        clock,
+        [RetryableTimestampLayoutError("unique_primary_timestamp")],
+        on_attempt=lambda: clock.advance(43 * 60),
+    )
+    event = FakeEvent(clock, [True])
+    MonitorLoop(
+        service,
+        state,
+        ScheduleSettings(timedelta(minutes=44), timedelta(minutes=99)),
+        clock=clock,
+        uniform=lambda lower, upper: lower,
+    ).run(GROUP, POLICY, stop_event=event)
+
+    assert service.calls == 1
+    assert event.waits == [60]
+    assert state.next_at == START + timedelta(minutes=44)
 
 
 def test_render_retry_is_skipped_when_a_full_scan_would_crowd_the_routine_slot():

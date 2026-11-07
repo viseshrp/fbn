@@ -535,6 +535,10 @@ while displaying the matching, complete post. The incomplete scan is discarded;
 the post is saved only after a later attempt verifies its direct group link.
 Changed destinations, mismatched posts and security prompts still stop safely.
 
+If one post has an ambiguous timestamp while the rest of the feed is readable,
+`fbn` also retries the current check. If that ambiguity persists through all
+available retries, it stops and reports a layout error rather than guessing.
+
 ### Why did an older post appear in a notification?
 
 Facebook can reorder, pin, or later expose a post that `fbn` had not seen
