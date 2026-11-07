@@ -407,7 +407,7 @@ cmd_test() {
 FROM ${base_image}
 USER 0:0
 RUN apt-get update \\
-    && apt-get install --yes --no-install-recommends git make \\
+    && apt-get install --yes --no-install-recommends git make python3-venv \\
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
