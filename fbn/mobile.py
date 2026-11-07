@@ -24,10 +24,13 @@ from .browser import (
     PageState,
     classify_page,
     read_page_signals,
+    security_path_flags,
 )
 from .config import MOBILE_SCAN_BUDGET_SECONDS
 from .exceptions import (
     AccessDeniedError,
+    AccountActionRequiredError,
+    AuthenticationRequiredError,
     BrowserUnavailableError,
     ConfigurationError,
     LayoutChangedError,
@@ -407,6 +410,7 @@ def _raise_render_timeout(
     *,
     loading_shell: bool = True,
     header_assembly: bool = False,
+    short_link: bool = False,
 ) -> None:
     # The scheduler owns bounded seconds-scale retries within this check.
     # Do not reload, reopen the link, or reset either action/scan deadline here.
@@ -417,9 +421,13 @@ def _raise_render_timeout(
         if loading_shell
         else "supported page"
     )
+    message = (
+        "A matching post's short link did not resolve before the deadline; "
+        if short_link
+        else f"Mobile page rendering timed out on a {surface}; "
+    )
     error = RenderTimeoutError(
-        f"Mobile page rendering timed out on a {surface}; "
-        "no posts were accepted and no immediate retry was attempted."
+        message + "no posts were accepted and no immediate retry was attempted."
     )
     _annotate_failure(error, phase)
     error._fbn_render_classified = True
@@ -994,16 +1002,31 @@ def resolve_post_link(
     """Resolve a Facebook-owned share link and match only primary target content."""
 
     destinations: list[PostLink] = []
+    navigation_flags = {"unexpected": False, "account_action": False, "login": False}
 
     def record_navigation(frame):
         if frame == target.main_frame:
-            link = parse_post_url(frame.url)
+            current_url = frame.url
+            link = parse_post_url(current_url)
             if (
                 link is not None
                 and len(destinations) <= 10
                 and (not destinations or destinations[-1] != link)
             ):
                 destinations.append(link)
+            if link is None:
+                if not _trusted_url(current_url):
+                    navigation_flags["unexpected"] = True
+                    return
+                current = urlsplit(current_url)
+                account_action, login = security_path_flags(current_url)
+                if account_action:
+                    navigation_flags["account_action"] = True
+                elif login:
+                    navigation_flags["login"] = True
+                original = urlsplit(copied)
+                if current.path != original.path or current.query or current.fragment:
+                    navigation_flags["unexpected"] = True
 
     target.on("framenavigated", record_navigation)
     try:
@@ -1014,9 +1037,71 @@ def resolve_post_link(
             allowed_group_keys,
             destinations,
             timeout_seconds=timeout_seconds,
+            navigation_flags=navigation_flags,
         )
     finally:
         target.remove_listener("framenavigated", record_navigation)
+
+
+def _retryable_short_link_stall(
+    target: Page,
+    original_path: str,
+    payload: dict[str, Any],
+    destinations: list[PostLink],
+    *,
+    status: int | None,
+    navigation_flags: dict[str, bool],
+) -> bool:
+    """Recognize a matching, unchanged short-link view without accepting it."""
+
+    current_url = target.url
+    if destinations or navigation_flags["unexpected"] or not _trusted_url(current_url):
+        return False
+    current = urlsplit(current_url)
+    if current.path != original_path or current.query or current.fragment:
+        return False
+    signals = read_page_signals(
+        target, status=status, dom_scan_script=MOBILE_PERMALINK_SCAN_SCRIPT
+    )
+    state = classify_page(signals)
+    if (
+        state is not PageState.FEED
+        or signals.has_access_denied
+        or signals.has_rate_limit
+        or target.locator('[role="dialog"], [aria-modal="true"]').evaluate_all(
+            "nodes => nodes.some(node => node.checkVisibility({"
+            "visibilityProperty:true,opacityProperty:true}))"
+        )
+    ):
+        return False
+    structure = target.evaluate(MOBILE_PERMALINK_SCAN_SCRIPT, False)
+    if structure.get("missing") or structure.get("postCount") != 1:
+        return False
+    with mobile_records(target, permalink=True) as records:
+        matching = len(records) == 1 and all(
+            _primary_post_comparisons(records[0][1], payload).values()
+        )
+    return (
+        matching
+        and target.url == current_url
+        and not destinations
+        and not navigation_flags["unexpected"]
+    )
+
+
+def _raise_recorded_security_navigation(navigation_flags: dict[str, bool]) -> None:
+    if navigation_flags["account_action"]:
+        error = AccountActionRequiredError(
+            "Facebook showed an account security page during post navigation."
+        )
+    elif navigation_flags["login"]:
+        error = AuthenticationRequiredError(
+            "Facebook showed a login page during post navigation."
+        )
+    else:
+        return
+    _annotate_failure(error, "post_navigation")
+    raise error
 
 
 def _resolve_post_link(
@@ -1027,6 +1112,7 @@ def _resolve_post_link(
     destinations: list[PostLink],
     *,
     timeout_seconds: float,
+    navigation_flags: dict[str, bool],
 ) -> str:
     deadline = time.monotonic() + timeout_seconds
     if not _trusted_url(copied):
@@ -1048,12 +1134,14 @@ def _resolve_post_link(
             wait_until="domcontentloaded",
             timeout=_remaining_seconds(deadline, "post_navigation") * 1_000,
         )
+    _raise_recorded_security_navigation(navigation_flags)
     wait_for_mobile_page(
         target,
         timeout_seconds=_remaining_seconds(deadline, "post_render"),
         status=response.status if response is not None else None,
         permalink=True,
     )
+    _raise_recorded_security_navigation(navigation_flags)
     resolved = parse_post_url(target.url)
     # The post can render before its short URL is replaced by the client router.
     # Wait only on that same trusted short-link path, within the existing budget;
@@ -1065,8 +1153,30 @@ def _resolve_post_link(
         and urlsplit(target.url).path == parsed.path
         and time.monotonic() < deadline
     ):
+        _raise_recorded_security_navigation(navigation_flags)
         target.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
         resolved = parse_post_url(target.url)
+    _raise_recorded_security_navigation(navigation_flags)
+    if (
+        resolved is None
+        and direct is None
+        and time.monotonic() >= deadline
+        and _retryable_short_link_stall(
+            target,
+            parsed.path,
+            payload,
+            destinations,
+            status=response.status if response is not None else None,
+            navigation_flags=navigation_flags,
+        )
+    ):
+        _raise_recorded_security_navigation(navigation_flags)
+        LOGGER.warning(
+            "Mobile short-link resolution stalled",
+            missing_components="canonical_group_post_url",
+        )
+        _raise_render_timeout("post_navigation", loading_shell=False, short_link=True)
+    _raise_recorded_security_navigation(navigation_flags)
     if resolved is None or resolved.group_key not in allowed_group_keys:
         raise _layout_failure("resolved_link_for_verified_group")
     if direct is not None and direct.post_id != resolved.post_id:
@@ -1074,6 +1184,7 @@ def _resolve_post_link(
     expanded_preview = False
     while True:
         _check_scan_budget()
+        _raise_recorded_security_navigation(navigation_flags)
         # Capture router changes from navigation onward, including those that
         # happen before the first readable post. Do not adopt a replacement ID.
         if len(destinations) > 10 or any(
@@ -1131,6 +1242,7 @@ def _resolve_post_link(
         if time.monotonic() >= deadline:
             _verify_post_at_deadline(target, items, payload)
         target.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
+    _raise_recorded_security_navigation(navigation_flags)
     return resolved.url
 
 

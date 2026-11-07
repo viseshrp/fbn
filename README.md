@@ -530,6 +530,11 @@ the incomplete scan without losing state, and retries up to 3 times within the
 same check (after 5, 10, and 20 seconds) if schedule headroom permits, or backs
 off until the next scheduled slot.
 
+The same retry applies when a copied short link stays on its original address
+while displaying the matching, complete post. The incomplete scan is discarded;
+the post is saved only after a later attempt verifies its direct group link.
+Changed destinations, mismatched posts and security prompts still stop safely.
+
 ### Why did an older post appear in a notification?
 
 Facebook can reorder, pin, or later expose a post that `fbn` had not seen

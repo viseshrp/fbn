@@ -68,6 +68,24 @@ class PageSignals:
     has_explicit_empty: bool = False
 
 
+def security_path_flags(url: str) -> tuple[bool, bool]:
+    """Identify account-action and login paths without exposing the URL."""
+
+    path = urlparse(url).path.lower()
+    return (
+        any(
+            marker in path
+            for marker in (
+                "/checkpoint",
+                "/two_step_verification",
+                "/consent",
+                "/captcha",
+            )
+        ),
+        path.startswith(("/login", "/recover")),
+    )
+
+
 def _missing_layout_components(signals: PageSignals) -> tuple[str, ...]:
     """Name absent safe structural signals without inspecting page content."""
 
@@ -189,18 +207,7 @@ def read_page_signals(
 ) -> PageSignals:
     """Read only coarse page-state signals; never return page content."""
 
-    parsed = urlparse(page.url)
-    path = parsed.path.lower()
-    action_path = any(
-        marker in path
-        for marker in (
-            "/checkpoint",
-            "/two_step_verification",
-            "/consent",
-            "/captcha",
-        )
-    )
-    login_path = path.startswith("/login") or path.startswith("/recover")
+    action_path, login_path = security_path_flags(page.url)
 
     main_text = ""
     try:

@@ -9,6 +9,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Retry a stalled short post link within the existing check only when the
+  unchanged destination shows the same complete, supported post. Never save a
+  post until its canonical group link and identity have been verified.
 - Separate embedded post text when the feed omits both its menu and repeated
   group heading. Require one linked author/date, reject unresolved metadata
   rather than treating it as message text, and preserve strict link verification.

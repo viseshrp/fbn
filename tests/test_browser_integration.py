@@ -2784,7 +2784,14 @@ def test_missing_mobile_scroller_logs_structure_without_page_content(
 
 
 @pytest.mark.parametrize(
-    "failure_kind", ["initial", "feed_preview", "permalink_preview", "header_assembly"]
+    "failure_kind",
+    [
+        "initial",
+        "feed_preview",
+        "permalink_preview",
+        "header_assembly",
+        "short_link_stalled",
+    ],
 )
 @pytest.mark.parametrize("failed_attempts", [1, 2])
 def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
@@ -2843,10 +2850,15 @@ def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
                 html = mobile_fixture([s for s in stories if s[0] == number])
                 if number == "301":
                     html = html.replace("10:00 AM", "11:00 AM")
-                html += (
-                    "<script>history.replaceState(null,'',"
-                    f"'/groups/contract-group/posts/{number}/')</script>"
-                )
+                if not (
+                    failure_kind == "short_link_stalled"
+                    and number == "301"
+                    and len(attempts) <= failed_attempts
+                ):
+                    html += (
+                        "<script>history.replaceState(null,'',"
+                        f"'/groups/contract-group/posts/{number}/')</script>"
+                    )
                 if failure_kind == "initial" and len(attempts) <= failed_attempts:
                     html = mobile_loading_shell_fixture()
                 elif failure_kind == "permalink_preview" and number == "301":
@@ -3524,6 +3536,116 @@ def test_mobile_waits_for_short_link_client_side_canonical_navigation(tmp_path):
             frozenset({"contract-group"}),
             timeout_seconds=OFFLINE_NAVIGATION_SECONDS,
         ).endswith("/posts/301/")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "matching",
+        "wrong_body",
+        "wrong_author",
+        "wrong_group",
+        "changed_identity",
+        "changed_non_post_navigation",
+        "changed_login_navigation",
+        "changed_consent_navigation",
+        "changed_captcha_navigation",
+        "changed_two_step_navigation",
+        "late_checkpoint",
+        "late_dialog",
+        "changed_query",
+    ],
+)
+def test_stalled_short_link_retries_only_a_matching_safe_page(tmp_path, case):
+    source_html = mobile_fixture([("301", "Author", "Expected body")])
+    target_author = "Other Author" if case == "wrong_author" else "Author"
+    target_body = "Different body" if case == "wrong_body" else "Expected body"
+    target_html = mobile_fixture([("301", target_author, target_body)])
+    if case == "wrong_group":
+        target_html += (
+            "<script>history.replaceState(null,'','/groups/other/posts/301/')</script>"
+        )
+    elif case == "changed_identity":
+        target_html += (
+            "<script>const footer=document.querySelector("
+            "'[aria-label=\"Make a comment\"]');"
+            "footer.hidden=true;history.replaceState(null,'','/groups/other/posts/302/');"
+            "setTimeout(() => history.replaceState(null,'','/share/p/301/'), 50);"
+            "setTimeout(() => footer.hidden=false, 250)</script>"
+        )
+    elif case in {
+        "changed_non_post_navigation",
+        "changed_login_navigation",
+        "changed_consent_navigation",
+        "changed_captcha_navigation",
+        "changed_two_step_navigation",
+    }:
+        security_path = {
+            "changed_non_post_navigation": "/checkpoint/",
+            "changed_login_navigation": "/login/",
+            "changed_consent_navigation": "/consent/",
+            "changed_captcha_navigation": "/captcha/",
+            "changed_two_step_navigation": "/two_step_verification/",
+        }[case]
+        target_html += (
+            f"<script>setTimeout(() => {{history.replaceState(null,'',"
+            f"'{security_path}');"
+            "history.replaceState(null,'','/share/p/301/')}, 500)</script>"
+        )
+    elif case == "late_checkpoint":
+        target_html += (
+            "<script>setTimeout(() => {let input=document.createElement('input');"
+            "input.name='approvals_code';document.body.append(input)}, 150)</script>"
+        )
+    elif case == "late_dialog":
+        target_html += (
+            "<script>setTimeout(() => {let dialog=document.createElement('div');"
+            "dialog.setAttribute('role','dialog');dialog.textContent='Unknown';"
+            "document.body.append(dialog)}, 150)</script>"
+        )
+    elif case == "changed_query":
+        target_html += (
+            "<script>setTimeout(() => history.replaceState(null,'',"
+            "location.pathname+'?comment_id=1'), 150)</script>"
+        )
+    with _local_context(tmp_path) as context:
+        source = context.new_page()
+        source.set_content(source_html)
+        with mobile_records(source) as records:
+            payload = records[0][1]
+        target = context.new_page()
+        requests = []
+
+        def serve(route):
+            requests.append(route.request.url)
+            route.fulfill(status=200, content_type="text/html", body=target_html)
+
+        context.route("**/*", serve)
+        error = (
+            RenderTimeoutError
+            if case == "matching"
+            else AuthenticationRequiredError
+            if case == "changed_login_navigation"
+            else AccountActionRequiredError
+            if case
+            in {
+                "late_checkpoint",
+                "changed_non_post_navigation",
+                "changed_consent_navigation",
+                "changed_captcha_navigation",
+                "changed_two_step_navigation",
+            }
+            else LayoutChangedError
+        )
+        with pytest.raises(error):
+            resolve_post_link(
+                target,
+                "https://m.facebook.com/share/p/301/",
+                payload,
+                frozenset({"contract-group"}),
+                timeout_seconds=2,
+            )
+        assert len(requests) == 1
 
 
 @pytest.mark.parametrize(

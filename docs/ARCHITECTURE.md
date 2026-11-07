@@ -167,6 +167,14 @@ arrives between the earlier state check and that deadline snapshot, the scan
 aborts for backoff; it neither accepts a late view against stale state nor
 reports a layout failure with no missing components.
 
+A copied short link that remains on the same trusted address until its deadline
+is eligible for the same scheduler-owned retry only when the final page has one
+supported primary post matching the complete source author, body, publication,
+and media checks. The final snapshot must contain no blocking dialog, security
+signal, unknown layout, query/fragment, or intervening canonical post navigation.
+This recognition commits nothing and does not accept the unresolved link. A
+fresh acquisition still has to prove the canonical group and post identity.
+
 An outer card retains one primary header and action row. The embedded-content
 recognizer composes complete metadata-only author/date headers and supported
 nonempty bodies inside that ownership boundary. It requires supported primary
