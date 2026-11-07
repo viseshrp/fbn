@@ -416,6 +416,7 @@ RUN mkdir -p /opt/fbn/wheelhouse \\
     && python -m pip download --dest /opt/fbn/wheelhouse "setuptools>=77" wheel ".[dev]" \\
     && python -m pip install --no-index --find-links=/opt/fbn/wheelhouse --no-build-isolation -e ".[dev]" \\
     && python -m pip check \\
+    && chown -R fbn:fbn /opt/fbn/venv \\
     && chmod -R a+rX /opt/fbn/wheelhouse
 ENV PIP_FIND_LINKS=/opt/fbn/wheelhouse \\
     PIP_NO_INDEX=1
