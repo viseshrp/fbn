@@ -36,6 +36,7 @@ _PHASES = frozenset(
     {
         "layout",
         "page_render",
+        "group_navigation",
         "post_verification",
         "app_prompt",
         "dismiss_app_prompt",

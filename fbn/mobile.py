@@ -1404,9 +1404,10 @@ class MobilePostSource(BrowserSession):
                 page.set_default_timeout(navigation_timeout_seconds * 1_000)
                 page.set_default_navigation_timeout(navigation_timeout_seconds * 1_000)
                 with initial_group_navigation(page) as navigation:
-                    response = page.goto(
-                        mobile_group_url(group), wait_until="domcontentloaded"
-                    )
+                    with _action_phase("group_navigation"):
+                        response = page.goto(
+                            mobile_group_url(group), wait_until="commit"
+                        )
                     state = wait_for_mobile_page(
                         page,
                         status=response.status if response else None,
@@ -1466,11 +1467,12 @@ class MobilePostSource(BrowserSession):
                 page = context.new_page()
                 page.route("**/*", guard)
                 with initial_group_navigation(page) as navigation:
-                    response = page.goto(
-                        mobile_group_url(group),
-                        wait_until="domcontentloaded",
-                        timeout=policy.navigation_timeout_seconds * 1_000,
-                    )
+                    with _action_phase("group_navigation"):
+                        response = page.goto(
+                            mobile_group_url(group),
+                            wait_until="commit",
+                            timeout=policy.navigation_timeout_seconds * 1_000,
+                        )
                     wait_for_mobile_page(
                         page,
                         timeout_seconds=policy.navigation_timeout_seconds,

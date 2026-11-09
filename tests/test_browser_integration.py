@@ -9,8 +9,10 @@ import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -2455,6 +2457,116 @@ def test_mobile_blank_loading_shell_times_out_as_transient_without_reloading(
     assert snapshot["visible_text_chars"] == snapshot["visible_controls"] == 0
     assert snapshot["loading_indicators"] == int(accessible_spinner)
     assert "Hidden fallback" not in str(logged)
+
+
+@pytest.mark.parametrize("view", ["spinner", "feed"])
+def test_initial_document_waits_for_render_even_when_dom_content_loaded_stalls(
+    tmp_path, monkeypatch, view
+):
+    """A delayed local script must not hide the already visible loading shell."""
+    from fbn import mobile
+
+    requested, release = Event(), Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/delayed.js":
+                requested.set()
+                release.wait(10)
+                self.send_response(204)
+                self.end_headers()
+                return
+            html = (
+                mobile_loading_shell_fixture()
+                if view == "spinner"
+                else mobile_fixture([("301", "Synthetic Author", "Synthetic body")])
+            ).replace("</body>", '<script defer src="/delayed.js"></script></body>')
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode())
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with _local_context(tmp_path) as context:
+            origin = f"http://127.0.0.1:{server.server_port}"
+            context.route(origin + "/**", lambda route: route.continue_())
+            monkeypatch.setattr(mobile, "mobile_group_url", lambda group: origin + "/")
+            monkeypatch.setattr(
+                mobile, "_trusted_url", lambda url: url.startswith(origin)
+            )
+            monkeypatch.setattr(mobile, "_group_key", lambda url: "contract-group")
+            monkeypatch.setattr(
+                mobile,
+                "verified_group_keys",
+                lambda *args, **kwargs: frozenset({"contract-group"}),
+            )
+            source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+            monkeypatch.setattr(source, "_scan_mobile", lambda *args: "readable")
+
+            @contextmanager
+            def existing_context(**kwargs):
+                yield context
+
+            source._context = existing_context
+            group = parse_group_ref("contract-group")
+            policy = ScanPolicy(
+                sample_count=1,
+                max_scrolls=0,
+                navigation_timeout_seconds=1,
+                settle_seconds=0,
+            )
+            if view == "spinner":
+                with pytest.raises(RenderTimeoutError, match="blank loading shell"):
+                    source.fetch_recent(group, policy)
+            else:
+                assert source.fetch_recent(group, policy) == "readable"
+            assert requested.wait(1)
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "error"),
+    [
+        (429, "", TransientNavigationError),
+        (200, '<input name="email">', AuthenticationRequiredError),
+        (200, '<input name="approvals_code">', AccountActionRequiredError),
+    ],
+)
+def test_initial_document_terminal_responses_do_not_use_render_retry(
+    tmp_path, status, body, error
+):
+    with _local_context(tmp_path) as context:
+        context.route(
+            "https://m.facebook.com/**",
+            lambda route: route.fulfill(
+                status=status, content_type="text/html", body=body
+            ),
+        )
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        with pytest.raises(error) as failure:
+            source.fetch_recent(
+                parse_group_ref("contract-group"),
+                ScanPolicy(sample_count=1, max_scrolls=0, navigation_timeout_seconds=1),
+            )
+        assert not isinstance(failure.value, RenderTimeoutError)
 
 
 @pytest.mark.parametrize("permalink", [False, True])

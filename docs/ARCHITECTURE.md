@@ -182,6 +182,9 @@ accepted from the failed attempt, and ambiguity that persists through all
 retries becomes a hard layout failure rather than a silently deferred scan.
 The existing structural snapshot counts headers with no recognized timestamp
 and headers with multiple candidates; it records no timestamp values.
+Initial group navigation waits for the response to commit, then checks the
+rendered page and its HTTP status instead of waiting for unrelated resources
+to finish the DOM content load event. Navigation failures identify that phase.
 
 An outer card retains one primary header and action row. The embedded-content
 recognizer composes complete metadata-only author/date headers and supported
