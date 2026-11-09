@@ -16,6 +16,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Start checking the mobile feed after its response is committed, so a delayed
   document load cannot bypass the existing loading-screen retry. Record group
   navigation as a separate failure phase.
+- Let a stuck backlog catch-up advance past already verified posts. A later
+  check reuses a destination verified earlier in the same monitor process only
+  for a freshly copied identical link and an exactly matching complete card,
+  without changing the scan budget, scroll limit, or memory bounds.
 - Retry a stalled short post link within the existing check only when the
   unchanged destination shows the same complete, supported post. Never save a
   post until its canonical group link and identity have been verified.

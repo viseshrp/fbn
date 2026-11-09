@@ -436,8 +436,11 @@ def test_layout_grid_preserves_content_link_receipts_and_restart(
             assert not state.pending(group)
         # A new repository instance represents a process restart; delivery
         # receipts must suppress a second notification of the same GUID.
+        # A restarted process has a new source and no in-memory destination cache.
+        restarted = MobilePostSource(source.settings)
+        restarted._context = existing_context
         with SQLiteStateRepository(state_path) as state:
-            result = MonitorService(source, state, sink).run_once(group, policy)
+            result = MonitorService(restarted, state, sink).run_once(group, policy)
             assert result.delivered == 0 and result.pending == 0
         assert len(notifications) == 1
         assert notifications[0].body == (
@@ -1410,8 +1413,11 @@ def test_attachment_control_delivery_restart_and_rejection_are_atomic(
                 return
             result = monitor.run_once(group, policy, notify_initial=True)
             assert result.delivered == 1 and result.pending == 0
+        # A restarted process has a new source and no in-memory destination cache.
+        restarted = MobilePostSource(source.settings)
+        restarted._context = existing_context
         with SQLiteStateRepository(path) as state:
-            result = MonitorService(source, state, sink).run_once(group, policy)
+            result = MonitorService(restarted, state, sink).run_once(group, policy)
             assert result.delivered == result.pending == 0
         assert len(notifications) == 1
         assert notifications[0].body == (
@@ -4305,6 +4311,96 @@ def test_remounted_overlap_reuses_only_fresh_copied_link_with_matching_body(
             assert not result.bounded
             assert [p.post_id for p in result.posts] == ["302", "301"]
             assert visited == ["302", "301"]
+
+
+@pytest.mark.parametrize("change", [None, "body", "label", "group"])
+def test_later_check_reuses_only_unchanged_verified_destination(tmp_path, change):
+    """A backlog catch-up may skip reopening destinations an earlier check proved."""
+
+    stories = [
+        ("303", "Author", "Newest body"),
+        ("302", "Author", "Middle body"),
+        ("301", "Author", "Marker body"),
+    ]
+    state = {"label": "10:00 AM", "group": "contract-group"}
+    visited = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            url = route.request.url
+            target = "/share/" in url
+            key = url.rstrip("/").split("/")[-1]
+            if target:
+                visited.append(key)
+            html = mobile_fixture(
+                [next(p for p in stories if p[0] == key)] if target else stories,
+                group=state["group"],
+            ).replace("at 10:00 AM", f"at {state['label']}")
+            if target:
+                html += (
+                    "<script>history.replaceState(null,'','/groups/"
+                    f"{state['group']}/posts/{key}/')</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        policy = ScanPolicy(max_scrolls=2, settle_seconds=0)
+        first = source.fetch_recent(
+            parse_group_ref("contract-group"), policy, boundary_post_id="301"
+        )
+        assert visited == ["303", "302", "301"]
+        cached = repr(source.__dict__["_verified_destinations"])
+        assert not any(body in cached for _, _, body in stories)
+        assert "Author" not in cached
+
+        if change == "body":
+            stories[1] = ("302", "Author", "Edited middle body")
+        elif change == "label":
+            state["label"] = "11:00 AM"
+        elif change == "group":
+            state["group"] = "other-group"
+        visited.clear()
+        second = source.fetch_recent(
+            parse_group_ref(state["group"]), policy, boundary_post_id="301"
+        )
+        assert [p.post_id for p in second.posts] == [p.post_id for p in first.posts]
+        assert not second.bounded
+        if change is None:
+            assert visited == []
+            assert [p.url for p in second.posts] == [p.url for p in first.posts]
+        elif change == "body":
+            assert visited == ["302"]
+        else:
+            assert visited == ["303", "302", "301"]
+
+
+def test_cross_check_destination_cache_is_bounded_and_expires(monkeypatch):
+    from fbn import mobile
+
+    clock = [1_000.0]
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(mobile, "CROSS_CHECK_DESTINATION_LIMIT", 2)
+    source = MobilePostSource(BrowserSettings(profile_dir=Path("unused")))
+    group = parse_group_ref("contract-group")
+    card = {"author": "A", "text": "Body", "mediaCount": 0, "timestampLabel": "5d"}
+    for index in range(3):
+        source._remember_destination(group, f"link-{index}", card, f"href-{index}")
+    assert source._reusable_destination(group, "link-0", card) is None
+    assert source._reusable_destination(group, "link-2", card) == "href-2"
+    partial = {**card, "partial": True}
+    assert source._reusable_destination(group, "link-2", partial) is None
+    source._remember_destination(group, "link-2", partial, "href-2")
+    assert source._reusable_destination(group, "link-2", card) is None
+    clock[0] += mobile.CROSS_CHECK_DESTINATION_TTL_SECONDS + 1
+    assert source._reusable_destination(group, "link-1", card) is None
+    assert not source.__dict__["_verified_destinations"]
 
 
 def test_archived_marker_mobile_catchup_delivers_and_does_not_repeat(tmp_path):

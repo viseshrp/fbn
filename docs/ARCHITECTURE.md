@@ -298,6 +298,17 @@ historical coverage. No active acquisition or observation path generates
 temporary IDs or matches posts by their text. Archived unlinked history cannot be reliably
 matched to a later observation without additional evidence.
 
+A bounded scan keeps its marker, so the next scheduled check rereads the same
+newest cards. To let a backlog catch-up reach deeper within the unchanged scan
+budget, scroll limit and memory bounds, the long-running monitor may reuse a
+destination verified by an earlier check in the same process. Reuse requires
+the link to be copied again in the current check and the complete card to match
+exactly, including its publication label; relative ages are never reconciled
+across checks. Partial and empty cards are ineligible. The in-memory cache keys
+on the group and copied link, holds at most 128 entries for 24 hours, and stores
+only digests of the compared fields. Canonical group and alias validation still
+runs. Each scan logs only the count of reused destinations.
+
 ### `ScanResult`
 
 - ordered posts

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
@@ -64,6 +67,10 @@ MAX_SCAN_SECONDS = MOBILE_SCAN_BUDGET_SECONDS
 COPY_TIMEOUT_SECONDS = 30.0
 MAX_LINK_SECONDS = 30.0
 MAX_EXPANSION_SECONDS = 15.0
+# A destination verified in an earlier check of this process may be reused only
+# for the same freshly copied link and an exactly matching complete card.
+CROSS_CHECK_DESTINATION_TTL_SECONDS = 24 * 60 * 60
+CROSS_CHECK_DESTINATION_LIMIT = 128
 
 _SCAN_DEADLINE: ContextVar[float | None] = ContextVar("fbn_scan_deadline", default=None)
 
@@ -933,6 +940,33 @@ def _post_signature(payload: dict[str, Any]) -> tuple[str, str, str]:
     return (payload["author"], payload["text"], _publication_label(payload))
 
 
+def _digest(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _destination_fingerprint(payload: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Content-free proof that a complete source card is unchanged.
+
+    This is the exact-label subset of ``_primary_post_comparisons``. Relative
+    labels are never reconciled across checks, and partial or empty cards are
+    never eligible. Only digests are retained, never post content.
+    """
+
+    text = payload["text"]
+    media_keys = payload.get("mediaKeys") or []
+    if payload.get("partial", False):
+        return None
+    if not text and not (payload.get("mediaCount", 0) > 0 and media_keys):
+        return None
+    return (
+        _digest(payload["author"]),
+        _digest(text),
+        _digest(_publication_label(payload)),
+        _digest(media_keys) if not text else None,
+    )
+
+
 def _relative_publication_window(
     payload: dict[str, Any],
 ) -> tuple[float, float] | None:
@@ -1356,6 +1390,36 @@ def _post_target(
 class MobilePostSource(BrowserSession):
     """A separately implemented mobile reader sharing only browser ownership."""
 
+    def _reusable_destination(
+        self, group: GroupRef, copied: str, payload: dict[str, Any]
+    ) -> str | None:
+        cache = self.__dict__.setdefault("_verified_destinations", OrderedDict())
+        entry = cache.get((group.key, copied))
+        if entry is None:
+            return None
+        fingerprint, href, verified_at = entry
+        if time.monotonic() - verified_at > CROSS_CHECK_DESTINATION_TTL_SECONDS:
+            del cache[(group.key, copied)]
+            return None
+        current = _destination_fingerprint(payload)
+        if current is None or current != fingerprint:
+            return None
+        return href
+
+    def _remember_destination(
+        self, group: GroupRef, copied: str, payload: dict[str, Any], href: str
+    ) -> None:
+        cache = self.__dict__.setdefault("_verified_destinations", OrderedDict())
+        key = (group.key, copied)
+        fingerprint = _destination_fingerprint(payload)
+        if fingerprint is None:
+            cache.pop(key, None)
+            return
+        cache[key] = (fingerprint, href, time.monotonic())
+        cache.move_to_end(key)
+        while len(cache) > CROSS_CHECK_DESTINATION_LIMIT:
+            cache.popitem(last=False)
+
     def _launch_context(
         self,
         playwright: Any,
@@ -1520,6 +1584,7 @@ class MobilePostSource(BrowserSession):
     ) -> ScanResult:
         accumulated: list[Post] = []
         progress = [0]
+        reuse = [0]
         token = _SCAN_DEADLINE.set(time.monotonic() + MAX_SCAN_SECONDS)
         try:
             return self._scan_mobile_views(
@@ -1529,6 +1594,7 @@ class MobilePostSource(BrowserSession):
                 policy,
                 aliases,
                 boundary_post_id,
+                reuse,
                 accumulated,
                 progress,
             )
@@ -1547,6 +1613,7 @@ class MobilePostSource(BrowserSession):
             )
         finally:
             _SCAN_DEADLINE.reset(token)
+            LOGGER.info("Mobile destination reuse", cross_check_count=reuse[0])
 
     def _scan_mobile_views(
         self,
@@ -1556,6 +1623,7 @@ class MobilePostSource(BrowserSession):
         policy: ScanPolicy,
         aliases: frozenset[str],
         boundary_post_id: str | None,
+        reuse: list[int],
         accumulated: list[Post],
         progress: list[int],
     ) -> ScanResult:
@@ -1642,6 +1710,16 @@ class MobilePostSource(BrowserSession):
                         # by text/author or a temporary action ID alone.
                         href = cached[1]
                         LOGGER.debug("Verified copied link reused within scan")
+                    elif (
+                        reused := self._reusable_destination(group, copied, payload)
+                    ) is not None:
+                        # The link was copied again just now and the complete
+                        # card matches the one verified by an earlier check.
+                        # The canonical group and alias checks below still run.
+                        href = reused
+                        verified_links[copied] = (payload.copy(), href)
+                        reuse[0] += 1
+                        LOGGER.debug("Verified copied link reused across checks")
                     else:
                         # Close destinations promptly: at most feed + one post.
                         with _post_target(
@@ -1662,6 +1740,7 @@ class MobilePostSource(BrowserSession):
                                 ),
                             )
                         verified_links[copied] = (payload.copy(), href)
+                        self._remember_destination(group, copied, payload, href)
                     posts = extract_posts(
                         [{**payload, "href": href}],
                         group,
