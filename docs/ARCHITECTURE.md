@@ -180,6 +180,8 @@ same bounded in-check retries. The final snapshot is checked again for account
 actions, navigation changes, dialogs, and other missing structures. Nothing is
 accepted from the failed attempt, and ambiguity that persists through all
 retries becomes a hard layout failure rather than a silently deferred scan.
+The existing structural snapshot counts headers with no recognized timestamp
+and headers with multiple candidates; it records no timestamp values.
 
 An outer card retains one primary header and action row. The embedded-content
 recognizer composes complete metadata-only author/date headers and supported

@@ -57,7 +57,8 @@ HEADER_COMPONENT_SCRIPT = r"""
         && item.label === other.label
     ));
     if (distinctTimestamps.length !== 1) {
-      return {status: 'ambiguous', missing: 'unique_primary_timestamp'};
+      return {status: 'ambiguous', missing: 'unique_primary_timestamp',
+        timestampCandidates: distinctTimestamps.length};
     }
     return {status: 'recognized', owner, timestamp: distinctTimestamps[0]};
   };

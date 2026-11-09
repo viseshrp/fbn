@@ -53,6 +53,7 @@ MOBILE_SCAN_SCRIPT = (
   let candidateCount = 0;
   let headerAssemblyCount = 0, unclassifiedMenuCards = 0;
   let embeddedCardCount = 0;
+  let timestampAbsentCards = 0, timestampMultipleCards = 0;
   if (roots.length !== 1) missing.add('unique_mobile_scroller');
   const branch = (root, node) => presentationChildren(root)
     .find(child => child === node || child.contains(node)) || null;
@@ -130,6 +131,10 @@ MOBILE_SCAN_SCRIPT = (
       roles.set(header, 'header');
       const headerResult = recognizeHeader(header, menu);
       if (headerResult.status !== 'recognized') {
+        if (headerResult.missing === 'unique_primary_timestamp') {
+          if (headerResult.timestampCandidates === 0) timestampAbsentCards++;
+          else if (headerResult.timestampCandidates > 1) timestampMultipleCards++;
+        }
         missing.add(headerResult.missing); continue;
       }
       const {owner, timestamp} = headerResult;
@@ -188,6 +193,7 @@ MOBILE_SCAN_SCRIPT = (
     storyMessageCount: records.length, postCount: records.length,
     hasFeed: roots.length === 1, missing: Array.from(missing),
     headerAssemblyCount, unclassifiedMenuCards, embeddedCardCount,
+    timestampAbsentCards, timestampMultipleCards,
   };
   return includeContent ? {...counts, records} : counts;
 }

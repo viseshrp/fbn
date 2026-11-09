@@ -23,6 +23,7 @@ from fbn.exceptions import (
     AuthenticationRequiredError,
     LayoutChangedError,
     RenderTimeoutError,
+    RetryableTimestampLayoutError,
     TransientNavigationError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
@@ -2985,6 +2986,55 @@ def test_loading_shell_in_check_retry_verifies_and_delivers_once_end_to_end(
             assert later.delivered == 0, notifications
             assert len(notifications) == 1
             assert tuple(context.pages) == original_pages
+
+
+@pytest.mark.parametrize(
+    ("kind", "absent", "multiple"), [("absent", 1, 0), ("multiple", 0, 1)]
+)
+def test_ambiguous_feed_timestamp_logs_only_structural_counts(
+    tmp_path, monkeypatch, kind, absent, multiple
+):
+    from fbn import mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile,
+        "LOGGER",
+        type(
+            "Log",
+            (),
+            {"warning": lambda self, message, **kw: logged.append((message, kw))},
+        )(),
+    )
+    timestamp = (
+        '<div data-mcomponent="ServerTextArea" '
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h</div>'
+    )
+    html = mobile_fixture(
+        [
+            ("301", "Synthetic private author", "Synthetic private body"),
+            ("300", "Other author", "Other body"),
+        ]
+    )
+    assert html.count(timestamp) == 2
+    replacement = (
+        timestamp.replace("Sunday, October 11, 2026 at 10:00 AM", "Unrecognized")
+        if kind == "absent"
+        else timestamp + timestamp
+    )
+    html = html.replace(timestamp, replacement, 1)
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        with pytest.raises(RetryableTimestampLayoutError):
+            wait_for_mobile_page(page, timeout_seconds=0.5)
+    snapshots = [
+        fields for message, fields in logged if message == "Mobile layout snapshot"
+    ]
+    assert len(snapshots) == 1
+    assert snapshots[0]["timestamp_absent_cards"] == absent
+    assert snapshots[0]["timestamp_multiple_cards"] == multiple
+    assert "private" not in str(logged) and "October" not in str(logged)
 
 
 @pytest.mark.parametrize(

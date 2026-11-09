@@ -380,6 +380,8 @@ def _log_layout_snapshot(
         retryable_header_cards=result.get("headerAssemblyCount", 0),
         unclassified_menu_cards=result.get("unclassifiedMenuCards", 0),
         embedded_post_cards=result.get("embeddedCardCount", 0),
+        timestamp_absent_cards=result.get("timestampAbsentCards", 0),
+        timestamp_multiple_cards=result.get("timestampMultipleCards", 0),
         **terminal_signals,
         **structure,
     )
@@ -470,6 +472,8 @@ def _is_retryable_feed_timestamp(
         "postCount",
         "headerAssemblyCount",
         "unclassifiedMenuCards",
+        "timestampAbsentCards",
+        "timestampMultipleCards",
     )
     if any(type(result.get(name)) is not int or result[name] < 0 for name in names):
         return False
@@ -480,6 +484,7 @@ def _is_retryable_feed_timestamp(
         and result["itemCount"] == result["postCount"] + 1
         and result["headerAssemblyCount"] == 0
         and result["unclassifiedMenuCards"] == 0
+        and result["timestampAbsentCards"] + result["timestampMultipleCards"] == 1
         and type(structure.get("dialogs")) is int
         and structure["dialogs"] == 0
         and not any(

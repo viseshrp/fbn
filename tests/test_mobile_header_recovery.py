@@ -73,6 +73,8 @@ def timestamp_evidence():
         "postCount": 5,
         "headerAssemblyCount": 0,
         "unclassifiedMenuCards": 0,
+        "timestampAbsentCards": 1,
+        "timestampMultipleCards": 0,
         "missing": ["unique_primary_timestamp"],
     }
 
@@ -94,6 +96,9 @@ def test_one_ambiguous_timestamp_in_an_otherwise_readable_feed_can_retry():
         {"postCount": 6},
         {"headerAssemblyCount": 1},
         {"unclassifiedMenuCards": 1},
+        {"timestampAbsentCards": 0},
+        {"timestampAbsentCards": True},
+        {"timestampMultipleCards": 1},
         {"missing": []},
         {"missing": ["unique_primary_timestamp", "unknown_layout"]},
     ],
