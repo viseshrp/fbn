@@ -2,6 +2,9 @@ SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 PYTHON ?= python
+# Parallel pytest-xdist workers for the browser suite. More than four makes
+# its short navigation deadlines flaky on a shared runner.
+BROWSER_TEST_WORKERS ?= 4
 BASH ?= bash
 
 .DEFAULT_GOAL := help
@@ -60,7 +63,7 @@ test-unit: ## Run unit tests with coverage (excluding browser integration)
 
 .PHONY: test-browser
 test-browser: ## Run sanitized local-page Playwright browser integration tests
-	$(PYTHON) -m pytest tests/test_browser_integration.py -q
+	$(PYTHON) -m pytest tests/test_browser_integration.py -q -n $(BROWSER_TEST_WORKERS) --dist worksteal
 
 .PHONY: test
 test: ## Run the full pytest suite

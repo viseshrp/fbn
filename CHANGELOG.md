@@ -119,6 +119,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Run the browser integration tests on four parallel `pytest-xdist` workers
+  (`BROWSER_TEST_WORKERS`), cutting that stage from about 19 minutes to about
+  6 without changing any test.
 - Compose media-opening, separate credit/date and event-preview attachment
   ownership before message expansion. Require positive control/content evidence,
   preserve media identifiers/counts, and reject unrelated controls or raw text.

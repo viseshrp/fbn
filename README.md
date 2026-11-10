@@ -204,7 +204,7 @@ Run `make help` at any time to see all available commands.
 | `make install-dev` | Install `fbn` and development dependencies into the active Python environment (used by CI) |
 | `make lint` | Run Ruff lint, Ruff format check, and `git diff --check` |
 | `make test-unit` | Run unit tests with coverage |
-| `make test-browser` | Run sanitized local-page Playwright integration tests |
+| `make test-browser` | Run sanitized local-page Playwright integration tests in parallel (`BROWSER_TEST_WORKERS`, default 4) |
 | `make build` / `make check-dist` / `make smoke-wheel` | Build sdist/wheel, validate with Twine, and smoke-test the built wheel in a clean virtualenv |
 
 ---
