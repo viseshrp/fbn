@@ -27,6 +27,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   An unreadable card in the first view still retries and then alerts. The
   layout log adds word-class shapes of that card's header labels, with names,
   numbers and other words replaced by placeholders.
+- Read a post date that is followed by a place or similar detail in the same
+  label. The detail is dropped only when the date wrapper also renders it,
+  whole or cut short by an ellipsis, as its final text; an unrendered suffix
+  still leaves the date unread.
 - Let a stuck backlog catch-up advance past already verified posts. A later
   check reuses a destination verified earlier in the same monitor process only
   for a freshly copied identical link and an exactly matching complete card,

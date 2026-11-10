@@ -334,6 +334,11 @@ card's header labels (owner, digits, units, months, weekdays and a short list
 of generic words; every other word is a placeholder) so the format can be
 identified without recording names or post text.
 
+A date label may carry a trailing detail such as a place between the date and
+the audience. The date is read from such a label only when the same wrapper
+renders that detail, whole or truncated with an ellipsis, as its final text.
+The destination page still verifies the publication time.
+
 ### `ScanResult`
 
 - ordered posts

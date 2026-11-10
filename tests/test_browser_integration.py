@@ -3557,6 +3557,44 @@ def test_mobile_reads_timestamp_from_contributor_metadata_wrapper(
             )
 
 
+@pytest.mark.parametrize(
+    ("rendered", "accepted"),
+    [
+        ("9h \U000f0123 Synthetic Place, Reg... \U000f0124", True),
+        ("9h \U000f0123 Synthetic Place, Region - Some Country", True),
+        ("9h \U000f0123 Synthetic Place, Reg\u2026", True),
+        ("9h", False),
+        ("9h \U000f0123 Other Place, Reg...", False),
+        ("9h \U000f0123 Sy...", False),
+        ("Synthetic Place, Region - Some Country \U000f0123 9h", False),
+    ],
+)
+def test_mobile_reads_date_before_a_rendered_trailing_detail(
+    tmp_path, rendered, accepted
+):
+    html = mobile_fixture(
+        [("301", "Author", "Body"), ("300", "Other author", "Other body")]
+    ).replace(
+        '<div data-mcomponent="ServerTextArea" '
+        'aria-label="Sunday, October 11, 2026 at 10:00 AM">2h</div>',
+        '<div data-mcomponent="ServerTextArea" aria-label=", 9 hours ago, '
+        'Synthetic Place, Region - Some Country, Private group">'
+        f"{rendered}</div>",
+        1,
+    )
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(html)
+        if not accepted:
+            with pytest.raises(RetryableTimestampLayoutError):
+                wait_for_mobile_page(page, timeout_seconds=0.5)
+            return
+        assert wait_for_mobile_page(page, timeout_seconds=0.5) is PageState.FEED
+        with mobile_records(page) as records:
+            assert len(records) == 2
+            assert records[0][1]["timestampLabel"] == "9 hours ago, Private group"
+
+
 @pytest.mark.parametrize("badge", [None, "All-star contributor"])
 @pytest.mark.parametrize("include_author", [False, True])
 def test_mobile_reads_primary_date_from_metadata_container(

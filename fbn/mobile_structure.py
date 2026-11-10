@@ -40,6 +40,32 @@ HEADER_COMPONENT_SCRIPT = r"""
     if (!owner || authors.length !== 1) {
       return {status: 'ambiguous', missing: 'matching_primary_author'};
     }
+    // A place or similar detail can follow the date. It is dropped only when
+    // this exact wrapper also renders it, whole or cut short by an ellipsis,
+    // as its final text. An unrendered suffix still leaves the date unread.
+    const dateBeforeRenderedDetail = (node, label) => {
+      const audience = (label.match(/, (?:Private|Public) group$/) || [''])[0];
+      const parts = label.slice(0, label.length - audience.length).split(/\s*,\s*/);
+      if (timestampPattern.test(parts.join(', '))) return label;
+      const rendered = clean(node.innerText.replace(/\p{Co}/gu, ' '));
+      const cut = /(?:\.{3}|\u2026)$/.test(rendered);
+      const shown = rendered.replace(/\s*(?:\.{3}|\u2026)$/, '')
+        .replace(/\s*,\s*/g, ', ');
+      const ends = value => value.length >= 3 && shown.endsWith(value)
+        && (shown.length === value.length
+          || /\s/.test(shown[shown.length - value.length - 1]));
+      for (let size = parts.length - 1; size > 0; size--) {
+        const date = parts.slice(0, size).join(', ');
+        const detail = parts.slice(size).join(', ');
+        if (!timestampPattern.test(date) || detail.length < 3
+          || detail.length > 120) continue;
+        for (let length = detail.length; length >= 3; length--) {
+          if (ends(detail.slice(0, length).trim())) return date + audience;
+          if (!cut) break;
+        }
+      }
+      return label;
+    };
     const timestampLabel = node => {
       const stripOwner = value => value.startsWith(owner + ',')
         ? value.slice(owner.length + 1).replace(/^[,\s]+/, '') : value;
@@ -63,7 +89,7 @@ HEADER_COMPONENT_SCRIPT = r"""
         label = stripOwner(label.slice(prefix.length + 1)
           .replace(/^[,\s]+/, ''));
       }
-      return label;
+      return dateBeforeRenderedDetail(node, label);
     };
     const timestamps = Array.from(header.querySelectorAll(textSelector)).filter(
       node => visible(node) && clean(node.getAttribute('aria-label'))
