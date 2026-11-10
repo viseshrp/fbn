@@ -3152,6 +3152,11 @@ def test_ambiguous_feed_timestamp_logs_only_structural_counts(
     assert len(snapshots) == 1
     assert snapshots[0]["timestamp_absent_cards"] == absent
     assert snapshots[0]["timestamp_multiple_cards"] == multiple
+    # Only word classes describe the unreadable label and its visible text.
+    shapes = snapshots[0]["timestamp_absent_label_shapes"]
+    assert ("w / 9 <unit>" in shapes.split(" || ")) is bool(absent)
+    assert bool(shapes) is bool(absent)
+    assert "Unrecognized" not in str(logged) and "Synthetic" not in str(logged)
     assert "private" not in str(logged) and "October" not in str(logged)
 
 
@@ -4467,7 +4472,7 @@ def test_known_card_needs_same_author_body_and_overlapping_publication_time():
     assert source._known_destination(group, preview) is None
 
 
-def _paged_source(tmp_path, context, stories, visited, *, reveal=None):
+def _paged_source(tmp_path, context, stories, visited, *, reveal=None, unreadable=None):
     def serve(route):
         url = route.request.url
         target = "/share/" in url
@@ -4477,6 +4482,18 @@ def _paged_source(tmp_path, context, stories, visited, *, reveal=None):
         html = mobile_fixture(
             [next(p for p in stories if p[0] == key)] if target else list(stories)
         )
+        if unreadable is not None and not target:
+            # The card at this position renders a date the parser cannot read.
+            label = 'aria-label="Sunday, October 11, 2026 at 10:00 AM"'
+            parts = html.split(label)
+            assert len(parts) == len(stories) + 1
+            html = (
+                "".join(
+                    part + ('aria-label="Unrecognized"' if n == unreadable else label)
+                    for n, part in enumerate(parts[:-1])
+                )
+                + parts[-1]
+            )
         if target:
             html += (
                 "<script>history.replaceState(null,'','/groups/"
@@ -4556,6 +4573,35 @@ def test_scrolling_past_known_posts_does_not_use_the_scroll_allowance(tmp_path):
         assert not third.bounded
         assert [p.post_id for p in third.posts] == [str(n) for n in range(308, 300, -1)]
         assert visited == [str(n) for n in range(308, 300, -1)]
+
+
+def test_unreadable_card_below_verified_posts_bounds_the_scan(tmp_path):
+    """A deeper card without a readable date stops the scan, not the monitor."""
+
+    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=1)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, visited, reveal=2, unreadable=3
+        )
+        for _ in range(2):
+            result = source.fetch_recent(group, policy, boundary_post_id="301")
+            # Nothing from the view holding the unreadable card is accepted.
+            assert result.bounded
+            assert [p.post_id for p in result.posts] == ["306", "305"]
+        assert visited == ["306", "305"]
+
+
+def test_unreadable_card_in_the_first_view_still_fails_the_scan(tmp_path):
+    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=1)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, [], reveal=2, unreadable=1)
+        with pytest.raises(RetryableTimestampLayoutError):
+            source.fetch_recent(group, policy, boundary_post_id="301")
 
 
 def test_identical_cards_in_one_pass_are_never_recognised_by_content(tmp_path):

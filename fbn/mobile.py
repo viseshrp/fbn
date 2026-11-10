@@ -366,6 +366,8 @@ def _log_layout_snapshot(
     signals: PageSignals | None = None,
 ) -> dict[str, Any]:
     # Fixed structural counters only. Never log text, labels, URLs, or IDs.
+    # An unreadable date adds word-class shapes of its header labels: names,
+    # numbers and all other words are already placeholders.
     structure = page.evaluate(RENDER_SNAPSHOT_SCRIPT)
     terminal_signals = (
         {
@@ -395,6 +397,9 @@ def _log_layout_snapshot(
         embedded_post_cards=result.get("embeddedCardCount", 0),
         timestamp_absent_cards=result.get("timestampAbsentCards", 0),
         timestamp_multiple_cards=result.get("timestampMultipleCards", 0),
+        timestamp_absent_label_shapes=" || ".join(
+            str(shape)[:200] for shape in result.get("timestampAbsentShapes", [])[:12]
+        ),
         **terminal_signals,
         **structure,
     )
@@ -1746,9 +1751,28 @@ class MobilePostSource(BrowserSession):
 
         while True:
             page.bring_to_front()
-            wait_for_mobile_page(
-                page, timeout_seconds=policy.navigation_timeout_seconds
-            )
+            try:
+                wait_for_mobile_page(
+                    page, timeout_seconds=policy.navigation_timeout_seconds
+                )
+            except RetryableTimestampLayoutError:
+                if scan_index == 0 or not accumulated:
+                    raise
+                # One card further down has no readable date. Nothing in this
+                # view is accepted and nothing below it is read; the verified
+                # posts above it are kept and the marker stays where it is.
+                LOGGER.warning(
+                    "Mobile scan stopped above an unreadable card",
+                    post_count=len(accumulated),
+                    scroll_count=scrolls,
+                )
+                return self._scan_result(
+                    accumulated,
+                    scrolls,
+                    True,
+                    boundary_post_id,
+                    stop_reason="unreadable_card",
+                )
             if _group_key(page.url) not in aliases:
                 raise AccessDeniedError("The mobile scan left the verified group.")
             before = len(accumulated)

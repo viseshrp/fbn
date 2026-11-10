@@ -325,6 +325,15 @@ check recognises the cards already verified and opens the next ten. Passes that
 only recognise cards do not consume `--max-scrolls`, up to 40 further passes.
 Each scan logs only the counts of recognised cards and opened destinations.
 
+One card with an absent or repeated date in an otherwise valid feed is retried
+when it is in the first view. In a later view the scan instead ends as bounded
+with the stop reason `unreadable_card`: every post accepted from the views
+above is kept, nothing from the view holding that card is accepted, and the
+marker is preserved. The layout log then carries word-class shapes of that
+card's header labels (owner, digits, units, months, weekdays and a short list
+of generic words; every other word is a placeholder) so the format can be
+identified without recording names or post text.
+
 ### `ScanResult`
 
 - ordered posts

@@ -21,6 +21,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complete text, and publication time without copying or opening them again,
   and scroll past them without using the scroll allowance. The shared scan
   budget is now 180 seconds.
+- Stop a scan above one deeper card whose date cannot be read instead of
+  failing the whole check. The verified posts above it are still saved and
+  notified, nothing at or below it is accepted, and the marker stays in place.
+  An unreadable card in the first view still retries and then alerts. The
+  layout log adds word-class shapes of that card's header labels, with names,
+  numbers and other words replaced by placeholders.
 - Let a stuck backlog catch-up advance past already verified posts. A later
   check reuses a destination verified earlier in the same monitor process only
   for a freshly copied identical link and an exactly matching complete card,

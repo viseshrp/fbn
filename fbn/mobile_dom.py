@@ -54,6 +54,7 @@ MOBILE_SCAN_SCRIPT = (
   let headerAssemblyCount = 0, unclassifiedMenuCards = 0;
   let embeddedCardCount = 0;
   let timestampAbsentCards = 0, timestampMultipleCards = 0;
+  const timestampAbsentShapes = [];
   if (roots.length !== 1) missing.add('unique_mobile_scroller');
   const branch = (root, node) => presentationChildren(root)
     .find(child => child === node || child.contains(node)) || null;
@@ -132,7 +133,10 @@ MOBILE_SCAN_SCRIPT = (
       const headerResult = recognizeHeader(header, menu);
       if (headerResult.status !== 'recognized') {
         if (headerResult.missing === 'unique_primary_timestamp') {
-          if (headerResult.timestampCandidates === 0) timestampAbsentCards++;
+          if (headerResult.timestampCandidates === 0) {
+            timestampAbsentCards++;
+            timestampAbsentShapes.push(...headerResult.labelShapes);
+          }
           else if (headerResult.timestampCandidates > 1) timestampMultipleCards++;
         }
         missing.add(headerResult.missing); continue;
@@ -194,6 +198,7 @@ MOBILE_SCAN_SCRIPT = (
     hasFeed: roots.length === 1, missing: Array.from(missing),
     headerAssemblyCount, unclassifiedMenuCards, embeddedCardCount,
     timestampAbsentCards, timestampMultipleCards,
+    timestampAbsentShapes: timestampAbsentShapes.slice(0, 12),
   };
   return includeContent ? {...counts, records} : counts;
 }

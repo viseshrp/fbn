@@ -579,6 +579,8 @@ the old marker in place so later scans can finish catching up.
   scan budget. A check opens at most ten post links. A long backlog is read in
   pages: later checks recognise the posts they already verified by author,
   text, and time, and continue with the next ten.
+  A deeper card whose date cannot be read ends the scan above it: the verified
+  posts above are still notified and the marker stays in place.
 
 ### Durable state and schema migrations
 

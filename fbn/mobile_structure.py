@@ -1,6 +1,37 @@
 """Named header recognition, independent of body extraction and acceptance."""
 
 HEADER_COMPONENT_SCRIPT = r"""
+  // Diagnostics for an unreadable date carry word classes only. The author,
+  // every other name or word, and every number become placeholders.
+  const shapeWords = new Set(['at', 'ago', 'just', 'now', 'yesterday', 'today',
+    'am', 'pm', 'private', 'public', 'group', 'follow', 'sponsored',
+    'suggested', 'anonymous', 'member', 'members', 'participant', 'edited',
+    'shared', 'with', 'of', 'and', 'others', 'is', 'in', 'to', 'on', 'last',
+    'about', 'a', 'an', 'from', 'by', 'post', 'posted', 'admin', 'moderator']);
+  const shapeUnit = new RegExp('^(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?'
+    + '|hours?|d|days?|w|wks?|weeks?|mos?|months?|y|yrs?|years?)$');
+  const shapeMonth = new RegExp('^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?'
+    + '|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?'
+    + '|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)$');
+  const shapeDay = /^(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?$/;
+  const labelShape = (value, owner) => {
+    const text = owner ? clean(value).split(owner).join(' \u0001 ') : clean(value);
+    return (text.match(/\u0001|[\p{L}\p{M}]+|\d+|\p{Co}|\S/gu) || [])
+      .slice(0, 40).map(token => {
+        const word = token.toLowerCase();
+        return token === '\u0001' ? '<owner>' : /^\d+$/.test(token) ? '9'
+          : /^\p{Co}$/u.test(token) ? '<icon>'
+          : shapeUnit.test(word) ? '<unit>' : shapeMonth.test(word) ? '<month>'
+          : shapeDay.test(word) ? '<weekday>' : shapeWords.has(word) ? word
+          : /^[\p{L}\p{M}]+$/u.test(token) ? 'w'
+          : /^[,.:;\u00b7\u2022|()\/\u2013\u2014-]$/.test(token) ? token : '?';
+      }).join(' ');
+  };
+  const headerLabelShapes = (header, menu, owner) => Array.from(
+    header.querySelectorAll('[aria-label]')
+  ).filter(node => visible(node) && node !== menu && !node.contains(menu))
+    .slice(0, 6).map(node => labelShape(node.getAttribute('aria-label'), owner)
+      + ' / ' + labelShape(node.innerText, owner));
   const recognizeHeader = (header, menu, inferredOwner = null) => {
     const owner = inferredOwner === null
       ? clean(menu.getAttribute('aria-label').slice(17)) : inferredOwner;
@@ -58,7 +89,9 @@ HEADER_COMPONENT_SCRIPT = r"""
     ));
     if (distinctTimestamps.length !== 1) {
       return {status: 'ambiguous', missing: 'unique_primary_timestamp',
-        timestampCandidates: distinctTimestamps.length};
+        timestampCandidates: distinctTimestamps.length,
+        labelShapes: distinctTimestamps.length ? []
+          : headerLabelShapes(header, menu, owner)};
     }
     return {status: 'recognized', owner, timestamp: distinctTimestamps[0]};
   };
