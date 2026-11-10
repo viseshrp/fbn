@@ -7,7 +7,7 @@ import json
 import math
 import re
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
@@ -71,6 +71,12 @@ MAX_EXPANSION_SECONDS = 15.0
 # for the same freshly copied link and an exactly matching complete card.
 CROSS_CHECK_DESTINATION_TTL_SECONDS = 24 * 60 * 60
 CROSS_CHECK_DESTINATION_LIMIT = 128
+# Destination pages opened by one check. Recognising earlier-verified cards lets
+# a backlog advance in pages of this size instead of re-opening the same posts.
+MAX_DESTINATION_LOADS_PER_SCAN = 10
+# Passes that only recognised earlier-verified cards do not consume the
+# configured scroll allowance, up to this many additional passes.
+KNOWN_POST_EXTRA_SCROLLS = 40
 
 _SCAN_DEADLINE: ContextVar[float | None] = ContextVar("fbn_scan_deadline", default=None)
 
@@ -948,9 +954,8 @@ def _digest(value: Any) -> str:
 def _destination_fingerprint(payload: dict[str, Any]) -> tuple[Any, ...] | None:
     """Content-free proof that a complete source card is unchanged.
 
-    This is the exact-label subset of ``_primary_post_comparisons``. Relative
-    labels are never reconciled across checks, and partial or empty cards are
-    never eligible. Only digests are retained, never post content.
+    Partial or empty cards are never eligible. Only digests are retained,
+    never post content. Publication time is compared separately.
     """
 
     text = payload["text"]
@@ -962,8 +967,22 @@ def _destination_fingerprint(payload: dict[str, Any]) -> tuple[Any, ...] | None:
     return (
         _digest(payload["author"]),
         _digest(text),
-        _digest(_publication_label(payload)),
         _digest(media_keys) if not text else None,
+    )
+
+
+def _card_key(payload: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Content-free identity of a feed card as first rendered, preview included."""
+
+    text = payload["text"]
+    media_keys = payload.get("mediaKeys") or []
+    if not text and not (payload.get("mediaCount", 0) > 0 and media_keys):
+        return None
+    return (
+        _digest(payload["author"]),
+        _digest(text),
+        _digest(media_keys) if not text else None,
+        bool(payload.get("partial", False)),
     )
 
 
@@ -1013,6 +1032,25 @@ def _publication_matches(item: dict[str, Any], source: dict[str, Any]) -> bool:
     return max(source_window[0], target_window[0]) < min(
         source_window[1], target_window[1]
     )
+
+
+def _same_publication(
+    label: str, window: tuple[float, float] | None, payload: dict[str, Any]
+) -> bool:
+    """Whether a card shows the publication time an earlier check verified.
+
+    A relative age ("2h", later "3h") is a range, so two checks agree when
+    their ranges overlap. Any other label must be identical.
+    """
+
+    current = _relative_publication_window(payload)
+    if window is None or current is None:
+        return (
+            window is None
+            and current is None
+            and label == _digest(_publication_label(payload))
+        )
+    return max(window[0], current[0]) < min(window[1], current[1])
 
 
 def _primary_post_comparisons(
@@ -1390,32 +1428,76 @@ def _post_target(
 class MobilePostSource(BrowserSession):
     """A separately implemented mobile reader sharing only browser ownership."""
 
-    def _reusable_destination(
-        self, group: GroupRef, copied: str, payload: dict[str, Any]
+    def _known_destination(
+        self, group: GroupRef, payload: dict[str, Any]
     ) -> str | None:
+        """The one earlier-verified post this untouched feed card can be."""
+
+        key = _card_key(payload)
+        if key is None:
+            return None
         cache = self.__dict__.setdefault("_verified_destinations", OrderedDict())
-        entry = cache.get((group.key, copied))
-        if entry is None:
+        entries = cache.get((group.key, *key))
+        if entries is None:
             return None
-        fingerprint, href, verified_at = entry
-        if time.monotonic() - verified_at > CROSS_CHECK_DESTINATION_TTL_SECONDS:
-            del cache[(group.key, copied)]
+        now = time.monotonic()
+        for href in [
+            href
+            for href, entry in entries.items()
+            if now - entry[3] > CROSS_CHECK_DESTINATION_TTL_SECONDS
+        ]:
+            del entries[href]
+        if not entries:
+            del cache[(group.key, *key)]
             return None
-        current = _destination_fingerprint(payload)
-        if current is None or current != fingerprint:
-            return None
-        return href
+        matches = [
+            href
+            for href, (_, label, window, _) in entries.items()
+            if _same_publication(label, window, payload)
+        ]
+        # Two verified posts sharing author, text and time are never guessed.
+        return matches[0] if len(matches) == 1 else None
+
+    def _confirm_known_destination(
+        self,
+        group: GroupRef,
+        preview: dict[str, Any],
+        payload: dict[str, Any],
+        href: str,
+    ) -> bool:
+        """Require the complete card to equal the one verified earlier."""
+
+        cache = self.__dict__.setdefault("_verified_destinations", OrderedDict())
+        key = (group.key, *(_card_key(preview) or ()))
+        entries = cache.get(key, {})
+        entry = entries.get(href)
+        if entry is None or _destination_fingerprint(payload) != entry[0]:
+            entries.pop(href, None)
+            if not entries:
+                cache.pop(key, None)
+            return False
+        self._remember_destination(group, preview, payload, href)
+        return True
 
     def _remember_destination(
-        self, group: GroupRef, copied: str, payload: dict[str, Any], href: str
+        self,
+        group: GroupRef,
+        preview: dict[str, Any],
+        payload: dict[str, Any],
+        href: str,
     ) -> None:
         cache = self.__dict__.setdefault("_verified_destinations", OrderedDict())
-        key = (group.key, copied)
+        card = _card_key(preview)
         fingerprint = _destination_fingerprint(payload)
-        if fingerprint is None:
-            cache.pop(key, None)
+        if card is None or fingerprint is None:
             return
-        cache[key] = (fingerprint, href, time.monotonic())
+        key = (group.key, *card)
+        cache.setdefault(key, {})[href] = (
+            fingerprint,
+            _digest(_publication_label(payload)),
+            _relative_publication_window(payload),
+            time.monotonic(),
+        )
         cache.move_to_end(key)
         while len(cache) > CROSS_CHECK_DESTINATION_LIMIT:
             cache.popitem(last=False)
@@ -1584,7 +1666,8 @@ class MobilePostSource(BrowserSession):
     ) -> ScanResult:
         accumulated: list[Post] = []
         progress = [0]
-        reuse = [0]
+        # [cards recognised from earlier checks, destination pages opened]
+        reuse = [0, 0]
         token = _SCAN_DEADLINE.set(time.monotonic() + MAX_SCAN_SECONDS)
         try:
             return self._scan_mobile_views(
@@ -1613,7 +1696,11 @@ class MobilePostSource(BrowserSession):
             )
         finally:
             _SCAN_DEADLINE.reset(token)
-            LOGGER.info("Mobile destination reuse", cross_check_count=reuse[0])
+            LOGGER.info(
+                "Mobile destination reuse",
+                cross_check_count=reuse[0],
+                destination_load_count=reuse[1],
+            )
 
     def _scan_mobile_views(
         self,
@@ -1640,7 +1727,24 @@ class MobilePostSource(BrowserSession):
             if boundary_post_id
             else policy.sample_count
         )
-        for scan_index in range(policy.max_scrolls + 1):
+        scan_index = 0
+        extra_scrolls = 0
+
+        def expand(menu: ElementHandle, payload: dict[str, Any]) -> dict[str, Any]:
+            return expand_post_preview(
+                page,
+                menu,
+                payload,
+                timeout_seconds=min(
+                    MAX_EXPANSION_SECONDS,
+                    policy.navigation_timeout_seconds,
+                    _remaining_seconds(
+                        started + MAX_SCAN_SECONDS, "expand_primary_preview"
+                    ),
+                ),
+            )
+
+        while True:
             page.bring_to_front()
             wait_for_mobile_page(
                 page, timeout_seconds=policy.navigation_timeout_seconds
@@ -1648,8 +1752,10 @@ class MobilePostSource(BrowserSession):
             if _group_key(page.url) not in aliases:
                 raise AccessDeniedError("The mobile scan left the verified group.")
             before = len(accumulated)
+            loads_before = reuse[1]
             with mobile_records(page) as records:
                 scroll_signature = [(p.get("cardToken"), p["text"]) for _, p in records]
+                card_counts = Counter(_card_key(p) for _, p in records)
                 for menu, payload in records:
                     signature = (
                         payload["cardToken"],
@@ -1672,75 +1778,99 @@ class MobilePostSource(BrowserSession):
                             else "scan_budget",
                         )
                     preview_signature = signature
-                    # Bind the link to the original menu before expansion can
-                    # refresh Bloks action IDs or recycle a menu action. Full
-                    # destination equality still verifies this original link.
-                    copied = copy_post_link(
-                        page,
-                        menu,
-                        timeout_seconds=min(
-                            COPY_TIMEOUT_SECONDS, policy.navigation_timeout_seconds
-                        ),
+                    preview = payload
+                    # Identical cards in one pass are distinct posts; never
+                    # guess which of them an earlier check verified.
+                    known = (
+                        self._known_destination(group, payload)
+                        if card_counts[_card_key(payload)] == 1
+                        else None
                     )
-                    if payload.get("partial"):
-                        payload = expand_post_preview(
+                    if known is not None:
+                        # An earlier check copied this card's link and proved
+                        # its destination. Recognise the card by author, body
+                        # and publication time instead of opening it again;
+                        # the complete body must still match, and the group
+                        # and alias checks below still run.
+                        if payload.get("partial"):
+                            payload = expand(menu, payload)
+                        if not self._confirm_known_destination(
+                            group, preview, payload, known
+                        ):
+                            # Expansion may have refreshed this menu. Forget
+                            # the card and let the next check verify it afresh.
+                            return self._scan_result(
+                                accumulated,
+                                scrolls,
+                                True,
+                                boundary_post_id,
+                                stop_reason="known_post_changed",
+                            )
+                        href = known
+                        reuse[0] += 1
+                        LOGGER.debug("Verified post recognised across checks")
+                    else:
+                        # Bind the link to the original menu before expansion
+                        # can refresh Bloks action IDs or recycle a menu action.
+                        # Full destination equality still verifies this link.
+                        copied = copy_post_link(
                             page,
                             menu,
-                            payload,
                             timeout_seconds=min(
-                                MAX_EXPANSION_SECONDS,
-                                policy.navigation_timeout_seconds,
-                                _remaining_seconds(
-                                    started + MAX_SCAN_SECONDS, "expand_primary_preview"
-                                ),
+                                COPY_TIMEOUT_SECONDS, policy.navigation_timeout_seconds
                             ),
                         )
-                        signature = (
-                            payload["cardToken"],
-                            payload["actionToken"],
-                            *_post_signature(payload),
-                        )
-                    cached = verified_links.get(copied)
-                    if cached is not None and all(
-                        _primary_post_comparisons(payload, cached[0]).values()
-                    ):
-                        # Re-rendered cards have new action/DOM tokens. Reuse a
-                        # result only after freshly copying the SAME link and
-                        # matching the complete source again. Never deduplicate
-                        # by text/author or a temporary action ID alone.
-                        href = cached[1]
-                        LOGGER.debug("Verified copied link reused within scan")
-                    elif (
-                        reused := self._reusable_destination(group, copied, payload)
-                    ) is not None:
-                        # The link was copied again just now and the complete
-                        # card matches the one verified by an earlier check.
-                        # The canonical group and alias checks below still run.
-                        href = reused
-                        verified_links[copied] = (payload.copy(), href)
-                        reuse[0] += 1
-                        LOGGER.debug("Verified copied link reused across checks")
-                    else:
-                        # Close destinations promptly: at most feed + one post.
-                        with _post_target(
-                            context,
-                            on_error=lambda target, error: capture_failure_screenshots(
-                                self.settings.profile_dir,
-                                error,
-                                {"post": target, "feed": page},
-                            ),
-                        ) as target:
-                            href = resolve_post_link(
-                                target,
-                                copied,
-                                payload,
-                                aliases,
-                                timeout_seconds=min(
-                                    MAX_LINK_SECONDS, policy.navigation_timeout_seconds
+                        if payload.get("partial"):
+                            payload = expand(menu, payload)
+                        cached = verified_links.get(copied)
+                        if cached is not None and all(
+                            _primary_post_comparisons(payload, cached[0]).values()
+                        ):
+                            # Re-rendered cards have new action/DOM tokens.
+                            # Reuse a result only after freshly copying the
+                            # SAME link and matching the complete source again.
+                            href = cached[1]
+                            LOGGER.debug("Verified copied link reused within scan")
+                        else:
+                            if reuse[1] >= MAX_DESTINATION_LOADS_PER_SCAN:
+                                # Page a backlog: later checks recognise these
+                                # posts and continue from here.
+                                return self._scan_result(
+                                    accumulated,
+                                    scrolls,
+                                    True,
+                                    boundary_post_id,
+                                    stop_reason="verification_limit",
+                                )
+                            reuse[1] += 1
+                            # Close destinations promptly: at most feed + one post.
+                            with _post_target(
+                                context,
+                                on_error=lambda target, error: (
+                                    capture_failure_screenshots(
+                                        self.settings.profile_dir,
+                                        error,
+                                        {"post": target, "feed": page},
+                                    )
                                 ),
-                            )
-                        verified_links[copied] = (payload.copy(), href)
-                        self._remember_destination(group, copied, payload, href)
+                            ) as target:
+                                href = resolve_post_link(
+                                    target,
+                                    copied,
+                                    payload,
+                                    aliases,
+                                    timeout_seconds=min(
+                                        MAX_LINK_SECONDS,
+                                        policy.navigation_timeout_seconds,
+                                    ),
+                                )
+                            verified_links[copied] = (payload.copy(), href)
+                            self._remember_destination(group, preview, payload, href)
+                    signature = (
+                        payload["cardToken"],
+                        payload["actionToken"],
+                        *_post_signature(payload),
+                    )
                     posts = extract_posts(
                         [{**payload, "href": href}],
                         group,
@@ -1778,7 +1908,18 @@ class MobilePostSource(BrowserSession):
                     boundary_post_id,
                     stop_reason="marker_overlap_complete",
                 )
-            if stagnant >= policy.stagnant_scrolls or scan_index == policy.max_scrolls:
+            if (
+                len(accumulated) > before
+                and reuse[1] == loads_before
+                and extra_scrolls < KNOWN_POST_EXTRA_SCROLLS
+            ):
+                # Scrolling past posts an earlier check verified opens no
+                # destination, so it does not use up the scroll allowance.
+                extra_scrolls += 1
+            if (
+                stagnant >= policy.stagnant_scrolls
+                or scan_index >= policy.max_scrolls + extra_scrolls
+            ):
                 stop_reason = (
                     "stagnant_feed"
                     if stagnant >= policy.stagnant_scrolls
@@ -1790,6 +1931,7 @@ class MobilePostSource(BrowserSession):
                 "() => window.scrollBy(0, Math.max(window.innerHeight * 0.8, 600))"
             )
             scrolls += 1
+            scan_index += 1
             progress[0] = scrolls
             self._wait_for_scroll_progress(page, policy, scroll_signature)
         return self._scan_result(

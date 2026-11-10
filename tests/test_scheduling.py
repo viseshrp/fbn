@@ -518,7 +518,7 @@ def test_render_retry_requires_strictly_more_than_scan_headroom_and_delay(
 ):
     clock = FakeClock()
     state = FakeState()
-    remaining = 360 + 5 + spare_seconds
+    remaining = 450 + 5 + spare_seconds
     service = FakeService(
         state,
         clock,

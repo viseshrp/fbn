@@ -575,8 +575,10 @@ the old marker in place so later scans can finish catching up.
   publication time, group identity, and a permanent canonical post ID.
 - **Bounded catch-up scanning:** Later checks scroll toward the saved
   notification marker and read at least one additional pass after finding it,
-  bounded by `--max-scrolls`, the catch-up sample limit, and a shared 90-second
-  scan budget.
+  bounded by `--max-scrolls`, the catch-up sample limit, and a shared 180-second
+  scan budget. A check opens at most ten post links. A long backlog is read in
+  pages: later checks recognise the posts they already verified by author,
+  text, and time, and continue with the next ten.
 
 ### Durable state and schema migrations
 

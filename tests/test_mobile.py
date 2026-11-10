@@ -93,7 +93,7 @@ def test_loading_shell_requires_all_content_free_counters_to_be_zero(field, valu
         ("19 hours ago", "21 hours ago", 2000, False),
         ("19 hours ago", "18 hours ago", 2000, False),
         ("19 hours ago", "20 hours ago", -1, False),
-        ("19 hours ago", "20 hours ago", 150001, False),
+        ("19 hours ago", "20 hours ago", 240001, False),
         ("19h", "19 hours ago", 0, True),
         ("26 Sep", "27 Sep", 2000, False),
         ("yesterday at 10:00", "today at 10:00", 2000, False),

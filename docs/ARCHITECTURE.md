@@ -234,9 +234,9 @@ itself or resets an action deadline.
 
 The normal next slot is selected and persisted before acquisition. A render
 retry cannot move that slot, including after recovery or exhaustion. Admission
-and post-wakeup checks reserve the shared 90-second scan budget, four configured
+and post-wakeup checks reserve the shared 180-second scan budget, four configured
 navigation/render/sort allowances, 120 seconds for browser startup/cleanup, and
-a 30-second guard. At the default 30-second navigation timeout this is six
+a 30-second guard. At the default 30-second navigation timeout this is seven and a half
 minutes of headroom, plus the retry delay. A late wakeup or changed shared
 schedule cancels the retry. When the budget is exhausted, monitoring waits for
 the normal slot rather than increasing it to hours or days. Only one logical
@@ -295,19 +295,35 @@ It preserves the original archive, never selects pending events, and leaves
 the gap open if no such receipt exists. Bounded scans retain the recovered
 marker; recovery does not establish the identity of archived posts or their
 historical coverage. No active acquisition or observation path generates
-temporary IDs or matches posts by their text. Archived unlinked history cannot be reliably
+temporary IDs, and none matches posts by their text except to recognise a card
+this process already verified (below). Archived unlinked history cannot be reliably
 matched to a later observation without additional evidence.
 
 A bounded scan keeps its marker, so the next scheduled check rereads the same
-newest cards. To let a backlog catch-up reach deeper within the unchanged scan
-budget, scroll limit and memory bounds, the long-running monitor may reuse a
-destination verified by an earlier check in the same process. Reuse requires
-the link to be copied again in the current check and the complete card to match
-exactly, including its publication label; relative ages are never reconciled
-across checks. Partial and empty cards are ineligible. The in-memory cache keys
-on the group and copied link, holds at most 128 entries for 24 hours, and stores
-only digests of the compared fields. Canonical group and alias validation still
-runs. Each scan logs only the count of reused destinations.
+newest cards. Copying and opening each of them again used the whole scan before
+any older card was reached, so a backlog deeper than one scan never closed. The
+long-running monitor therefore recognises a feed card whose link and
+destination an earlier check in the same process already verified, and does not
+copy or open it again. This is the one place a post is matched by its content,
+and only against a post this process has itself verified:
+
+- the untouched card must have the same author and the same body (or, without
+  a body, the same media) as when it was verified, and the same publication
+  time: an identical label, or overlapping ranges for relative ages such as
+  "2h" and later "3h";
+- a preview is still expanded, and the complete body must equal the verified
+  one; otherwise the entry is dropped, the scan ends as bounded, and the next
+  check verifies the card through its link again;
+- identical cards in one pass, or two verified posts that share author, body
+  and time, are never recognised and always use their copied links;
+- canonical group and alias validation still runs on the remembered link.
+
+The in-memory cache holds at most 128 cards, drops a post not seen for 24
+hours, and stores only digests of the compared fields. A scan opens at most
+ten destinations and then ends as bounded, so a backlog advances in pages: each
+check recognises the cards already verified and opens the next ten. Passes that
+only recognise cards do not consume `--max-scrolls`, up to 40 further passes.
+Each scan logs only the counts of recognised cards and opened destinations.
 
 ### `ScanResult`
 

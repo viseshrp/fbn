@@ -16,6 +16,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Start checking the mobile feed after its response is committed, so a delayed
   document load cannot bypass the existing loading-screen retry. Record group
   navigation as a separate failure phase.
+- Read a backlog longer than one scan in pages. A check opens at most ten post
+  links; later checks recognise the cards they already verified by author,
+  complete text, and publication time without copying or opening them again,
+  and scroll past them without using the scroll allowance. The shared scan
+  budget is now 180 seconds.
 - Let a stuck backlog catch-up advance past already verified posts. A later
   check reuses a destination verified earlier in the same monitor process only
   for a freshly copied identical link and an exactly matching complete card,

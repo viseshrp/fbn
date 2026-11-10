@@ -4389,18 +4389,232 @@ def test_cross_check_destination_cache_is_bounded_and_expires(monkeypatch):
     monkeypatch.setattr(mobile, "CROSS_CHECK_DESTINATION_LIMIT", 2)
     source = MobilePostSource(BrowserSettings(profile_dir=Path("unused")))
     group = parse_group_ref("contract-group")
-    card = {"author": "A", "text": "Body", "mediaCount": 0, "timestampLabel": "5d"}
-    for index in range(3):
-        source._remember_destination(group, f"link-{index}", card, f"href-{index}")
-    assert source._reusable_destination(group, "link-0", card) is None
-    assert source._reusable_destination(group, "link-2", card) == "href-2"
-    partial = {**card, "partial": True}
-    assert source._reusable_destination(group, "link-2", partial) is None
-    source._remember_destination(group, "link-2", partial, "href-2")
-    assert source._reusable_destination(group, "link-2", card) is None
+    cards = [
+        {"author": "A", "text": f"Body {index}", "mediaCount": 0, "timestampLabel": "x"}
+        for index in range(3)
+    ]
+    for index, card in enumerate(cards):
+        source._remember_destination(group, card, card, f"href-{index}")
+    assert source._known_destination(group, cards[0]) is None
+    assert source._known_destination(group, cards[2]) == "href-2"
+    assert source._known_destination(parse_group_ref("other"), cards[2]) is None
+    empty = {**cards[2], "text": ""}
+    source._remember_destination(group, empty, empty, "href-empty")
+    assert source._known_destination(group, empty) is None
+    cached = repr(source.__dict__["_verified_destinations"])
+    assert "Body" not in cached and "'A'" not in cached
     clock[0] += mobile.CROSS_CHECK_DESTINATION_TTL_SECONDS + 1
-    assert source._reusable_destination(group, "link-1", card) is None
+    assert source._known_destination(group, cards[1]) is None
+    assert source._known_destination(group, cards[2]) is None
     assert not source.__dict__["_verified_destinations"]
+
+
+def test_known_card_needs_same_author_body_and_overlapping_publication_time():
+    source = MobilePostSource(BrowserSettings(profile_dir=Path("unused")))
+    group = parse_group_ref("contract-group")
+    hour, day = 3_600_000, 86_400_000
+    start = 1_800_000_000_000
+
+    def card(label, observed, **changes):
+        return {
+            "author": "A",
+            "text": "Body",
+            "mediaCount": 0,
+            "timestampLabel": label,
+            "timestampObservedAt": observed,
+            **changes,
+        }
+
+    first = card("2h", start)
+    source._remember_destination(group, first, first, "href-1")
+    # The same post an hour later, and re-recognised from that later sighting.
+    later = card("3h", start + hour)
+    assert source._known_destination(group, later) == "href-1"
+    assert source._confirm_known_destination(group, later, later, "href-1")
+    assert source._known_destination(group, card("1d", start + 22 * hour)) == "href-1"
+    # A different post: other author, other body, or a later publication time.
+    assert (
+        source._known_destination(group, card("3h", start + hour, author="B")) is None
+    )
+    assert (
+        source._known_destination(group, card("3h", start + hour, text="New")) is None
+    )
+    assert source._known_destination(group, card("2h", start + 3 * hour)) is None
+    assert source._known_destination(group, card("just now", start + hour)) is None
+    # Absolute and relative labels are never reconciled with each other.
+    assert (
+        source._known_destination(group, card("October 11 at 10:00 AM", start)) is None
+    )
+    assert (
+        source._known_destination(group, {**later, "timestampObservedAt": None}) is None
+    )
+
+    # Two verified posts with the same author, body and time are never guessed.
+    source._remember_destination(group, later, later, "href-2")
+    assert source._known_destination(group, later) is None
+    old = card("5d", start)
+    source._remember_destination(group, old, old, "href-old")
+    assert source._known_destination(group, card("5d", start + day)) is None
+    assert source._known_destination(group, card("6d", start + day)) == "href-old"
+
+    # A preview is only a candidate; the complete body decides.
+    preview = card("2h", start, text="Start of", partial=True)
+    full = card("2h", start, text="Start of the first body")
+    source._remember_destination(group, preview, full, "href-long")
+    assert source._known_destination(group, preview) == "href-long"
+    other = card("2h", start, text="Start of another body")
+    assert not source._confirm_known_destination(group, preview, other, "href-long")
+    assert source._known_destination(group, preview) is None
+
+
+def _paged_source(tmp_path, context, stories, visited, *, reveal=None):
+    def serve(route):
+        url = route.request.url
+        target = "/share/" in url
+        key = url.rstrip("/").split("/")[-1]
+        if target:
+            visited.append(key)
+        html = mobile_fixture(
+            [next(p for p in stories if p[0] == key)] if target else list(stories)
+        )
+        if target:
+            html += (
+                "<script>history.replaceState(null,'','/groups/"
+                f"contract-group/posts/{key}/')</script>"
+            )
+        elif reveal:
+            # Synthetic virtual list: each scroll mounts the next cards.
+            html += (
+                "<script>{const held=[...document.querySelectorAll('[data-story]')]"
+                f".slice({reveal});const list=held[0].parentNode;"
+                "held.forEach(card=>card.remove());window.scrollBy=()=>"
+                f"held.splice(0,{reveal}).forEach(card=>list.appendChild(card));}}"
+                "</script>"
+            )
+        route.fulfill(status=200, content_type="text/html", body=html)
+
+    context.route("**/*", serve)
+    source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+    @contextmanager
+    def existing_context(**kwargs):
+        yield context
+
+    source._context = existing_context
+    return source
+
+
+def test_backlog_is_read_in_pages_of_bounded_destination_loads(tmp_path, monkeypatch):
+    """Each check opens a bounded number of posts and continues where it stopped."""
+
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "MAX_DESTINATION_LOADS_PER_SCAN", 3)
+    stories = [(str(n), "Author", f"Body {n}") for n in range(307, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=2, settle_seconds=0)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, visited)
+        first = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert first.bounded
+        assert [p.post_id for p in first.posts] == ["307", "306", "305"]
+        second = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert second.bounded
+        assert [p.post_id for p in second.posts] == [
+            str(n) for n in range(307, 301, -1)
+        ]
+        third = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not third.bounded
+        assert [p.post_id for p in third.posts] == [str(n) for n in range(307, 300, -1)]
+        # Every destination was opened exactly once across the three checks.
+        assert visited == [str(n) for n in range(307, 300, -1)]
+        # A new post is still opened, and the page of known posts costs nothing.
+        stories.insert(0, ("308", "Author", "Body 308"))
+        visited.clear()
+        fourth = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not fourth.bounded
+        assert fourth.posts[0].post_id == "308"
+        assert visited == ["308"]
+
+
+def test_scrolling_past_known_posts_does_not_use_the_scroll_allowance(tmp_path):
+    stories = [(str(n), "Author", f"Body {n}") for n in range(308, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=1, settle_seconds=0)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, visited, reveal=2)
+        first = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert first.bounded
+        assert visited == ["308", "307", "306", "305"]
+        second = source.fetch_recent(group, policy, boundary_post_id="301")
+        # The marker was reached, but its overlap pass has not been read yet.
+        assert second.bounded
+        assert visited == [str(n) for n in range(308, 300, -1)]
+        third = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not third.bounded
+        assert [p.post_id for p in third.posts] == [str(n) for n in range(308, 300, -1)]
+        assert visited == [str(n) for n in range(308, 300, -1)]
+
+
+def test_identical_cards_in_one_pass_are_never_recognised_by_content(tmp_path):
+    stories = [("302", "Author", "Same body"), ("301", "Author", "Same body")]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=2, settle_seconds=0)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, visited)
+        for _ in range(2):
+            result = source.fetch_recent(group, policy, boundary_post_id="301")
+            assert [p.post_id for p in result.posts] == ["302", "301"]
+        assert visited == ["302", "301", "302", "301"]
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_known_preview_is_expanded_and_must_match_the_verified_body(tmp_path, edited):
+    full = "Synthetic preview. " + "Complete synthetic body. " * 8
+    state = {"full": full}
+    visited = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            target = "/share/" in route.request.url
+            if target:
+                visited.append("301")
+                html = mobile_fixture([("301", "Synthetic Author", state["full"])]) + (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            else:
+                html = mobile_preview_fixture("Synthetic preview.", state["full"])
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        group = parse_group_ref("contract-group")
+        policy = ScanPolicy(max_scrolls=1, settle_seconds=0)
+        first = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not first.bounded and visited == ["301"]
+        if edited:
+            state["full"] = full + "Edited."
+        second = source.fetch_recent(group, policy, boundary_post_id="301")
+        if not edited:
+            assert not second.bounded and visited == ["301"]
+            assert second.posts[0].text == first.posts[0].text == full.strip()
+            return
+        # The preview matched but the complete body did not: nothing is saved
+        # from memory, and the next check verifies the card through its link.
+        assert second.bounded and not second.posts and visited == ["301"]
+        third = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not third.bounded and visited == ["301", "301"]
+        assert third.posts[0].text == state["full"].strip()
 
 
 def test_archived_marker_mobile_catchup_delivers_and_does_not_repeat(tmp_path):
