@@ -475,6 +475,37 @@ BODY_COMPONENTS_SCRIPT = r"""
           .includes(joined)) previewBoundary = {prefix, suffix};
       }
     }
+    // Diagnostics for an unsupported control carry fixed interface words and
+    // counts only. Every other word becomes a placeholder; nothing is clicked.
+    const controlWords = new Set(['more', 'photo', 'photos', 'image', 'images',
+      'picture', 'pictures', 'video', 'videos', 'see', 'view', 'open', 'show',
+      'all', 'play', 'album', 'gallery', 'item', 'items', 'link', 'map',
+      'file', 'files', 'poll', 'event', 'reel', 'reels', 'other', 'others']);
+    const controlShape = value => (clean(value)
+      .match(/[\p{L}\p{M}]+|\d+|\p{Co}|\S/gu) || []).slice(0, 8).map(token =>
+      /^\d+$/.test(token) ? '9' : /^\p{Co}$/u.test(token) ? '<icon>'
+        : controlWords.has(token.toLowerCase()) ? token.toLowerCase()
+        : /^[\p{L}\p{M}]+$/u.test(token) ? 'w'
+        : /^[+,.:;\u00b7\u2022|()\/\u2013\u2014-]$/.test(token) ? token : '?')
+      .join(' ');
+    const unknownShapes = [];
+    for (const [node, evidence] of claims) {
+      if (evidence.role !== 'unknown' || node.el.nodeType !== Node.ELEMENT_NODE
+        || !(node.flags.button || node.flags.control || node.flags.link
+          || node.flags.menu || node.flags.action)) continue;
+      const inner = descendants(node);
+      unknownShapes.push([
+        ['button', 'control', 'link', 'menu', 'action']
+          .filter(flag => node.flags[flag]).join('+'),
+        'label=' + (node.el.hasAttribute('aria-label')
+          ? controlShape(node.el.getAttribute('aria-label')) : '<none>'),
+        'text=' + controlShape(text(node)),
+        'images=' + inner.filter(child => child.flags.image).length,
+        'buttons=' + inner.filter(child => child.flags.button).length,
+        'wrapped=' + (ancestors(node.parent, owner => owner.flags.button)
+          ? 'yes' : 'no'),
+      ].join(' / '));
+    }
     const regions = [], blocks = [];
     for (const [node, evidence] of claims) {
       if (evidence.role === 'expander') continue;
@@ -487,6 +518,7 @@ BODY_COMPONENTS_SCRIPT = r"""
       mediaKeys: Array.from(mediaKeys).sort(), partial: expanders.length > 0,
       bodyControlCount, blocks, regions, unsupported: issues.size > 0,
       recognizers: outcomes, issues: Array.from(issues).sort(),
+      unknownShapes: unknownShapes.slice(0, 6),
       normalization: {version: 1, nodes: nodes.length, collapsed: tree.collapsed}};
   };
 """

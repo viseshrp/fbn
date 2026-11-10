@@ -31,6 +31,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   label. The detail is dropped only when the date wrapper also renders it,
   whole or cut short by an ellipsis, as its final text; an unrendered suffix
   still leaves the date unread.
+- Stop a scan above one deeper card whose body has an unclassified control
+  instead of failing the check and stopping the monitor. The posts verified
+  above it are kept, the card is never skipped or partly read, and the marker
+  stays in place; the same card in the first view still fails and alerts. The
+  layout log adds a placeholder shape of each unknown control.
 - Let a stuck backlog catch-up advance past already verified posts. A later
   check reuses a destination verified earlier in the same monitor process only
   for a freshly copied identical link and an exactly matching complete card,

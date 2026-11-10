@@ -40,6 +40,7 @@ from .exceptions import (
     RenderTimeoutError,
     RetryableTimestampLayoutError,
     TransientNavigationError,
+    UnsupportedCardLayoutError,
 )
 from .extractor import (
     FACEBOOK_HOSTS,
@@ -400,6 +401,9 @@ def _log_layout_snapshot(
         timestamp_absent_label_shapes=" || ".join(
             str(shape)[:200] for shape in result.get("timestampAbsentShapes", [])[:12]
         ),
+        body_unknown_control_shapes=" || ".join(
+            str(shape)[:200] for shape in result.get("bodyUnknownShapes", [])[:12]
+        ),
         **terminal_signals,
         **structure,
     )
@@ -523,6 +527,15 @@ def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(set(missing)))
 
 
+def _is_unsupported_card_body(missing: tuple[str, ...]) -> bool:
+    """Every missing component is a body issue inside a recognized card."""
+
+    return "supported_primary_body_controls" in missing and all(
+        name == "supported_primary_body_controls" or name.startswith("body_")
+        for name in missing
+    )
+
+
 def _inspect_failed_render(
     page: Page,
     *,
@@ -636,8 +649,15 @@ def wait_for_mobile_page(
                 # and this final snapshot. Abort rather than accept it using an
                 # earlier state or report a layout failure with nothing missing.
                 _raise_render_timeout("page_render", loading_shell=False)
+            missing = _missing_mobile_components(result)
             raise _layout_failure(
-                *_missing_mobile_components(result), phase="page_render"
+                *missing,
+                phase="page_render",
+                error_type=(
+                    UnsupportedCardLayoutError
+                    if not permalink and _is_unsupported_card_body(missing)
+                    else LayoutChangedError
+                ),
             )
         page.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
 
@@ -1772,6 +1792,24 @@ class MobilePostSource(BrowserSession):
                     True,
                     boundary_post_id,
                     stop_reason="unreadable_card",
+                )
+            except UnsupportedCardLayoutError:
+                if scan_index == 0 or not accumulated:
+                    raise
+                # One card further down has a body this version cannot
+                # classify. It is never skipped: the scan ends above it with
+                # the verified posts kept and the marker left where it is.
+                LOGGER.warning(
+                    "Mobile scan stopped above an unsupported card",
+                    post_count=len(accumulated),
+                    scroll_count=scrolls,
+                )
+                return self._scan_result(
+                    accumulated,
+                    scrolls,
+                    True,
+                    boundary_post_id,
+                    stop_reason="unsupported_card",
                 )
             if _group_key(page.url) not in aliases:
                 raise AccessDeniedError("The mobile scan left the verified group.")

@@ -339,6 +339,15 @@ the audience. The date is read from such a label only when the same wrapper
 renders that detail, whole or truncated with an ellipsis, as its final text.
 The destination page still verifies the publication time.
 
+A recognized card whose body holds a control or action with no known owner is
+never skipped or partly read. In the first view it fails the scan as a layout
+change. In a later view, when every missing component is such a body issue,
+the scan ends as bounded with the stop reason `unsupported_card` under the
+same rules as `unreadable_card`. The layout log then describes each unknown
+control by its kind, image and button counts, and the shape of its label and
+text: a short list of interface words, with digits and every other word
+replaced by placeholders.
+
 ### `ScanResult`
 
 - ordered posts

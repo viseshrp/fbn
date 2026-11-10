@@ -27,6 +27,7 @@ from fbn.exceptions import (
     RenderTimeoutError,
     RetryableTimestampLayoutError,
     TransientNavigationError,
+    UnsupportedCardLayoutError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
 from fbn.mobile import (
@@ -4510,7 +4511,16 @@ def test_known_card_needs_same_author_body_and_overlapping_publication_time():
     assert source._known_destination(group, preview) is None
 
 
-def _paged_source(tmp_path, context, stories, visited, *, reveal=None, unreadable=None):
+def _paged_source(
+    tmp_path,
+    context,
+    stories,
+    visited,
+    *,
+    reveal=None,
+    unreadable=None,
+    unsupported=None,
+):
     def serve(route):
         url = route.request.url
         target = "/share/" in url
@@ -4531,6 +4541,19 @@ def _paged_source(tmp_path, context, stories, visited, *, reveal=None, unreadabl
                     for n, part in enumerate(parts[:-1])
                 )
                 + parts[-1]
+            )
+        if unsupported is not None and not target:
+            # The card at this position has a body control with no known role.
+            body = (
+                '<div data-mcomponent="ServerTextArea">'
+                f"{stories[unsupported - 1][2]}</div>"
+            )
+            assert html.count(body) == 1
+            html = html.replace(
+                body,
+                body + '<div data-mcomponent="MContainer" role="button" '
+                'aria-label="+3 secret photos"><div data-mcomponent='
+                '"ServerTextArea">+3</div></div>',
             )
         if target:
             html += (
@@ -4639,6 +4662,56 @@ def test_unreadable_card_in_the_first_view_still_fails_the_scan(tmp_path):
     with _local_context(tmp_path) as context:
         source = _paged_source(tmp_path, context, stories, [], reveal=2, unreadable=1)
         with pytest.raises(RetryableTimestampLayoutError):
+            source.fetch_recent(group, policy, boundary_post_id="301")
+
+
+def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeypatch):
+    """A deeper card with an unclassified body stops the scan, not the monitor."""
+
+    import fbn.mobile as mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile.LOGGER,
+        "warning",
+        lambda message, **fields: logged.append((message, fields)),
+    )
+    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=1)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, visited, reveal=2, unsupported=3
+        )
+        for _ in range(2):
+            result = source.fetch_recent(group, policy, boundary_post_id="301")
+            # Nothing from the view holding the unsupported card is accepted.
+            assert result.bounded
+            assert [p.post_id for p in result.posts] == ["306", "305"]
+        assert visited == ["306", "305"]
+    assert [m for m, _ in logged].count(
+        "Mobile scan stopped above an unsupported card"
+    ) == 2
+    shapes = [
+        fields["body_unknown_control_shapes"]
+        for message, fields in logged
+        if message == "Mobile layout snapshot"
+    ]
+    # Only fixed interface words and counts describe the unknown control.
+    assert shapes and set(shapes) == {
+        "button / label=+ 9 w photos / text=+ 9 / images=0 / buttons=0 / wrapped=no"
+    }
+    assert "secret" not in str(logged) and "Body" not in str(logged)
+
+
+def test_unsupported_card_in_the_first_view_still_fails_the_scan(tmp_path):
+    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=1)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, [], reveal=2, unsupported=1)
+        with pytest.raises(UnsupportedCardLayoutError):
             source.fetch_recent(group, policy, boundary_post_id="301")
 
 

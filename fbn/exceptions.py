@@ -59,6 +59,10 @@ class RetryableTimestampLayoutError(LayoutChangedError):
     """An unsafe feed timestamp may recover during bounded in-check retries."""
 
 
+class UnsupportedCardLayoutError(LayoutChangedError):
+    """Only the body of an otherwise recognized card could not be classified."""
+
+
 class DeliveryError(FbnError):
     """A notification could not be accepted or delivered."""
 
