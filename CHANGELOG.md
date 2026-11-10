@@ -37,6 +37,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays in place; the same card in the first view still fails and alerts. The
   layout log adds a placeholder shape of each unknown control and of up to
   three labelled elements inside it.
+- Wait up to eight seconds after a scroll for the feed to show a card the
+  last pass did not, instead of one second for any change. A pass that only
+  recognises earlier-verified posts opens no link and could outrun the feed,
+  ending the scan as stagnant before the backlog was reached.
 - Let a stuck backlog catch-up advance past already verified posts. A later
   check reuses a destination verified earlier in the same monitor process only
   for a freshly copied identical link and an exactly matching complete card,

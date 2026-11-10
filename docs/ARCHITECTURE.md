@@ -410,9 +410,9 @@ exposed browser-debugging endpoints remain out of scope.
 7. Return a normalized `ScanResult`.
 8. Close the context in `finally` and release the lock.
 
-Playwright auto-waiting is used for page/locator state. Fixed sleeps are limited
-to a small, configurable post-scroll settle window; no artificial human-motion
-logic is used.
+Playwright auto-waiting is used for page/locator state. After a scroll the scan
+waits, for at most eight seconds, until the feed shows a card the previous pass
+did not; there is no fixed sleep and no artificial human-motion logic.
 
 ## Page-state model
 

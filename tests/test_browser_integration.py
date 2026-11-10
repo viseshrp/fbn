@@ -4518,6 +4518,7 @@ def _paged_source(
     visited,
     *,
     reveal=None,
+    reveal_delay_ms=0,
     unreadable=None,
     unsupported=None,
 ):
@@ -4566,9 +4567,15 @@ def _paged_source(
             html += (
                 "<script>{const held=[...document.querySelectorAll('[data-story]')]"
                 f".slice({reveal});const list=held[0].parentNode;"
-                "held.forEach(card=>card.remove());window.scrollBy=()=>"
-                f"held.splice(0,{reveal}).forEach(card=>list.appendChild(card));}}"
-                "</script>"
+                "held.forEach(card=>card.remove());const mount=()=>"
+                f"held.splice(0,{reveal}).forEach(card=>list.appendChild(card));"
+                "window.scrollBy=()=>"
+                + (
+                    f"setTimeout(mount,{reveal_delay_ms})"
+                    if reveal_delay_ms
+                    else "mount()"
+                )
+                + ";}</script>"
             )
         route.fulfill(status=200, content_type="text/html", body=html)
 
@@ -4705,6 +4712,29 @@ def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeyp
         "wrapped=no / inner=plain:none:play w video:"
     }
     assert "secret" not in str(logged) and "Body" not in str(logged)
+
+
+def test_recognised_posts_wait_for_a_feed_that_mounts_cards_late(tmp_path, monkeypatch):
+    """A pass that opens no link must not outrun the feed and call it stagnant."""
+
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "MAX_FEED_GROWTH_SECONDS", 2.0)
+    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    # Cards mount later than the settle window but well within the growth wait.
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0.05)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, visited, reveal=2, reveal_delay_ms=400
+        )
+        for _ in range(2):
+            result = source.fetch_recent(group, policy, boundary_post_id="301")
+            assert not result.bounded
+            assert [p.post_id for p in result.posts] == [s[0] for s in stories]
+    # The second check recognised every card and opened nothing.
+    assert visited == [s[0] for s in stories]
 
 
 def test_unsupported_card_in_the_first_view_still_fails_the_scan(tmp_path):

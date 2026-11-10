@@ -176,7 +176,9 @@ def test_scroll_settle_waits_for_dom_progress_not_a_fixed_sleep():
     )
     assert len(waits) == 1
     assert waits[0][1]["arg"] == [(1, "Body")]
-    assert 0 < waits[0][1]["timeout"] <= 1000
+    # The wait ends as soon as a card the last pass did not show is mounted.
+    assert "!known.has(" in waits[0][0]
+    assert 1000 < waits[0][1]["timeout"] <= mobile.MAX_FEED_GROWTH_SECONDS * 1000
 
 
 @pytest.mark.parametrize(

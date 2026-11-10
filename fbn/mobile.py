@@ -78,6 +78,8 @@ MAX_DESTINATION_LOADS_PER_SCAN = 10
 # Passes that only recognised earlier-verified cards do not consume the
 # configured scroll allowance, up to this many additional passes.
 KNOWN_POST_EXTRA_SCROLLS = 40
+# Longest wait after a scroll for the feed to mount a card not yet shown.
+MAX_FEED_GROWTH_SECONDS = 8.0
 
 _SCAN_DEADLINE: ContextVar[float | None] = ContextVar("fbn_scan_deadline", default=None)
 
@@ -2006,20 +2008,24 @@ class MobilePostSource(BrowserSession):
     ) -> None:
         if policy.settle_seconds <= 0:
             return
-        # An idle timeout is not a completed layout. The next pass still checks
-        # every visible primary card under the remaining navigation/scan budget.
+        # A pass that opens no post link finishes faster than the feed mounts
+        # its next cards, so wait for a card the last pass did not show rather
+        # than for any change. An idle timeout is not a completed layout: the
+        # next pass still checks every visible primary card under the
+        # remaining navigation/scan budget.
+        waited = max(policy.settle_seconds, MAX_FEED_GROWTH_SECONDS)
         try:
             page.wait_for_function(
-                f"previous => JSON.stringify(({MOBILE_SCAN_SCRIPT})(true).records"
-                ".map(r => [r.payload.cardToken, r.payload.text])) !== "
-                "JSON.stringify(previous)",
+                "previous => { const known = new Set(previous.map(card => "
+                "JSON.stringify(card))); return "
+                f"({MOBILE_SCAN_SCRIPT})(true).records.some(r => !known.has("
+                "JSON.stringify([r.payload.cardToken, r.payload.text]))); }",
                 arg=previous,
-                timeout=_remaining_seconds(
-                    time.monotonic() + policy.settle_seconds, "scroll_progress"
-                )
+                timeout=_remaining_seconds(time.monotonic() + waited, "scroll_progress")
                 * 1_000,
             )
         except PlaywrightTimeoutError:
+            LOGGER.debug("Mobile feed showed no further card", waited_seconds=waited)
             _check_scan_budget()
 
     @staticmethod
