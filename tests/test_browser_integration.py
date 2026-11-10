@@ -4553,7 +4553,8 @@ def _paged_source(
                 body,
                 body + '<div data-mcomponent="MContainer" role="button" '
                 'aria-label="+3 secret photos"><div data-mcomponent='
-                '"ServerTextArea">+3</div></div>',
+                '"ServerTextArea">+3</div><div data-mcomponent="MContainer" '
+                'aria-label="Play secret video"></div></div>',
             )
         if target:
             html += (
@@ -4700,7 +4701,8 @@ def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeyp
     ]
     # Only fixed interface words and counts describe the unknown control.
     assert shapes and set(shapes) == {
-        "button / label=+ 9 w photos / text=+ 9 / images=0 / buttons=0 / wrapped=no"
+        "button / label=+ 9 w photos / text=+ 9 / images=0 / buttons=0 / "
+        "wrapped=no / inner=plain:none:play w video:"
     }
     assert "secret" not in str(logged) and "Body" not in str(logged)
 

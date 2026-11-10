@@ -35,7 +35,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of failing the check and stopping the monitor. The posts verified
   above it are kept, the card is never skipped or partly read, and the marker
   stays in place; the same card in the first view still fails and alerts. The
-  layout log adds a placeholder shape of each unknown control.
+  layout log adds a placeholder shape of each unknown control and of up to
+  three labelled elements inside it.
 - Let a stuck backlog catch-up advance past already verified posts. A later
   check reuses a destination verified earlier in the same monitor process only
   for a freshly copied identical link and an exactly matching complete card,

@@ -480,7 +480,11 @@ BODY_COMPONENTS_SCRIPT = r"""
     const controlWords = new Set(['more', 'photo', 'photos', 'image', 'images',
       'picture', 'pictures', 'video', 'videos', 'see', 'view', 'open', 'show',
       'all', 'play', 'album', 'gallery', 'item', 'items', 'link', 'map',
-      'file', 'files', 'poll', 'event', 'reel', 'reels', 'other', 'others']);
+      'file', 'files', 'poll', 'event', 'reel', 'reels', 'other', 'others',
+      'media', 'attachment', 'attachments', 'pause', 'mute', 'unmute', 'sound',
+      'gif', 'sticker', 'live', 'story', 'carousel', 'slide', 'next',
+      'previous', 'of', 'and', 'in', 'from', 'to', 'add', 'added', 'share',
+      'shared', 'profile', 'cover', 'tap', 'expand', 'fullscreen', 'download']);
     const controlShape = value => (clean(value)
       .match(/[\p{L}\p{M}]+|\d+|\p{Co}|\S/gu) || []).slice(0, 8).map(token =>
       /^\d+$/.test(token) ? '9' : /^\p{Co}$/u.test(token) ? '<icon>'
@@ -504,6 +508,15 @@ BODY_COMPONENTS_SCRIPT = r"""
         'buttons=' + inner.filter(child => child.flags.button).length,
         'wrapped=' + (ancestors(node.parent, owner => owner.flags.button)
           ? 'yes' : 'no'),
+        'inner=' + (inner.filter(child =>
+          child.el.nodeType === Node.ELEMENT_NODE
+          && child.el.hasAttribute('aria-label')).slice(0, 3).map(child => [
+          ['button', 'control', 'link', 'menu', 'action']
+            .filter(flag => child.flags[flag]).join('+') || 'plain',
+          attachmentControlKind(child.el) || 'none',
+          controlShape(child.el.getAttribute('aria-label')),
+          controlShape(text(child)),
+        ].join(':')).join(' ; ') || '<none>'),
       ].join(' / '));
     }
     const regions = [], blocks = [];

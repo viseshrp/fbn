@@ -402,7 +402,7 @@ def _log_layout_snapshot(
             str(shape)[:200] for shape in result.get("timestampAbsentShapes", [])[:12]
         ),
         body_unknown_control_shapes=" || ".join(
-            str(shape)[:200] for shape in result.get("bodyUnknownShapes", [])[:12]
+            str(shape)[:400] for shape in result.get("bodyUnknownShapes", [])[:12]
         ),
         **terminal_signals,
         **structure,
