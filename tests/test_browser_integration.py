@@ -1062,6 +1062,83 @@ def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path)
                     assert records[0][1]["mediaCount"] == 1
 
 
+_EVENT_DETAIL_SCRIPT = """lines => {
+  const card = document.querySelector('[data-action-id=synthetic-event]');
+  const button = card.querySelector('[aria-label=Interested]');
+  const line = words => {
+    const area = document.createElement('div');
+    area.setAttribute('data-mcomponent', 'ServerTextArea');
+    const inner = document.createElement('div');
+    for (const word of words) {
+      inner.append(Object.assign(document.createElement('span'), {textContent: word}));
+    }
+    area.append(inner); return area;
+  };
+  const container = role => {
+    const el = document.createElement('div');
+    el.setAttribute('data-mcomponent', 'MContainer');
+    el.setAttribute('data-type', 'container');
+    if (role) el.setAttribute('role', role);
+    return el;
+  };
+  // Attendee pictures sit between the detail lines, as an image group.
+  const faces = container('img'), row = container(), spacer = container();
+  const face = container('img');
+  spacer.append(Object.assign(document.createElement('div'), {}));
+  spacer.firstChild.setAttribute('data-mcomponent', 'TextArea');
+  face.append(card.querySelector('[data-mcomponent=ServerImageArea]').cloneNode(true));
+  row.append(spacer, face); faces.append(row);
+  lines.forEach((words, index) => {
+    button.before(line(words));
+    if (index === 0) button.before(faces);
+  });
+}"""
+
+
+def test_attachment_event_may_carry_two_detail_lines(tmp_path):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        html = mobile_controlled_attachment_fixture("event")
+        html = html.replace("Sun, Jan 17 at 4:00 PM", "SUN, 17 JAN AT 19:30 EST")
+        page.set_content(html)
+        page.evaluate(
+            _EVENT_DETAIL_SCRIPT,
+            [["Synthetic place", " \u00b7 Town"], ["3 interested", " \u00b7 1 going"]],
+        )
+        page.locator('[aria-label="Interested"]').evaluate(
+            "el => el.setAttribute('aria-label', 'Interested not selected')"
+        )
+        wait_for_mobile_page(page, timeout_seconds=0.1)
+        with mobile_records(page) as records:
+            # Event details never join the authored message.
+            assert records[0][1]["text"] == (
+                "Synthetic authored message. Full continuation."
+            )
+
+
+@pytest.mark.parametrize("fault", ["three_details", "date_not_first"])
+def test_attachment_event_detail_lines_stay_bounded(tmp_path, fault):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        context.route("**/*", lambda route: route.abort())
+        page.set_content(mobile_controlled_attachment_fixture("event"))
+        lines = [["Synthetic place"], ["3 interested"]]
+        if fault == "three_details":
+            lines.append(["Unclassified third line"])
+        page.evaluate(_EVENT_DETAIL_SCRIPT, lines)
+        if fault == "date_not_first":
+            page.evaluate(
+                """() => {
+                const card = document.querySelector('[data-action-id=synthetic-event]');
+                const areas = card.querySelectorAll('[data-mcomponent=ServerTextArea]');
+                areas[1].after(areas[0]);
+                }"""
+            )
+        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
+            wait_for_mobile_page(page, timeout_seconds=0.1)
+
+
 @pytest.mark.parametrize(
     "value",
     ["Today is fun 4", "Jan 99 at 4PM", "Today at 29:99", "Jan 17, 2027 at 4PM fun"],
@@ -4684,6 +4761,14 @@ def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeyp
         "warning",
         lambda message, **fields: logged.append((message, fields)),
     )
+    # One private structure capture per process, not one per check.
+    captures = []
+    monkeypatch.setattr(mobile, "_UNSUPPORTED_CARD_EVIDENCE", [])
+    monkeypatch.setattr(
+        mobile,
+        "capture_failure_screenshots",
+        lambda profile, error, pages: captures.append(sorted(pages)),
+    )
     stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
     visited = []
     group = parse_group_ref("contract-group")
@@ -4701,6 +4786,7 @@ def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeyp
     assert [m for m, _ in logged].count(
         "Mobile scan stopped above an unsupported card"
     ) == 2
+    assert captures == [["feed"]]
     shapes = [
         fields["body_unknown_control_shapes"]
         for message, fields in logged

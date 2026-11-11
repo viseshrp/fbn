@@ -261,8 +261,10 @@ BODY_COMPONENTS_SCRIPT = r"""
               && child.el.hasAttribute('role')
               && !['button','img'].includes(child.el.getAttribute('role'))))) continue;
         const parts = attachmentLeaves(node).filter(child => !contains(button, child));
-        if (parts.length !== 2 || parts.filter(child => eventDate(text(child)))
-          .length !== 1) continue;
+        // The date comes first and the title next; a preview may add up to
+        // two further detail lines (place, attendance) before its control.
+        if (parts.length < 2 || parts.length > 4 || !eventDate(text(parts[0]))
+          || parts.filter(child => eventDate(text(child))).length !== 1) continue;
         if (content.some(child => child.kind === 'literal' && text(child)
           && !ancestors(child.parent, owner => owner.flags.text))) continue;
         claim(node, 'attachment', name);

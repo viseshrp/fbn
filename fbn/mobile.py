@@ -81,6 +81,7 @@ KNOWN_POST_EXTRA_SCROLLS = 40
 # Longest wait after a scroll for the feed to mount a card not yet shown.
 MAX_FEED_GROWTH_SECONDS = 8.0
 
+_UNSUPPORTED_CARD_EVIDENCE: list[bool] = []
 _SCAN_DEADLINE: ContextVar[float | None] = ContextVar("fbn_scan_deadline", default=None)
 
 
@@ -1795,9 +1796,16 @@ class MobilePostSource(BrowserSession):
                     boundary_post_id,
                     stop_reason="unreadable_card",
                 )
-            except UnsupportedCardLayoutError:
+            except UnsupportedCardLayoutError as error:
                 if scan_index == 0 or not accumulated:
                     raise
+                if not _UNSUPPORTED_CARD_EVIDENCE:
+                    # Keep one private, content-free structure of the card per
+                    # process so its layout can be supported without a failure.
+                    _UNSUPPORTED_CARD_EVIDENCE.append(True)
+                    capture_failure_screenshots(
+                        self.settings.profile_dir, error, {"feed": page}
+                    )
                 # One card further down has a body this version cannot
                 # classify. It is never skipped: the scan ends above it with
                 # the verified posts kept and the marker left where it is.

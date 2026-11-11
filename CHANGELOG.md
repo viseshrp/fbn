@@ -37,6 +37,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays in place; the same card in the first view still fails and alerts. The
   layout log adds a placeholder shape of each unknown control and of up to
   three labelled elements inside it.
+- Read an event preview that shows up to two detail lines (such as a place
+  and attendance) between its title and response control. The date must still
+  come first, and a third unclassified line still rejects the card.
+- Save one private, content-free structure of a deeper unsupported card per
+  monitor process, so its layout can be supported without waiting for a
+  failure in the first view.
 - Wait up to eight seconds after a scroll for the feed to show a card the
   last pass did not, instead of one second for any change. A pass that only
   recognises earlier-verified posts opens no link and could outrun the feed,
