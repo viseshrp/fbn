@@ -82,6 +82,10 @@ KNOWN_POST_EXTRA_SCROLLS = 40
 MAX_FEED_GROWTH_SECONDS = 8.0
 
 _UNSUPPORTED_CARD_EVIDENCE: list[bool] = []
+# A body that no recognizer can classify is alerted by link only. Give a card
+# whose body is still being assembled this long to become readable first.
+UNREAD_BODY_SETTLE_SECONDS = 3.0
+UNREAD_BODY_NOTICE = "[Content not read. Open the link to see this post.]"
 _SCAN_DEADLINE: ContextVar[float | None] = ContextVar("fbn_scan_deadline", default=None)
 
 
@@ -530,15 +534,6 @@ def _missing_mobile_components(result: dict[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(set(missing)))
 
 
-def _is_unsupported_card_body(missing: tuple[str, ...]) -> bool:
-    """Every missing component is a body issue inside a recognized card."""
-
-    return "supported_primary_body_controls" in missing and all(
-        name == "supported_primary_body_controls" or name.startswith("body_")
-        for name in missing
-    )
-
-
 def _inspect_failed_render(
     page: Page,
     *,
@@ -625,6 +620,7 @@ def wait_for_mobile_page(
 ) -> PageState:
     script = MOBILE_PERMALINK_SCAN_SCRIPT if permalink else MOBILE_SCAN_SCRIPT
     deadline = time.monotonic() + timeout_seconds
+    settled = min(deadline, time.monotonic() + UNREAD_BODY_SETTLE_SECONDS)
     while True:
         _check_scan_budget()
         signals = read_page_signals(page, status=status, dom_scan_script=script)
@@ -641,7 +637,13 @@ def wait_for_mobile_page(
         with suppress(LayoutChangedError):
             state = classify_page(signals)
         result = page.evaluate(script, False)
-        if state is not None and not result.get("missing"):
+        if (
+            state is not None
+            and not result.get("missing")
+            # An unclassified body may only be half rendered. Accept it as
+            # unread after a short wait, never as a layout failure.
+            and (not result.get("unreadBodyCount") or time.monotonic() >= settled)
+        ):
             return state
         if time.monotonic() >= deadline:
             result = _inspect_failed_render(
@@ -652,15 +654,8 @@ def wait_for_mobile_page(
                 # and this final snapshot. Abort rather than accept it using an
                 # earlier state or report a layout failure with nothing missing.
                 _raise_render_timeout("page_render", loading_shell=False)
-            missing = _missing_mobile_components(result)
             raise _layout_failure(
-                *missing,
-                phase="page_render",
-                error_type=(
-                    UnsupportedCardLayoutError
-                    if not permalink and _is_unsupported_card_body(missing)
-                    else LayoutChangedError
-                ),
+                *_missing_mobile_components(result), phase="page_render"
             )
         page.wait_for_timeout(min(100, max(1, (deadline - time.monotonic()) * 1_000)))
 
@@ -1084,6 +1079,18 @@ def _same_publication(
 def _primary_post_comparisons(
     item: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, bool]:
+    if payload.get("bodyUnread"):
+        # The source body was never read, so there is no content to compare.
+        # The link was copied from this card's own menu and must still open a
+        # post of the verified group by the same author at the same time.
+        return {
+            "resolved_primary_author_matches_source": (
+                item["author"] == payload["author"]
+            ),
+            "resolved_primary_publication_matches_source": (
+                _publication_matches(item, payload)
+            ),
+        }
     return {
         "resolved_primary_author_matches_source": item["author"] == payload["author"],
         "resolved_primary_body_matches_source": item["text"] == payload["text"],
@@ -1124,8 +1131,10 @@ def _verify_primary_post(
         LOGGER.warning(
             "Post link verification failed",
             author_matches=comparisons["resolved_primary_author_matches_source"],
-            body_matches=comparisons["resolved_primary_body_matches_source"],
-            media_matches=comparisons["resolved_primary_media_matches_source"],
+            body_matches=comparisons.get("resolved_primary_body_matches_source"),
+            media_matches=comparisons.get("resolved_primary_media_matches_source"),
+            source_body_unread=payload.get("bodyUnread", False),
+            target_body_unread=item.get("bodyUnread", False),
             publication_matches=comparisons[
                 "resolved_primary_publication_matches_source"
             ],
@@ -1796,31 +1805,6 @@ class MobilePostSource(BrowserSession):
                     boundary_post_id,
                     stop_reason="unreadable_card",
                 )
-            except UnsupportedCardLayoutError as error:
-                if scan_index == 0 or not accumulated:
-                    raise
-                if not _UNSUPPORTED_CARD_EVIDENCE:
-                    # Keep one private, content-free structure of the card per
-                    # process so its layout can be supported without a failure.
-                    _UNSUPPORTED_CARD_EVIDENCE.append(True)
-                    capture_failure_screenshots(
-                        self.settings.profile_dir, error, {"feed": page}
-                    )
-                # One card further down has a body this version cannot
-                # classify. It is never skipped: the scan ends above it with
-                # the verified posts kept and the marker left where it is.
-                LOGGER.warning(
-                    "Mobile scan stopped above an unsupported card",
-                    post_count=len(accumulated),
-                    scroll_count=scrolls,
-                )
-                return self._scan_result(
-                    accumulated,
-                    scrolls,
-                    True,
-                    boundary_post_id,
-                    stop_reason="unsupported_card",
-                )
             if _group_key(page.url) not in aliases:
                 raise AccessDeniedError("The mobile scan left the verified group.")
             before = len(accumulated)
@@ -1851,6 +1835,8 @@ class MobilePostSource(BrowserSession):
                         )
                     preview_signature = signature
                     preview = payload
+                    if payload.get("bodyUnread"):
+                        self._note_unread_body(page, payload)
                     # Identical cards in one pass are distinct posts; never
                     # guess which of them an earlier check verified.
                     known = (
@@ -1955,6 +1941,11 @@ class MobilePostSource(BrowserSession):
                         raise _layout_failure("valid_canonical_mobile_post")
                     post = replace(
                         posts[0],
+                        text=(
+                            UNREAD_BODY_NOTICE
+                            if payload.get("bodyUnread")
+                            else posts[0].text
+                        ),
                         published_at=parse_facebook_timestamp(
                             _publication_label(payload),
                             observed_at,
@@ -2009,6 +2000,26 @@ class MobilePostSource(BrowserSession):
         return self._scan_result(
             accumulated, scrolls, True, boundary_post_id, stop_reason=stop_reason
         )
+
+    def _note_unread_body(self, page: Page, payload: dict[str, Any]) -> None:
+        """Record why a body was not read, without any of its content."""
+
+        LOGGER.warning(
+            "Mobile card body not read; alerting by link only",
+            unread_issues=",".join(sorted(payload.get("unreadIssues", []))),
+        )
+        if _UNSUPPORTED_CARD_EVIDENCE:
+            return
+        # Keep one private, content-free structure of the card per process so
+        # its layout can be supported later. The scan itself carries on.
+        _UNSUPPORTED_CARD_EVIDENCE.append(True)
+        error = UnsupportedCardLayoutError("Mobile card body not read.")
+        _annotate_failure(error, "page_render")
+        with suppress(Exception):
+            _log_layout_snapshot(
+                page, page.evaluate(MOBILE_SCAN_SCRIPT, False), permalink=False
+            )
+        capture_failure_screenshots(self.settings.profile_dir, error, {"feed": page})
 
     @staticmethod
     def _wait_for_scroll_progress(

@@ -55,6 +55,7 @@ MOBILE_SCAN_SCRIPT = (
   let embeddedCardCount = 0;
   let timestampAbsentCards = 0, timestampMultipleCards = 0;
   const timestampAbsentShapes = [], bodyUnknownShapes = [];
+  let unreadBodyCount = 0;
   if (roots.length !== 1) missing.add('unique_mobile_scroller');
   const branch = (root, node) => presentationChildren(root)
     .find(child => child === node || child.contains(node)) || null;
@@ -151,13 +152,20 @@ MOBILE_SCAN_SCRIPT = (
       }
       roles.set(sections[end], 'footer');
       const body = embedded ? embedded.body : parseBody(sections.slice(start, end));
-      if (body.unsupported) {
-        for (const issue of body.issues) missing.add('body_' + issue);
+      // A recognized header and footer own this card even when its body has
+      // a region no recognizer claims. Nothing from that body is read, guessed
+      // or clicked: the card is reported with no content, for a link-only alert.
+      const bodyUnread = body.unsupported === true;
+      if (bodyUnread) {
+        unreadBodyCount++;
         bodyUnknownShapes.push(...(body.unknownShapes || []));
-        missing.add('supported_primary_body_controls'); continue;
       }
-      const {text, texts, expanders, mediaCount, partial, bodyControlCount} = body;
-      if (!text && !mediaCount) { missing.add('primary_body_or_media'); continue; }
+      const {text, texts, expanders, mediaCount, partial, bodyControlCount}
+        = bodyUnread ? {text: '', texts: [], expanders: [], mediaCount: 0,
+          partial: false, bodyControlCount: 0} : body;
+      if (!bodyUnread && !text && !mediaCount) {
+        missing.add('primary_body_or_media'); continue;
+      }
       if (!tokens.cards.has(card)) tokens.cards.set(card, ++tokens.next);
       let expand = expanders.length === 1 ? expanders[0].closest(
         'button,[role="button"],[data-mcomponent="TextArea"][data-action-id],'
@@ -180,13 +188,16 @@ MOBILE_SCAN_SCRIPT = (
         timestampObservedAt: observedAt,
         cardToken: tokens.cards.get(card),
         actionToken: menu.getAttribute('data-action-id'),
-        mediaCount, mediaKeys: body.mediaKeys, partial, position: records.length,
+        mediaCount, mediaKeys: bodyUnread ? [] : body.mediaKeys, partial,
+        position: records.length,
+        ...(bodyUnread ? {bodyUnread: true, unreadIssues: body.issues} : {}),
         blocks: body.blocks, bodyState: partial ? 'partial' : 'complete',
         bodyControlCount, bodyTextPartCount: texts.length,
         bodyTextLengths: texts.slice(0, 32).map(text => text.length),
         previewControlCount: expanders.length,
-        ...(body.previewBoundary ? {previewPrefix:body.previewBoundary.prefix,
-          previewSuffix:body.previewBoundary.suffix} : {}),
+        ...(body.previewBoundary && !bodyUnread
+          ? {previewPrefix:body.previewBoundary.prefix,
+            previewSuffix:body.previewBoundary.suffix} : {}),
         parserVersion: 1, recognizers: body.recognizers,
         normalization: body.normalization,
       }});
@@ -198,7 +209,7 @@ MOBILE_SCAN_SCRIPT = (
     storyMessageCount: records.length, postCount: records.length,
     hasFeed: roots.length === 1, missing: Array.from(missing),
     headerAssemblyCount, unclassifiedMenuCards, embeddedCardCount,
-    timestampAbsentCards, timestampMultipleCards,
+    timestampAbsentCards, timestampMultipleCards, unreadBodyCount,
     timestampAbsentShapes: timestampAbsentShapes.slice(0, 12),
     bodyUnknownShapes: bodyUnknownShapes.slice(0, 12),
   };

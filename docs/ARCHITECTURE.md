@@ -339,14 +339,19 @@ the audience. The date is read from such a label only when the same wrapper
 renders that detail, whole or truncated with an ellipsis, as its final text.
 The destination page still verifies the publication time.
 
-A recognized card whose body holds a control or action with no known owner is
-never skipped or partly read. In the first view it fails the scan as a layout
-change. In a later view, when every missing component is such a body issue,
-the scan ends as bounded with the stop reason `unsupported_card` under the
-same rules as `unreadable_card`. The layout log then describes each unknown
-control by its kind, image and button counts, and the shape of its label and
-text: a short list of interface words, with digits and every other word
-replaced by placeholders.
+A recognized card whose body holds a control, action or text with no known
+owner is never partly read and never stops the scan. The card is reported with
+no text and no media (`bodyUnread`) once it has stayed unclassified for a short
+settle wait. Its link is still copied from its own menu and opened, and the
+destination must be a post of the verified group by the same author at the
+same publication time; the body is not compared because none was read. The
+post is saved and notified with a fixed notice in place of its text. Such a
+card is never recognised from an earlier check, so each check opens its link
+again. The first unread card of a process logs why (fixed issue names) and
+saves one private, content-free structure of the feed; the layout log
+describes each unknown control by its kind, image and button counts, and the
+shape of its label and text: a short list of interface words, with digits and
+every other word replaced by placeholders.
 
 ### `ScanResult`
 

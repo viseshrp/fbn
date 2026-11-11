@@ -46,7 +46,7 @@ def comparison_script(candidate: str, *, permalink: bool) -> str:
           const after = (__CANDIDATE__)(true);
           const finish = performance.now();
           const fields = ['author','text','timestampLabel','partial','mediaKeys',
-            'mediaCount','position','bodyState','previewControlCount'];
+            'mediaCount','position','bodyState','previewControlCount','bodyUnread'];
           const differences = new Set();
           if (before.records.length !== after.records.length) {
             differences.add('post_count');

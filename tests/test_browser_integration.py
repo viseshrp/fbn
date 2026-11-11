@@ -27,7 +27,6 @@ from fbn.exceptions import (
     RenderTimeoutError,
     RetryableTimestampLayoutError,
     TransientNavigationError,
-    UnsupportedCardLayoutError,
 )
 from fbn.extractor import extract_posts, parse_group_ref
 from fbn.mobile import (
@@ -175,10 +174,7 @@ def test_normalization_unknown_interactive_or_unclaimed_content_rejects_body(
         }""",
             injection,
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
-        with mobile_records(page) as records:
-            assert records == []
+        _assert_body_unread(page)
 
 
 def test_normalization_preserves_multiple_posts_with_identical_authors_and_prefixes(
@@ -209,8 +205,7 @@ def test_normalization_limits_reject_excessive_depth_without_acceptance(tmp_path
         page = context.new_page()
         page.set_content(mobile_fixture([("301", "Synthetic Author", "Original body")]))
         page.evaluate(DOM_VARIATION_SCRIPT, {"kind": "body_wrappers", "depth": 210})
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -347,10 +342,7 @@ def test_normalization_node_budget_is_explicit_and_does_not_accept_truncated_bod
           }
           body.append(fragment);
         }""")
-        with pytest.raises(LayoutChangedError, match="body_normalization_budget"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
-        with mobile_records(page) as records:
-            assert records == []
+        _assert_body_unread(page, "normalization_budget")
 
 
 @pytest.mark.parametrize("component", ["TextArea", "ServerTextArea"])
@@ -504,8 +496,7 @@ def test_unknown_interactive_body_never_qualifies_as_authored_content(
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(html)
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 def test_known_app_prompt_is_dismissed_once_before_sorting(tmp_path):
@@ -648,10 +639,7 @@ def test_photo_action_shell_cannot_claim_unknown_text_or_controls(
     with _local_context(tmp_path) as context:
         page = context.new_page()
         _photo_action_shell(page, depth=2, extra=extra, typed=typed)
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
-        with mobile_records(page) as records:
-            assert records == []
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -673,10 +661,7 @@ def test_typed_layout_does_not_erase_semantic_boundaries(tmp_path, attribute, va
             ".setAttribute(name,value)",
             [attribute, value],
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
-        with mobile_records(page) as records:
-            assert records == []
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize("kind", ["photo", "video", "link_preview", "listing", "poll"])
@@ -774,10 +759,7 @@ def test_image_card_owns_its_preview_controls_not_the_authored_message(
         context.route("**/*", lambda route: route.abort())
         page.set_content(html)
         if not has_media:
-            with pytest.raises(
-                LayoutChangedError, match="supported_primary_body_controls"
-            ):
-                wait_for_mobile_page(page, timeout_seconds=0.1)
+            _assert_body_unread(page)
             snapshot = page.evaluate(STRUCTURE_SNAPSHOT_SCRIPT)
             assert any(node["block"] == "unknown" for node in snapshot["nodes"])
             return
@@ -914,8 +896,7 @@ def test_attachment_control_ownership_rejects_unrelated_controls_or_text(
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
         page.set_content(mobile_controlled_attachment_fixture(kind, extra=extra))
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize("kind", ["photo", "video", "photo_credit", "event", "gallery"])
@@ -960,8 +941,7 @@ def test_attachment_media_credit_requires_date_and_separate_owned_metadata(
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
         page.set_content(html)
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -1001,8 +981,7 @@ def test_attachment_event_requires_a_complete_bounded_preview(tmp_path, fault):
             }""",
             fault,
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -1020,8 +999,7 @@ def test_attachment_media_labels_are_only_evidence_with_actual_media(tmp_path, l
             "el => el.replaceChildren(Object.assign(document.createElement('div'),"
             "{textContent:'Unrelated authored words'}))"
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 def test_attachment_event_date_and_control_variants_preserve_ownership(tmp_path):
@@ -1135,8 +1113,7 @@ def test_attachment_event_detail_lines_stay_bounded(tmp_path, fault):
                 areas[1].after(areas[0]);
                 }"""
             )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -1149,8 +1126,7 @@ def test_attachment_event_requires_calendar_and_clock_metadata(tmp_path, value):
         context.route("**/*", lambda route: route.abort())
         html = mobile_controlled_attachment_fixture("event")
         page.set_content(html.replace("Sun, Jan 17 at 4:00 PM", value))
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize("label", ["Interested, not selected", "Interested selected"])
@@ -1192,8 +1168,7 @@ def test_attachment_picture_credit_must_match_the_button_owner(tmp_path, suffix)
             "(el, label) => el.setAttribute('aria-label', label)",
             f"Unrelated Person{suffix}",
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize("kind", ["photo_credit", "event", "gallery"])
@@ -1227,8 +1202,7 @@ def test_attachment_font_icons_cannot_hide_text_or_actions(tmp_path, fault):
         }""",
             fault,
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 def test_attachment_focusable_date_cannot_hide_explicit_actions(tmp_path):
@@ -1241,10 +1215,7 @@ def test_attachment_focusable_date_cannot_hide_explicit_actions(tmp_path):
                 "(el, attribute) => el.setAttribute(attribute,'unknown-action')",
                 attribute,
             )
-            with pytest.raises(
-                LayoutChangedError, match="supported_primary_body_controls"
-            ):
-                wait_for_mobile_page(page, timeout_seconds=0.1)
+            _assert_body_unread(page)
 
 
 def test_attachment_publication_labels_separate_date_from_known_audience(tmp_path):
@@ -1267,10 +1238,7 @@ def test_attachment_publication_labels_separate_date_from_known_audience(tmp_pat
             if accepted:
                 wait_for_mobile_page(page, timeout_seconds=0.1)
             else:
-                with pytest.raises(
-                    LayoutChangedError, match="supported_primary_body_controls"
-                ):
-                    wait_for_mobile_page(page, timeout_seconds=0.1)
+                _assert_body_unread(page)
 
 
 def test_attachment_icon_normalization_preserves_authored_private_glyphs(tmp_path):
@@ -1330,8 +1298,7 @@ def test_rich_image_credit_rejects_unowned_or_unverified_metadata(tmp_path, faul
                 if fault == "author"
                 else "Unknown date",
             )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 def test_attachment_gallery_overlay_requires_matching_count_and_owned_mosaic(tmp_path):
@@ -1351,10 +1318,7 @@ def test_attachment_gallery_overlay_requires_matching_count_and_owned_mosaic(tmp
             page.locator('[data-action-id="synthetic-gallery-more"]').evaluate(
                 "(el, label) => el.setAttribute('aria-label', label)", label
             )
-            with pytest.raises(
-                LayoutChangedError, match="supported_primary_body_controls"
-            ):
-                wait_for_mobile_page(page, timeout_seconds=0.1)
+            _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -1371,8 +1335,7 @@ def test_attachment_gallery_overlay_cannot_hide_unrelated_content(tmp_path, extr
         page = context.new_page()
         context.route("**/*", lambda route: route.abort())
         page.set_content(mobile_controlled_attachment_fixture("gallery", extra=extra))
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize("kind", ["photo", "photo_credit", "event"])
@@ -1392,8 +1355,7 @@ def test_attachment_ownership_cannot_erase_unknown_media_roles(tmp_path, kind):
               el.append(unknown);
             }"""
         )
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize(
@@ -1639,10 +1601,7 @@ def test_split_link_preview_requires_owned_image_domain_and_caption_action(
         if mutation in {"text_only_link", "nested_action"}:
             # An unowned interactive link is an explicit rejection now, rather
             # than treating its caption as authored content or hiding the link.
-            with pytest.raises(
-                LayoutChangedError, match="supported_primary_body_controls"
-            ):
-                wait_for_mobile_page(page, timeout_seconds=0.1)
+            _assert_body_unread(page)
             return
         with mobile_records(page) as records:
             assert "Automatic preview title" in records[0][1]["text"]
@@ -1672,8 +1631,7 @@ def test_split_link_preview_never_hides_unknown_caption_controls(
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(html)
-        with pytest.raises(LayoutChangedError, match="supported_primary_body_controls"):
-            wait_for_mobile_page(page, timeout_seconds=0.1)
+        _assert_body_unread(page)
 
 
 @pytest.mark.parametrize("unlabelled_menu", [False, True])
@@ -4598,6 +4556,7 @@ def _paged_source(
     reveal_delay_ms=0,
     unreadable=None,
     unsupported=None,
+    other_author=None,
 ):
     def serve(route):
         url = route.request.url
@@ -4608,6 +4567,8 @@ def _paged_source(
         html = mobile_fixture(
             [next(p for p in stories if p[0] == key)] if target else list(stories)
         )
+        if target and key == other_author:
+            html = html.replace("Author", "Another Writer")
         if unreadable is not None and not target:
             # The card at this position renders a date the parser cannot read.
             label = 'aria-label="Sunday, October 11, 2026 at 10:00 AM"'
@@ -4620,8 +4581,11 @@ def _paged_source(
                 )
                 + parts[-1]
             )
-        if unsupported is not None and not target:
-            # The card at this position has a body control with no known role.
+        if unsupported is not None and (
+            not target or key == stories[unsupported - 1][0]
+        ):
+            # The card at this position has a body control with no known role,
+            # in the feed and on its own page.
             body = (
                 '<div data-mcomponent="ServerTextArea">'
                 f"{stories[unsupported - 1][2]}</div>"
@@ -4750,8 +4714,9 @@ def test_unreadable_card_in_the_first_view_still_fails_the_scan(tmp_path):
             source.fetch_recent(group, policy, boundary_post_id="301")
 
 
-def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeypatch):
-    """A deeper card with an unclassified body stops the scan, not the monitor."""
+@pytest.mark.parametrize("position", [1, 3])
+def test_unsupported_card_is_alerted_by_link_only(tmp_path, monkeypatch, position):
+    """A body the reader cannot classify costs its text, never the scan."""
 
     import fbn.mobile as mobile
 
@@ -4764,27 +4729,38 @@ def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeyp
     # One private structure capture per process, not one per check.
     captures = []
     monkeypatch.setattr(mobile, "_UNSUPPORTED_CARD_EVIDENCE", [])
+    monkeypatch.setattr(mobile, "UNREAD_BODY_SETTLE_SECONDS", 0.2)
     monkeypatch.setattr(
         mobile,
         "capture_failure_screenshots",
         lambda profile, error, pages: captures.append(sorted(pages)),
     )
     stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    unread = stories[position - 1][0]
     visited = []
     group = parse_group_ref("contract-group")
-    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=1)
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=5)
     with _local_context(tmp_path) as context:
         source = _paged_source(
-            tmp_path, context, stories, visited, reveal=2, unsupported=3
+            tmp_path, context, stories, visited, reveal=2, unsupported=position
         )
         for _ in range(2):
             result = source.fetch_recent(group, policy, boundary_post_id="301")
-            # Nothing from the view holding the unsupported card is accepted.
-            assert result.bounded
-            assert [p.post_id for p in result.posts] == ["306", "305"]
-        assert visited == ["306", "305"]
+            assert not result.bounded
+            assert [p.post_id for p in result.posts] == [s[0] for s in stories]
+            for post in result.posts:
+                assert post.author == "Author"
+                assert post.url.endswith(f"/posts/{post.post_id}/")
+                assert post.text == (
+                    mobile.UNREAD_BODY_NOTICE
+                    if post.post_id == unread
+                    else f"Body {post.post_id}"
+                )
+    # An unread card is never recognised from an earlier check: its link is
+    # copied and opened again, while every readable card is opened only once.
+    assert visited == [s[0] for s in stories] + [unread]
     assert [m for m, _ in logged].count(
-        "Mobile scan stopped above an unsupported card"
+        "Mobile card body not read; alerting by link only"
     ) == 2
     assert captures == [["feed"]]
     shapes = [
@@ -4798,6 +4774,24 @@ def test_unsupported_card_below_verified_posts_bounds_the_scan(tmp_path, monkeyp
         "wrapped=no / inner=plain:none:play w video:"
     }
     assert "secret" not in str(logged) and "Body" not in str(logged)
+
+
+def test_unread_card_link_must_open_the_same_author_and_time(tmp_path, monkeypatch):
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "UNREAD_BODY_SETTLE_SECONDS", 0.2)
+    monkeypatch.setattr(mobile, "capture_failure_screenshots", lambda *args: None)
+    stories = [("302", "Author", "Body 302"), ("301", "Author", "Body 301")]
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=1, settle_seconds=0, navigation_timeout_seconds=2)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, [], unsupported=1, other_author="302"
+        )
+        with pytest.raises(
+            LayoutChangedError, match="resolved_primary_author_matches_source"
+        ):
+            source.fetch_recent(group, policy, boundary_post_id="301")
 
 
 def test_recognised_posts_wait_for_a_feed_that_mounts_cards_late(tmp_path, monkeypatch):
@@ -4821,16 +4815,6 @@ def test_recognised_posts_wait_for_a_feed_that_mounts_cards_late(tmp_path, monke
             assert [p.post_id for p in result.posts] == [s[0] for s in stories]
     # The second check recognised every card and opened nothing.
     assert visited == [s[0] for s in stories]
-
-
-def test_unsupported_card_in_the_first_view_still_fails_the_scan(tmp_path):
-    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
-    group = parse_group_ref("contract-group")
-    policy = ScanPolicy(max_scrolls=3, settle_seconds=0, navigation_timeout_seconds=1)
-    with _local_context(tmp_path) as context:
-        source = _paged_source(tmp_path, context, stories, [], reveal=2, unsupported=1)
-        with pytest.raises(UnsupportedCardLayoutError):
-            source.fetch_recent(group, policy, boundary_post_id="301")
 
 
 def test_identical_cards_in_one_pass_are_never_recognised_by_content(tmp_path):
@@ -4954,6 +4938,20 @@ def test_archived_marker_mobile_catchup_delivers_and_does_not_repeat(tmp_path):
                 source, state, SimpleNamespace(send=notifications.append)
             ).run_once(GROUP, ScanPolicy(max_scrolls=2, settle_seconds=0))
             assert result.delivered == 0 and len(notifications) == 1
+
+
+def _assert_body_unread(page, issue=None):
+    """The card is kept for a link-only alert and none of its body is read."""
+
+    wait_for_mobile_page(page, timeout_seconds=0.1)
+    with mobile_records(page) as records:
+        unread = [payload for _, payload in records if payload.get("bodyUnread")]
+        assert len(unread) == 1
+        assert unread[0]["text"] == "" and unread[0]["bodyTextLengths"] == []
+        assert unread[0]["mediaCount"] == 0 and unread[0]["mediaKeys"] == []
+        assert not unread[0]["partial"] and unread[0]["unreadIssues"]
+        if issue is not None:
+            assert issue in unread[0]["unreadIssues"]
 
 
 @contextmanager
@@ -5638,8 +5636,13 @@ def test_menu_free_embedded_header_never_falls_back_to_main_message(tmp_path, fa
         }""",
             fault,
         )
-        with pytest.raises(LayoutChangedError):
-            wait_for_mobile_page(page, timeout_seconds=0.05)
+        if fault == "header_control":
+            # The unclaimed control leaves the whole body unread: no embedded
+            # or main text is accepted, and the card is alerted by link only.
+            _assert_body_unread(page, "unknown_body_control")
+        else:
+            with pytest.raises(LayoutChangedError):
+                wait_for_mobile_page(page, timeout_seconds=0.05)
         assert page.evaluate("activePost === null")
 
 

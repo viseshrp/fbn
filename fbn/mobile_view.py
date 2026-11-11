@@ -32,6 +32,8 @@ class PostView(TypedDict, total=False):
     blocks: list[BlockEvidence]
     bodyState: Literal["partial", "complete"]
     parserVersion: int
+    bodyUnread: bool
+    unreadIssues: list[str]
     recognizers: list[dict[str, str]]
     normalization: dict[str, int]
 
@@ -65,12 +67,46 @@ def preview_matches_expanded(value: dict, expanded: str) -> bool:
     return expanded.startswith(text)
 
 
+UNREAD_BODY_ISSUES = frozenset(
+    {
+        "conflicting_region_ownership",
+        "normalization_budget",
+        "unclaimed_body_text",
+        "unknown_action_ownership",
+        "unknown_body_control",
+    }
+)
+
+
+def _unread_body_valid(value: dict) -> bool:
+    """An unread body carries no content, only fixed names for why."""
+
+    reasons = value.get("unreadIssues")
+    return (
+        value.get("bodyUnread") is True
+        and isinstance(reasons, list)
+        and bool(reasons)
+        and all(isinstance(reason, str) for reason in reasons)
+        and set(reasons) <= UNREAD_BODY_ISSUES
+        and value.get("text") == ""
+        and value.get("mediaCount") == 0
+        and value.get("mediaKeys") == []
+        and value.get("partial") is False
+        and value.get("bodyTextPartCount") == 0
+        and "previewPrefix" not in value
+        and "previewSuffix" not in value
+    )
+
+
 def post_view_issues(value: object) -> tuple[str, ...]:
     """Validate required evidence, without returning content in error details."""
 
     if not isinstance(value, dict):
         return ("post_view_object",)
     issues = []
+    unread = "bodyUnread" in value or "unreadIssues" in value
+    if unread and not _unread_body_valid(value):
+        issues.append("post_view_unread_body")
     if ("previewPrefix" in value or "previewSuffix" in value) and (
         value.get("partial") is not True or not _preview_boundary_valid(value)
     ):
@@ -145,6 +181,7 @@ def post_view_issues(value: object) -> tuple[str, ...]:
         "action_ownership",
         "unknown_controls",
     }
+    statuses = {"recognized", "absent"} | ({"ambiguous"} if unread else set())
     if (
         not isinstance(recognizers, list)
         or len(recognizers) != len(expected)
@@ -153,9 +190,10 @@ def post_view_issues(value: object) -> tuple[str, ...]:
             or not isinstance(item.get("name"), str)
             or not isinstance(item.get("status"), str)
             or item.get("name") not in expected
-            or item.get("status") not in {"recognized", "absent"}
+            or item.get("status") not in statuses
             or (
-                item.get("name") == "unknown_controls"
+                not unread
+                and item.get("name") == "unknown_controls"
                 and item.get("status") != "absent"
             )
             for item in recognizers
@@ -165,9 +203,11 @@ def post_view_issues(value: object) -> tuple[str, ...]:
         issues.append("post_view_recognizers")
     blocks = value.get("blocks")
     allowed_roles = {"message", "attachment", "interface_panel", "discussion"}
+    if unread:
+        allowed_roles.add("unknown")
     if (
         not isinstance(blocks, list)
-        or not blocks
+        or (not blocks and not unread)
         or any(
             not isinstance(block, dict)
             or not isinstance(block.get("role"), str)

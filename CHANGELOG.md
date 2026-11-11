@@ -130,6 +130,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Alert by link only for a post whose body the reader cannot classify, instead
+  of failing the check (first view) or stopping the scan above it (deeper).
+  Nothing from such a body is read. Its link is still copied and opened, and
+  must lead to a post of the verified group by the same author at the same
+  time. The notification carries a fixed notice in place of the text.
 - Run the browser integration tests on four parallel `pytest-xdist` workers
   (`BROWSER_TEST_WORKERS`), cutting that stage from about 19 minutes to about
   6 without changing any test.

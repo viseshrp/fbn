@@ -102,6 +102,50 @@ def test_mobile_view_rejects_unknown_or_ambiguous_claim_evidence(mutation):
     assert post_view_issues(value)
 
 
+def _unread_view():
+    value = valid_view()
+    value.update(
+        text="",
+        mediaCount=0,
+        mediaKeys=[],
+        partial=False,
+        bodyState="complete",
+        previewControlCount=0,
+        bodyControlCount=0,
+        bodyTextPartCount=0,
+        bodyTextLengths=[],
+        bodyUnread=True,
+        unreadIssues=["unknown_body_control"],
+    )
+    value["blocks"][0]["role"] = "unknown"
+    value["recognizers"][-1]["status"] = "ambiguous"
+    return value
+
+
+def test_mobile_view_accepts_an_unread_body_without_content():
+    assert post_view_issues(_unread_view()) == ()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("text", "Synthetic body"),
+        ("mediaCount", 1),
+        ("mediaKeys", ["image:1_2_3"]),
+        ("unreadIssues", []),
+        ("unreadIssues", ["Synthetic free text"]),
+        ("unreadIssues", None),
+        ("bodyUnread", False),
+        ("bodyUnread", "yes"),
+    ],
+)
+def test_mobile_view_rejects_an_unread_body_carrying_content(field, value):
+    view = _unread_view()
+    view[field] = value
+    issues = post_view_issues(view)
+    assert "post_view_unread_body" in issues and "Synthetic" not in repr(issues)
+
+
 @pytest.mark.parametrize("malformed", [None, [], {}, 1, True])
 @pytest.mark.parametrize("field", ["name", "status", "role"])
 def test_mobile_view_nested_evidence_errors_never_raise_or_echo_content(

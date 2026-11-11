@@ -157,6 +157,33 @@ def test_relative_rollover_never_relaxes_author_or_body_checks():
         )
 
 
+def test_unread_source_body_still_requires_the_same_author_and_time():
+    from fbn.mobile import _primary_post_comparisons
+
+    source = {
+        "author": "Author",
+        "text": "",
+        "mediaCount": 0,
+        "bodyUnread": True,
+        "timestampLabel": "Sunday, October 11, 2026 at 10:00 AM",
+        "timestampObservedAt": 1791878400000,
+    }
+    target = {**source, "timestampObservedAt": 1791878402000}
+    # No body was read, so a readable destination body is not compared.
+    for item in (target, {**target, "bodyUnread": False, "text": "Readable"}):
+        assert all(_primary_post_comparisons(item, source).values())
+    for field, wrong in (
+        ("author", "Wrong"),
+        ("timestampLabel", "Monday, October 12, 2026 at 10:00 AM"),
+    ):
+        assert not all(
+            _primary_post_comparisons({**target, field: wrong}, source).values()
+        )
+    # A readable source is never satisfied by a destination that was not read.
+    readable = {**source, "bodyUnread": False, "text": "Readable"}
+    assert not all(_primary_post_comparisons(target, readable).values())
+
+
 @pytest.mark.parametrize("partial_side", ["source", "target"])
 def test_matching_preview_text_is_not_accepted_as_a_complete_verified_post(
     partial_side,
