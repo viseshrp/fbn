@@ -4556,7 +4556,9 @@ def _paged_source(
     reveal_delay_ms=0,
     unreadable=None,
     unsupported=None,
+    unsupported_page=None,
     other_author=None,
+    empty_scrolls=0,
 ):
     def serve(route):
         url = route.request.url
@@ -4581,15 +4583,18 @@ def _paged_source(
                 )
                 + parts[-1]
             )
-        if unsupported is not None and (
-            not target or key == stories[unsupported - 1][0]
+        odd = unsupported
+        if unsupported_page is not None:
+            # This story reads normally in the feed; only its own page has
+            # the unknown body control.
+            odd = [p[0] for p in stories].index(unsupported_page) + 1
+        if odd is not None and (
+            (not target and unsupported_page is None)
+            or (target and key == stories[odd - 1][0])
         ):
             # The card at this position has a body control with no known role,
             # in the feed and on its own page.
-            body = (
-                '<div data-mcomponent="ServerTextArea">'
-                f"{stories[unsupported - 1][2]}</div>"
-            )
+            body = f'<div data-mcomponent="ServerTextArea">{stories[odd - 1][2]}</div>'
             assert html.count(body) == 1
             html = html.replace(
                 body,
@@ -4610,11 +4615,21 @@ def _paged_source(
                 f".slice({reveal});const list=held[0].parentNode;"
                 "held.forEach(card=>card.remove());const mount=()=>"
                 f"held.splice(0,{reveal}).forEach(card=>list.appendChild(card));"
-                "window.scrollBy=()=>"
                 + (
-                    f"setTimeout(mount,{reveal_delay_ms})"
-                    if reveal_delay_ms
-                    else "mount()"
+                    # A tall unit without posts: the page really scrolls, and
+                    # the next cards mount only after this many empty scrolls.
+                    "const gap=document.createElement('div');"
+                    "gap.style.height='30000px';document.body.append(gap);"
+                    "const scroll=window.scrollBy.bind(window);let calls=0;"
+                    "window.scrollBy=(x,y)=>{scroll(x,y);"
+                    f"if(++calls%{empty_scrolls + 1}===0)mount();}}"
+                    if empty_scrolls
+                    else "window.scrollBy=()=>"
+                    + (
+                        f"setTimeout(mount,{reveal_delay_ms})"
+                        if reveal_delay_ms
+                        else "mount()"
+                    )
                 )
                 + ";}</script>"
             )
@@ -4714,6 +4729,54 @@ def test_unreadable_card_in_the_first_view_still_fails_the_scan(tmp_path):
             source.fetch_recent(group, policy, boundary_post_id="301")
 
 
+def test_scrolling_over_content_without_posts_is_not_a_stagnant_feed(tmp_path):
+    """A pass that moved the page but met no new post has not run out of feed."""
+
+    stories = [(str(n), "Author", f"Body {n}") for n in range(306, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=3, settle_seconds=0)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, visited, reveal=2, empty_scrolls=2
+        )
+        result = source.fetch_recent(group, policy, boundary_post_id="301")
+        # Two empty scrolls precede every new pair of cards; the default
+        # stagnant limit of two would have ended this scan after the first.
+        assert [p.post_id for p in result.posts] == [s[0] for s in stories]
+        assert not result.bounded
+    assert visited == [s[0] for s in stories]
+
+
+def test_a_page_that_no_longer_moves_is_a_stagnant_feed(tmp_path, monkeypatch):
+    import fbn.mobile as mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile.LOGGER,
+        "info",
+        lambda message, **fields: logged.append((message, fields)),
+    )
+    stories = [(str(n), "Author", f"Body {n}") for n in range(303, 300, -1)]
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=9, settle_seconds=0)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, [])
+        result = source.fetch_recent(group, policy, boundary_post_id="missing")
+        assert result.bounded and result.scrolls == 2
+    progress = [f for m, f in logged if m == "Mobile scan scroll progress"]
+    assert len(progress) == 1 and progress[0]["empty_moving_passes"] == 0
+    assert progress[0]["last_scroll_moved"] is False
+    assert progress[0]["visible_cards"] == 3
+    assert all(
+        type(progress[0][name]) is int
+        for name in ("scroll_offset", "viewport_height", "page_height", "mounted_cards")
+    )
+    assert "Body" not in str(progress)
+    coverage = [f for m, f in logged if m == "Mobile scan coverage"]
+    assert coverage[-1]["stop_reason"] == "stagnant_feed"
+
+
 @pytest.mark.parametrize("position", [1, 3])
 def test_unsupported_card_is_alerted_by_link_only(tmp_path, monkeypatch, position):
     """A body the reader cannot classify costs its text, never the scan."""
@@ -4787,6 +4850,50 @@ def test_unread_card_link_must_open_the_same_author_and_time(tmp_path, monkeypat
     with _local_context(tmp_path) as context:
         source = _paged_source(
             tmp_path, context, stories, [], unsupported=1, other_author="302"
+        )
+        with pytest.raises(
+            LayoutChangedError, match="resolved_primary_author_matches_source"
+        ):
+            source.fetch_recent(group, policy, boundary_post_id="301")
+
+
+def test_readable_card_keeps_its_text_when_its_own_page_is_not_read(
+    tmp_path, monkeypatch
+):
+    """A feed body read in full survives a post page the reader cannot classify."""
+
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "UNREAD_BODY_SETTLE_SECONDS", 0.2)
+    stories = [(str(n), "Author", f"Body {n}") for n in range(303, 300, -1)]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=1, settle_seconds=0, navigation_timeout_seconds=5)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, visited, unsupported_page="302"
+        )
+        for _ in range(2):
+            result = source.fetch_recent(group, policy, boundary_post_id="301")
+            assert not result.bounded
+            assert [(p.post_id, p.text) for p in result.posts] == [
+                (s[0], s[2]) for s in stories
+            ]
+    # The card was read, so the next check recognises it without reopening.
+    assert visited == [s[0] for s in stories]
+
+
+def test_unread_post_page_must_show_the_same_author_and_time(tmp_path, monkeypatch):
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "UNREAD_BODY_SETTLE_SECONDS", 0.2)
+    monkeypatch.setattr(mobile, "capture_failure_screenshots", lambda *args: None)
+    stories = [("302", "Author", "Body 302"), ("301", "Author", "Body 301")]
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=1, settle_seconds=0, navigation_timeout_seconds=2)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(
+            tmp_path, context, stories, [], unsupported_page="302", other_author="302"
         )
         with pytest.raises(
             LayoutChangedError, match="resolved_primary_author_matches_source"

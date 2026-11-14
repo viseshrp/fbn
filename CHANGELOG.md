@@ -21,6 +21,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complete text, and publication time without copying or opening them again,
   and scroll past them without using the scroll allowance. The shared scan
   budget is now 180 seconds.
+- Keep scrolling while the page still moves. A pass that crosses content with
+  no new post (a tall card or a non-post unit) no longer counts towards the
+  stagnant limit or the scroll allowance; only a page that has stopped moving
+  ends the scan as stagnant. The end of a scan logs scroll counters only.
+- Keep a post that was read in full in the feed when its own page shows a
+  body the reader cannot classify. The alert carries the feed text, and the
+  page must still be a post of the verified group by the same author at the
+  same publication time. Previously this stopped the monitor.
 - Stop a scan above one deeper card whose date cannot be read instead of
   failing the whole check. The verified posts above it are still saved and
   notified, nothing at or below it is accepted, and the marker stays in place.

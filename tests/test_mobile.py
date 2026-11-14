@@ -179,9 +179,16 @@ def test_unread_source_body_still_requires_the_same_author_and_time():
         assert not all(
             _primary_post_comparisons({**target, field: wrong}, source).values()
         )
-    # A readable source is never satisfied by a destination that was not read.
+    # A source read in full keeps its text when its own page cannot be read,
+    # but the author and time must match and a shortened source is refused.
     readable = {**source, "bodyUnread": False, "text": "Readable"}
-    assert not all(_primary_post_comparisons(target, readable).values())
+    assert all(_primary_post_comparisons(target, readable).values())
+    assert not all(
+        _primary_post_comparisons({**target, "author": "Wrong"}, readable).values()
+    )
+    assert not all(
+        _primary_post_comparisons(target, {**readable, "partial": True}).values()
+    )
 
 
 @pytest.mark.parametrize("partial_side", ["source", "target"])

@@ -82,6 +82,13 @@ KNOWN_POST_EXTRA_SCROLLS = 40
 MAX_FEED_GROWTH_SECONDS = 8.0
 
 _UNSUPPORTED_CARD_EVIDENCE: list[bool] = []
+_SCROLL_METRICS_SCRIPT = (
+    "() => ({scroll_offset: Math.round(window.scrollY), "
+    "viewport_height: window.innerHeight, "
+    "page_height: document.documentElement.scrollHeight, "
+    "mounted_cards: document.querySelectorAll("
+    "'[data-type=\"vscroller\"] > [data-mcomponent]').length})"
+)
 # A body that no recognizer can classify is alerted by link only. Give a card
 # whose body is still being assembled this long to become readable first.
 UNREAD_BODY_SETTLE_SECONDS = 3.0
@@ -1091,6 +1098,20 @@ def _primary_post_comparisons(
                 _publication_matches(item, payload)
             ),
         }
+    if item.get("bodyUnread"):
+        # The source body was read in full from the feed, but the post's own
+        # page shows a body the reader cannot classify. The alert keeps the
+        # feed text; the link must still open a post of the verified group by
+        # the same author at the same time.
+        return {
+            "resolved_primary_author_matches_source": (
+                item["author"] == payload["author"]
+            ),
+            "resolved_primary_body_complete": not payload.get("partial", False),
+            "resolved_primary_publication_matches_source": (
+                _publication_matches(item, payload)
+            ),
+        }
     return {
         "resolved_primary_author_matches_source": item["author"] == payload["author"],
         "resolved_primary_body_matches_source": item["text"] == payload["text"],
@@ -1766,6 +1787,10 @@ class MobilePostSource(BrowserSession):
         )
         scan_index = 0
         extra_scrolls = 0
+        # Whether the last scroll moved the page, and how many passes moved
+        # over content that holds no new post (a tall card, a non-post unit).
+        advanced = False
+        empty_moves = 0
 
         def expand(menu: ElementHandle, payload: dict[str, Any]) -> dict[str, Any]:
             return expand_post_preview(
@@ -1961,7 +1986,17 @@ class MobilePostSource(BrowserSession):
                     accumulated.append(replace(post, position=len(accumulated)))
                     if post.post_id == boundary_post_id:
                         marker_pass = scan_index
-            stagnant = stagnant + 1 if len(accumulated) == before else 0
+            if len(accumulated) > before:
+                stagnant = 0
+            elif advanced:
+                # The page is still moving, so the feed has not run out: this
+                # pass only crossed content without a new post. It opened no
+                # destination and does not use up the scroll allowance.
+                empty_moves += 1
+                if extra_scrolls < KNOWN_POST_EXTRA_SCROLLS:
+                    extra_scrolls += 1
+            else:
+                stagnant += 1
             # Read at least one further pass after the marker, for overlap.
             if marker_pass is not None and scan_index > marker_pass:
                 return self._scan_result(
@@ -1988,10 +2023,25 @@ class MobilePostSource(BrowserSession):
                     if stagnant >= policy.stagnant_scrolls
                     else "scroll_limit"
                 )
+                # Fixed counters only: positions and sizes, never content.
+                metrics: dict[str, Any] = {}
+                with suppress(Exception):
+                    metrics = page.evaluate(_SCROLL_METRICS_SCRIPT)
+                LOGGER.info(
+                    "Mobile scan scroll progress",
+                    empty_moving_passes=empty_moves,
+                    last_scroll_moved=advanced,
+                    visible_cards=len(scroll_signature),
+                    **metrics,
+                )
                 break
             page.bring_to_front()
-            page.evaluate(
-                "() => window.scrollBy(0, Math.max(window.innerHeight * 0.8, 600))"
+            advanced = bool(
+                page.evaluate(
+                    "() => { const offset = Math.round(window.scrollY); "
+                    "window.scrollBy(0, Math.max(window.innerHeight * 0.8, 600)); "
+                    "return Math.round(window.scrollY) > offset; }"
+                )
             )
             scrolls += 1
             scan_index += 1

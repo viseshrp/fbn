@@ -324,6 +324,11 @@ ten destinations and then ends as bounded, so a backlog advances in pages: each
 check recognises the cards already verified and opens the next ten. Passes that
 only recognise cards do not consume `--max-scrolls`, up to 40 further passes.
 Each scan logs only the counts of recognised cards and opened destinations.
+A pass that finds no new post counts as stagnant only when the preceding
+scroll did not move the page. A pass that moved over content without a new
+post opens nothing and, like a pass of recognised cards, does not consume
+`--max-scrolls`. A scan that ends on the stagnant or scroll limit logs fixed
+counters: scroll offset, viewport and page height, and card counts.
 
 One card with an absent or repeated date in an otherwise valid feed is retried
 when it is in the first view. In a later view the scan instead ends as bounded
@@ -347,7 +352,9 @@ destination must be a post of the verified group by the same author at the
 same publication time; the body is not compared because none was read. The
 post is saved and notified with a fixed notice in place of its text. Such a
 card is never recognised from an earlier check, so each check opens its link
-again. The first unread card of a process logs why (fixed issue names) and
+again. The reverse case is handled the same way: when a card was read in full
+in the feed but its own page shows an unclassified body, the post keeps the
+feed text and the page must still match the author and publication time. The first unread card of a process logs why (fixed issue names) and
 saves one private, content-free structure of the feed; the layout log
 describes each unknown control by its kind, image and button counts, and the
 shape of its label and text: a short list of interface words, with digits and
