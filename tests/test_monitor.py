@@ -66,9 +66,12 @@ class FakeState:
         batch: ObservationBatch,
         *,
         boundary_post_id: str | None = None,
+        read_since_boundary: int = 0,
     ) -> None:
         self.batch = batch
         self.boundary_post_id = boundary_post_id
+        self.read_since_boundary = read_since_boundary
+        self.counted: list[tuple[Post, ...]] = []
         self.current_pending = list(batch.pending)
         self.delivered: list[str] = []
         self.failed: list[tuple[list[str], str]] = []
@@ -86,6 +89,11 @@ class FakeState:
     def notification_boundary(self, group: GroupRef) -> str | None:
         assert group is GROUP
         return self.boundary_post_id
+
+    def posts_read_since_boundary(self, group: GroupRef, posts: Sequence[Post]) -> int:
+        assert group is GROUP
+        self.counted.append(tuple(posts))
+        return self.read_since_boundary
 
     def observe(self, *args: object, **kwargs: object) -> ObservationBatch:
         self.observe_kwargs = kwargs
@@ -187,6 +195,97 @@ def test_marker_beyond_the_scan_limit_is_retired_instead_of_preserved():
     MonitorService(LimitSource(), state, FakeSink()).run_once(GROUP, ScanPolicy())
     assert state.observe_kwargs.get("retire_boundary") is True
     assert "preserve_boundary" not in state.observe_kwargs
+    assert state.counted == []
+
+
+@pytest.mark.parametrize(("read", "retired"), [(9, False), (10, True), (11, True)])
+def test_marker_is_retired_once_bounded_checks_together_read_the_scan_limit(
+    read, retired
+):
+    """Checks that each stop early can still prove a marker out of reach."""
+
+    class PagedSource(FakeSource):
+        def fetch_recent(self, group, policy, *, boundary_post_id=None):
+            return ScanResult((POST,), "feed", 3, True)
+
+    policy = ScanPolicy(sample_count=5, max_scrolls=1)
+    assert policy.catch_up_post_limit == 10
+    state = FakeState(
+        ObservationBatch(False, 1, 0, ()),
+        boundary_post_id="unreachable-post",
+        read_since_boundary=read,
+    )
+    MonitorService(PagedSource(), state, FakeSink()).run_once(GROUP, policy)
+    assert state.counted == [(POST,)]
+    assert state.observe_kwargs.get("retire_boundary", False) is retired
+    assert state.observe_kwargs.get("preserve_boundary", False) is not retired
+
+
+@pytest.mark.parametrize(
+    ("boundary_post_id", "posts"),
+    [(None, (POST,)), (POST.post_id, (POST,)), ("unreachable-post", ())],
+)
+def test_bounded_scan_without_a_missing_marker_never_counts_read_posts(
+    boundary_post_id, posts
+):
+    """No marker, a marker that was read, or no post to start a new one from."""
+
+    class BoundedSource(FakeSource):
+        def fetch_recent(self, group, policy, *, boundary_post_id=None):
+            return ScanResult(posts, "feed", 3, True)
+
+    state = FakeState(
+        ObservationBatch(False, 1, 0, ()),
+        boundary_post_id=boundary_post_id,
+        read_since_boundary=999,
+    )
+    MonitorService(BoundedSource(), state, FakeSink()).run_once(GROUP, ScanPolicy())
+    assert state.counted == []
+    assert state.observe_kwargs.get("preserve_boundary") is True
+    assert "retire_boundary" not in state.observe_kwargs
+
+
+def test_paged_checks_retire_an_unreachable_marker_in_the_stored_state(tmp_path):
+    """Three bounded checks of two posts each reach a limit of four."""
+
+    from fbn.state import SQLiteStateRepository
+    from tests.test_state import GROUP as STORED
+    from tests.test_state import T0, post
+
+    pages = iter(
+        [
+            (post("b", position=0), post("a", position=1)),
+            (post("b", position=0), post("a", position=1)),
+            (post("c", position=0), post("b", position=1)),
+            (post("d", position=0), post("c", position=1)),
+            (post("e", position=0), post("d", position=1)),
+        ]
+    )
+
+    class PagedSource:
+        def fetch_recent(self, group, policy, *, boundary_post_id=None):
+            posts = next(pages)
+            found = any(p.post_id == boundary_post_id for p in posts)
+            return ScanResult(posts, "feed", 1, not found)
+
+    class Sink:
+        def send(self, notification: object) -> None:
+            pass
+
+    policy = ScanPolicy(sample_count=2, max_scrolls=1)
+    with SQLiteStateRepository(tmp_path / "state.sqlite3", clock=lambda: T0) as state:
+        # The service records each check at the current time, after this.
+        state.observe(STORED, (post("marker"),), observed_at=T0.replace(year=2000))
+        service = MonitorService(PagedSource(), state, Sink())
+        markers = []
+        for _ in range(5):
+            service.run_once(STORED, policy)
+            markers.append(state.notification_boundary(STORED))
+        # Reading the same two posts twice proves nothing more. The fourth
+        # distinct post above the marker does, and the new marker is then
+        # found by the next check like any other.
+        assert markers == ["marker", "marker", "marker", "d", "e"]
+        assert state.pending(STORED) == ()
 
 
 def test_scan_result_marker_out_of_reach_is_a_bounded_boolean():

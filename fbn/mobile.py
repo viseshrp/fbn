@@ -1587,16 +1587,33 @@ class MobilePostSource(BrowserSession):
         fingerprint = _destination_fingerprint(payload)
         if card is None or fingerprint is None:
             return
-        key = (group.key, *card)
-        cache.setdefault(key, {})[href] = (
+        entry = (
             fingerprint,
             _digest(_publication_label(payload)),
             _relative_publication_window(payload),
             time.monotonic(),
         )
-        cache.move_to_end(key)
+        # The feed can show this card again already expanded, under new card
+        # and menu IDs. Remember the complete card as well as the preview, or
+        # that card is not recognised and its destination is opened again.
+        for form in dict.fromkeys((card, _card_key(payload) or card)):
+            key = (group.key, *form)
+            cache.setdefault(key, {})[href] = entry
+            cache.move_to_end(key)
         while len(cache) > CROSS_CHECK_DESTINATION_LIMIT:
             cache.popitem(last=False)
+
+    def _verified_body(
+        self, group: GroupRef, payload: dict[str, Any], href: str
+    ) -> bool:
+        """Whether this complete card is one already verified for ``href``."""
+
+        fingerprint = _destination_fingerprint(payload)
+        cache = self.__dict__.get("_verified_destinations", {})
+        return fingerprint is not None and any(
+            key[0] == group.key and href in entries and entries[href][0] == fingerprint
+            for key, entries in cache.items()
+        )
 
     def _known_link(
         self, group: GroupRef, copied: str, payload: dict[str, Any]
@@ -1880,13 +1897,12 @@ class MobilePostSource(BrowserSession):
         seen: set[tuple] = set()
         seen_ids: set[str] = set()
         verified_links: dict[str, tuple[dict[str, Any], str]] = {}
+        scan_hrefs: set[str] = set()
         marker_pass = None
         stagnant = 0
         scrolls = 0
         post_limit = (
-            policy.sample_count * (policy.max_scrolls + 1)
-            if boundary_post_id
-            else policy.sample_count
+            policy.catch_up_post_limit if boundary_post_id else policy.sample_count
         )
         scan_index = 0
         extra_scrolls = 0
@@ -2020,7 +2036,10 @@ class MobilePostSource(BrowserSession):
                             # Re-rendered cards have new action/DOM tokens.
                             # Reuse a result only after freshly copying the
                             # SAME link and matching the complete source again.
+                            # The card as shown now is remembered too, so a
+                            # later check recognises it without its link.
                             href = cached[1]
+                            self._remember_destination(group, preview, payload, href)
                             LOGGER.debug("Verified copied link reused within scan")
                         elif linked := self._known_link(group, copied, payload):
                             # An earlier check opened this same link and proved
@@ -2029,6 +2048,7 @@ class MobilePostSource(BrowserSession):
                             # card is unchanged, so it is not opened again.
                             href = linked
                             verified_links[copied] = (payload.copy(), href)
+                            self._remember_destination(group, preview, payload, href)
                             reuse[2] += 1
                             LOGGER.debug("Copied link recognised across checks")
                         else:
@@ -2065,10 +2085,21 @@ class MobilePostSource(BrowserSession):
                                     ),
                                 )
                             verified_links[copied] = (payload.copy(), href)
-                            self._remember_destination(group, preview, payload, href)
-                            self._remember_link(group, copied, payload, href)
                             if self._opened_before(group, href):
                                 reuse[3] += 1
+                                # Fixed facts only: why a destination this
+                                # process had verified was opened again.
+                                LOGGER.debug(
+                                    "Verified post opened again",
+                                    read_earlier_in_scan=href in scan_hrefs,
+                                    card_complete=not preview.get("partial", False),
+                                    body_unchanged=self._verified_body(
+                                        group, payload, href
+                                    ),
+                                )
+                            self._remember_destination(group, preview, payload, href)
+                            self._remember_link(group, copied, payload, href)
+                    scan_hrefs.add(href)
                     signature = (
                         payload["cardToken"],
                         payload["actionToken"],

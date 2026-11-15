@@ -45,6 +45,9 @@ class StateRepository(Protocol):
     def notification_boundary(self, group: GroupRef) -> str | None:
         """Return the post that the next scan should try to reach."""
 
+    def posts_read_since_boundary(self, group: GroupRef, posts: Sequence[Post]) -> int:
+        """Count the distinct posts read since that post was last read."""
+
     def observe(
         self,
         group: GroupRef,
@@ -141,13 +144,28 @@ class MonitorService:
         )
         observed_at = datetime.now(timezone.utc)
         coverage_options: dict[str, bool] = {}
-        if scan.marker_out_of_reach:
+        read_count = len(scan.posts)
+        out_of_reach = scan.marker_out_of_reach
+        if (
+            not out_of_reach
+            and scan.bounded
+            and scan.posts
+            and boundary_post_id is not None
+            and all(post.post_id != boundary_post_id for post in scan.posts)
+        ):
+            # Checks that each stopped early still read the feed from its
+            # newest post down. Once they have together read as many posts
+            # above the marker as one scan may, it is just as far out of reach.
+            read_count = self.state.posts_read_since_boundary(group, scan.posts)
+            out_of_reach = read_count >= policy.catch_up_post_limit
+        if out_of_reach:
             # Every post a scan may read was read and the marker was not there.
             # Posts older than these were never read and are given up.
             LOGGER.warning(
                 "Notification marker beyond the scan limit; starting a new one",
                 group_key=group.key,
                 post_count=len(scan.posts),
+                read_count=read_count,
             )
             coverage_options["retire_boundary"] = True
         elif scan.bounded:

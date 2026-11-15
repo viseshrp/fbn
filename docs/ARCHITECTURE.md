@@ -318,15 +318,23 @@ and only against a post this process has itself verified:
   and time, are never recognised by content and always use their copied links;
 - canonical group and alias validation still runs on the remembered link.
 
+One post is shown as more than one card. After a scroll the feed can show a
+card again under new card and menu IDs, either collapsed as before or still
+expanded from the earlier pass. A verified card is therefore remembered both
+as the preview first shown and as the complete card, and a card that is matched
+through its freshly copied link is remembered as shown then. Without this, a
+post that a check had recognised and expanded was not recognised when it was
+shown again expanded, and its destination was opened again in the same scan.
+
 Content cannot identify every card. A card that is not recognised still has its
 link copied from its own menu. When an earlier check in the same process opened
 that same link and proved its destination, and the complete card is unchanged
 (same author, same body or media, same publication time; for an unread card,
 same author and time), the destination is not opened again. Otherwise the
 remembered link is dropped and the destination is opened and verified as
-usual. Without this, every check re-opened each card that content could not
-identify, and in a long backlog those re-openings used up the destinations a
-check may open before any older post was reached.
+usual. This helps only where the same link is handed out again: Facebook can
+return a different link for the same post on each page load, and such a card
+is opened and verified again.
 
 Each in-memory cache holds at most 128 entries, drops one not seen for 24
 hours, and stores only digests of the compared fields and of the copied link.
@@ -336,7 +344,10 @@ the next ten. Passes that only recognise cards do not consume `--max-scrolls`,
 up to 40 further passes.
 Each scan logs only counts: cards recognised by content, cards recognised by
 their copied link, destinations opened, and opened destinations that this
-process had already opened before.
+process had already opened before. Each of those reopenings also logs three
+fixed facts at debug level: whether the post had already been read in this
+scan, whether the card was complete, and whether its complete body equals the
+one verified before.
 A pass that finds no new post counts as stagnant only when the preceding
 scroll did not move the page. A pass that moved over content without a new
 post opens nothing and, like a pass of recognised cards, does not consume
@@ -524,6 +535,15 @@ Posts older than the ones read are given up. Every other bounded stop
 (destination limit, scroll or stagnant limit, scan budget, unreadable card,
 unknown publication time) keeps the boundary, because a later scan can still
 read further.
+
+One scan may not get that far: it opens at most ten destinations and has a
+180-second budget, so a long backlog is read over several checks. Each of them
+reads the feed from its newest post down, so the posts read since the boundary
+was last read are the posts above it. After a bounded scan without the
+boundary, the monitor asks the state for the number of distinct posts read
+since then, this scan included (`posts_read_since_boundary`). Once that number
+reaches the same `sample_count * (max_scrolls + 1)` limit, the boundary is as
+far out of reach as for one scan and is retired in the same way.
 
 ```sql
 CREATE TABLE groups (

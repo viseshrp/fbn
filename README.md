@@ -583,9 +583,9 @@ the old marker in place so later scans can finish catching up.
   A deeper card whose date cannot be read ends the scan above it: the verified
   posts above are still notified and the marker stays in place.
   A marker deeper than the catch-up sample limit cannot be reached by any
-  scan. Once a check has read that many posts without finding it, the marker
-  moves to the newest notified post; older posts that were never read are not
-  notified.
+  scan. Once checks have read that many different posts above it without
+  finding it, in one scan or over several, the marker moves to the newest
+  notified post; older posts that were never read are not notified.
 
 ### Durable state and schema migrations
 

@@ -4488,6 +4488,35 @@ def test_cross_check_destination_cache_is_bounded_and_expires(monkeypatch):
     assert not source.__dict__["_verified_destinations"]
 
 
+def test_verified_card_is_remembered_as_its_preview_and_as_the_complete_card():
+    source = MobilePostSource(BrowserSettings(profile_dir=Path("unused")))
+    group = parse_group_ref("contract-group")
+    preview = {
+        "author": "A",
+        "text": "Start",
+        "partial": True,
+        "mediaCount": 0,
+        "timestampLabel": "x",
+    }
+    complete = {**preview, "text": "Start and end", "partial": False}
+    edited = {**complete, "text": "Start and another end"}
+    assert not source._verified_body(group, complete, "href")
+    source._remember_destination(group, preview, complete, "href")
+    # The feed shows the same post collapsed, and later already expanded.
+    assert source._known_destination(group, preview) == "href"
+    assert source._known_destination(group, complete) == "href"
+    assert source._confirm_known_destination(group, complete, complete, "href")
+    assert source._known_destination(group, edited) is None
+    assert source._known_destination(parse_group_ref("other"), complete) is None
+    assert source._verified_body(group, complete, "href")
+    assert not source._verified_body(group, complete, "other-href")
+    assert not source._verified_body(group, edited, "href")
+    assert not source._verified_body(group, preview, "href")
+    assert not source._verified_body(parse_group_ref("other"), complete, "href")
+    cached = repr(source.__dict__["_verified_destinations"])
+    assert "Start" not in cached and "'A'" not in cached
+
+
 def test_copied_link_is_recognised_only_for_the_same_unchanged_card(monkeypatch):
     from fbn import mobile
 
@@ -5216,6 +5245,87 @@ def test_known_preview_is_expanded_and_must_match_the_verified_body(tmp_path, ed
         third = source.fetch_recent(group, policy, boundary_post_id="301")
         assert not third.bounded and visited == ["301", "301"]
         assert third.posts[0].text == state["full"].strip()
+
+
+@pytest.mark.parametrize("shown_again", ["expanded", "other_preview"])
+def test_card_shown_again_in_another_form_is_not_opened_again(
+    tmp_path, monkeypatch, shown_again
+):
+    """A verified post keeps being recognised however its card is shown.
+
+    After a scroll the feed shows the card again under a new menu ID, either
+    still expanded or cut at another point, and every page load hands out a
+    different link for the same post.
+    """
+
+    import fbn.mobile as mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile.LOGGER,
+        "info",
+        lambda message, **fields: logged.append((message, fields)),
+    )
+    full = "Synthetic preview. " + "Complete synthetic body. " * 8
+    other = "Synthetic preview. Complete synthetic body."
+    state = {"loads": 0, "preview": "Synthetic preview."}
+    visited = []
+    with _local_context(tmp_path) as context:
+
+        def serve(route):
+            if "/share/" in route.request.url:
+                visited.append(route.request.url.rstrip("/").split("/")[-1])
+                html = mobile_fixture([("301", "Synthetic Author", full)]) + (
+                    "<script>history.replaceState(null,'',"
+                    "'/groups/contract-group/posts/301/')</script>"
+                )
+            else:
+                state["loads"] += 1
+                recut = (
+                    "card.querySelector('[data-action-id=\"expand-301\"]').innerHTML="
+                    f"'<div>{other} <span>...see more</span></div>';"
+                    if shown_again == "other_preview"
+                    else ""
+                )
+                html = mobile_preview_fixture(state["preview"], full) + (
+                    "<script>function copyPost(){navigator.clipboard.writeText("
+                    "'https://m.facebook.com/share/p/'+activePost+"
+                    f"'s{state['loads']}/');}}"
+                    "let shows=0;window.scrollBy=()=>{"
+                    "const old=document.querySelector('[data-story]');"
+                    "const card=old.cloneNode(true);"
+                    "card.querySelector('[data-action-id]')"
+                    ".setAttribute('data-action-id','shown-again-'+(++shows));"
+                    + recut
+                    + "old.replaceWith(card);};</script>"
+                )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", serve)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        group = parse_group_ref("contract-group")
+        policy = ScanPolicy(max_scrolls=1, settle_seconds=0)
+        first = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not first.bounded and visited == ["301s1"]
+        if shown_again == "other_preview":
+            state["preview"] = other
+        second = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not second.bounded and state["loads"] == 2
+        assert second.posts[0].text == first.posts[0].text == full.strip()
+        # Neither form of the card opened its destination a second time.
+        assert visited == ["301s1"]
+        reuse = [f for m, f in logged if m == "Mobile destination reuse"]
+        assert [f["destination_load_count"] for f in reuse] == [1, 0]
+        assert [f["reopened_count"] for f in reuse] == [0, 0]
+        assert reuse[1]["cross_check_count"] == 2
+        cached = repr(source.__dict__["_verified_destinations"])
+        assert "Synthetic" not in cached and "share" not in cached
 
 
 def test_archived_marker_mobile_catchup_delivers_and_does_not_repeat(tmp_path):

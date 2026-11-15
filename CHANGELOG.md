@@ -38,6 +38,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   again while the complete card is unchanged. Each scan also logs how many
   cards were recognised by link and how many opened links had been opened
   before.
+- Recognise a verified post when the feed shows its card again in another
+  form. After a scroll the feed can show a card again under new IDs while it
+  is still expanded from an earlier pass. Only the collapsed preview was
+  remembered, so the post was opened a second time in the same scan, and each
+  of those openings used up one of the ten links a check may open. The
+  complete card is now remembered as well as the preview. Each reopening
+  logs whether the post had already been read in the scan, whether the card
+  was complete, and whether its body was unchanged.
+- Retire an unreachable notification marker over several checks. One scan
+  rarely reads the whole catch-up limit: it opens at most ten links and has a
+  180-second budget. The marker is now also retired once the checks since it
+  was last read have together read that many different posts above it.
 - Keep a post that was read in full in the feed when its own page shows a
   body the reader cannot classify. The alert carries the feed text, and the
   page must still be a post of the verified group by the same author at the

@@ -218,6 +218,45 @@ class SQLiteStateRepository:
         value = row["notification_boundary_post_id"]
         return str(value) if value is not None else None
 
+    def posts_read_since_boundary(self, group: GroupRef, posts: Sequence[Post]) -> int:
+        """Count the distinct posts read since the stored marker was last read.
+
+        ``posts`` are those of a scan that is not recorded yet. Every scan
+        reads the feed from its newest post down, so the posts read since the
+        marker was last read are the ones above it. Zero without a marker
+        that was itself read.
+        """
+
+        if not isinstance(group, GroupRef):
+            raise ValueError("group must be a GroupRef")
+        connection = self._require_connection()
+        marker = connection.execute(
+            """
+            SELECT posts.last_seen_at
+            FROM groups
+            JOIN posts
+              ON posts.group_key = groups.group_key
+             AND posts.post_id = groups.notification_boundary_post_id
+            WHERE groups.group_key = ?
+            """,
+            (group.key,),
+        ).fetchone()
+        if marker is None:
+            return 0
+        read = {
+            row["post_id"]
+            for row in connection.execute(
+                """
+                SELECT post_id
+                FROM posts
+                WHERE group_key = ? AND last_seen_at > ?
+                """,
+                (group.key, marker["last_seen_at"]),
+            )
+        }
+        read.update(post.post_id for post in self._unique_posts(group, posts))
+        return len(read)
+
     def observe(
         self,
         group: GroupRef,
@@ -232,8 +271,8 @@ class SQLiteStateRepository:
 
         ``preserve_boundary`` keeps the stored marker after a scan that stopped
         early. ``retire_boundary`` replaces a marker these posts do not contain,
-        for a scan that read as far as any scan may and so proved that the
-        marker can no longer be reached.
+        once as many posts as a scan may read have been read above it, which
+        proves that the marker can no longer be reached.
         """
 
         if not isinstance(group, GroupRef):

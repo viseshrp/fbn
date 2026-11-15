@@ -127,6 +127,12 @@ class ScanPolicy:
             raise ValueError("settle_seconds must be non-negative")
         _require_timezone_name(self.timezone_name)
 
+    @property
+    def catch_up_post_limit(self) -> int:
+        """The most posts a scan that looks for a notification marker reads."""
+
+        return self.sample_count * (self.max_scrolls + 1)
+
 
 @dataclass(frozen=True, slots=True)
 class ScanResult:

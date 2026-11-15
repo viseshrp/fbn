@@ -169,6 +169,54 @@ def test_retiring_a_marker_keeps_it_when_nothing_or_the_marker_was_read(
         assert state.notification_boundary(GROUP) == "new"
 
 
+def test_posts_read_since_the_marker_was_last_read_are_counted_once(
+    tmp_path: Path,
+) -> None:
+    times = iter(T0 + timedelta(minutes=minute) for minute in range(60))
+    with SQLiteStateRepository(
+        tmp_path / "state.sqlite3", clock=lambda: next(times)
+    ) as state:
+        # Without a marker there is nothing to count from.
+        assert state.posts_read_since_boundary(GROUP, (post("a"),)) == 0
+        state.observe(GROUP, (post("marker", position=0), post("old", position=1)))
+        assert state.notification_boundary(GROUP) == "marker"
+        # A post read together with the marker is not above it.
+        assert state.posts_read_since_boundary(GROUP, ()) == 0
+        assert state.posts_read_since_boundary(GROUP, (post("a"), post("a"))) == 1
+        state.observe(
+            GROUP,
+            (post("b", position=0), post("a", position=1)),
+            preserve_boundary=True,
+        )
+        assert state.posts_read_since_boundary(GROUP, ()) == 2
+        page = (post("c", position=0), post("b", position=1))
+        assert state.posts_read_since_boundary(GROUP, page) == 3
+        state.observe(GROUP, page, preserve_boundary=True)
+        assert state.posts_read_since_boundary(GROUP, ()) == 3
+        assert state.notification_boundary(GROUP) == "marker"
+        # Reading the marker again starts the count afresh.
+        state.observe(GROUP, (post("c", position=0), post("marker", position=1)))
+        assert state.notification_boundary(GROUP) == "c"
+        assert state.posts_read_since_boundary(GROUP, ()) == 0
+        with pytest.raises(ValueError, match="group must be a GroupRef"):
+            state.posts_read_since_boundary("example-group", ())  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="belongs to a different group"):
+            state.posts_read_since_boundary(
+                GROUP,
+                (
+                    Post(
+                        group_key="other-group",
+                        post_id="z",
+                        url="https://www.facebook.com/groups/other-group/posts/z/",
+                        text="body z",
+                        author="Author",
+                        observed_at=T0,
+                        position=0,
+                    ),
+                ),
+            )
+
+
 def test_a_marker_cannot_be_both_preserved_and_retired(tmp_path: Path) -> None:
     with SQLiteStateRepository(tmp_path / "state.sqlite3", clock=lambda: T0) as state:
         with pytest.raises(ValueError, match="both preserved and retired"):
