@@ -4,6 +4,11 @@ services:
     init: true
     restart: "no"
     network_mode: none
+    # The image declares its data directory as a volume. Compose carries that
+    # anonymous volume over when it recreates the container for the next exit
+    # code, and `down --volumes` then leaves it behind. Mount nothing durable.
+    tmpfs:
+      - /home/fbn/.local/share/fbn
     healthcheck:
       disable: true
     entrypoint: [python, -c]

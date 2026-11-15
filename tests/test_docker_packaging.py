@@ -121,6 +121,30 @@ def test_container_workflow_publishes_nightly_and_tagged_ghcr_images() -> None:
     assert "make docker-publish-manifest" in docker_workflow
 
 
+def test_smoke_test_leaves_no_anonymous_volume_behind() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    script = (REPO_ROOT / "scripts/docker.sh").read_text(encoding="utf-8")
+    fixture = (REPO_ROOT / "tests/fixtures/compose_exit.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    # The image declares its data directory as a volume, so a container made
+    # from it owns an anonymous volume unless something is mounted there.
+    (data_dir,) = re.findall(r'^VOLUME \["([^"]+)"\]$', dockerfile, flags=re.MULTILINE)
+
+    # Compose keeps that volume once it has recreated the container, and
+    # `down --volumes` then leaves it behind.
+    assert f"    tmpfs:\n      - {data_dir}\n" in fixture
+    # Only --rm removes a container's anonymous volume with it; a container
+    # created without it must be removed together with its volume.
+    assert re.findall(r"docker run (?!--rm\b)", script) == []
+    removals = re.findall(r"docker rm ([^\n]*)", script)
+    assert len(removals) == 2
+    assert all(removal.startswith("-f -v ") for removal in removals)
+    # The smoke test checks the volumes its own containers mounted.
+    assert "expect_volumes_removed ${used_volumes}" in script
+
+
 def test_agents_and_readme_document_docker_preferred_workflow() -> None:
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

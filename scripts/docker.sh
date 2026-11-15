@@ -226,9 +226,30 @@ cmd_pull() {
   docker pull "${image}"
 }
 
+# The volumes the given containers mount, one name per line.
+mounted_volumes() {
+  [[ "$#" -gt 0 ]] || return 0
+  docker inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' "$@"
+}
+
+# Fail if any of the given volumes still exists, and remove it either way.
+expect_volumes_removed() {
+  local volume left=0
+  for volume in "$@"; do
+    if docker volume inspect "${volume}" >/dev/null 2>&1; then
+      echo "ERROR: smoke test left Docker volume ${volume} behind" >&2
+      docker volume rm -f "${volume}" >/dev/null 2>&1 || true
+      left=1
+    fi
+  done
+  return "${left}"
+}
+
 smoke_cleanup() {
   local log_container="$1" compose_project="$2" persistence_volume="$3"
-  docker rm -f "${log_container}" >/dev/null 2>&1 || true
+  # The image declares a data volume, so a container created without --rm
+  # owns an anonymous one: remove it together with the container.
+  docker rm -f -v "${log_container}" >/dev/null 2>&1 || true
   FBN_TEST_IMAGE="fbn:cleanup" docker compose --env-file /dev/null --project-name "${compose_project}" -f "${REPO_ROOT}/tests/fixtures/compose_exit.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker volume rm -f "${persistence_volume}" >/dev/null 2>&1 || true
 }
@@ -275,7 +296,9 @@ cmd_smoke() {
   local log_output
   log_output="$(docker logs "${log_container}" 2>&1)"
   grep -F 'Container logging probe | probe=yes' <<<"${log_output}" >/dev/null
-  docker rm -f "${log_container}" >/dev/null
+  local used_volumes
+  used_volumes="$(mounted_volumes "${log_container}")"
+  docker rm -f -v "${log_container}" >/dev/null
 
   docker image inspect "${image}" |
     docker run --rm -i --network none \
@@ -326,6 +349,10 @@ assert "facebook-auth.json" not in history
     set -e
     expect_equal "compose exit code (${expected})" "${actual}" "${expected}"
   done
+  local compose_containers
+  compose_containers="$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}")"
+  # shellcheck disable=SC2086 # one container ID per word
+  used_volumes+=" $(mounted_volumes ${compose_containers})"
   FBN_TEST_IMAGE="${image}" docker compose --env-file /dev/null --project-name "${compose_project}" -f "${REPO_ROOT}/tests/fixtures/compose_exit.yaml" down --volumes --remove-orphans >/dev/null 2>&1
 
   docker run --rm \
@@ -379,6 +406,8 @@ runtime.stop()
 
   smoke_cleanup "${log_container}" "${compose_project}" "${persistence_volume}"
   trap - EXIT
+  # shellcheck disable=SC2086 # one volume name per word
+  expect_volumes_removed ${used_volumes} "${persistence_volume}"
   echo "Smoke test passed: ${image}"
 }
 

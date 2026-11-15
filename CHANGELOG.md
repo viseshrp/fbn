@@ -9,6 +9,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Stop `make docker-smoke` leaving two empty anonymous Docker volumes behind
+  on every run. The logging-probe container is now removed together with its
+  volume, the Compose exit-code fixture mounts a tmpfs over the image's data
+  directory, and the smoke test fails if a volume its containers mounted
+  still exists afterwards.
 - Retry a feed with one ambiguous post timestamp within the current check.
   Keep the posts unsaved until the feed is readable; stop and alert if the
   ambiguity persists through all retries. Log whether timestamp candidates
