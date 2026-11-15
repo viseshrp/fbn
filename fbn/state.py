@@ -226,8 +226,15 @@ class SQLiteStateRepository:
         notify_initial: bool = False,
         observed_at: datetime | None = None,
         preserve_boundary: bool = False,
+        retire_boundary: bool = False,
     ) -> ObservationBatch:
-        """Atomically store unseen posts and, when appropriate, outbox rows."""
+        """Atomically store unseen posts and, when appropriate, outbox rows.
+
+        ``preserve_boundary`` keeps the stored marker after a scan that stopped
+        early. ``retire_boundary`` replaces a marker these posts do not contain,
+        for a scan that read as far as any scan may and so proved that the
+        marker can no longer be reached.
+        """
 
         if not isinstance(group, GroupRef):
             raise ValueError("group must be a GroupRef")
@@ -235,6 +242,10 @@ class SQLiteStateRepository:
             raise ValueError("notify_initial must be a boolean")
         if not isinstance(preserve_boundary, bool):
             raise ValueError("preserve_boundary must be a boolean")
+        if not isinstance(retire_boundary, bool):
+            raise ValueError("retire_boundary must be a boolean")
+        if preserve_boundary and retire_boundary:
+            raise ValueError("a boundary cannot be both preserved and retired")
         scan_time = _as_utc(
             self._clock() if observed_at is None else observed_at,
             "observed_at",
@@ -370,6 +381,7 @@ class SQLiteStateRepository:
                 group.key,
                 ordered_posts,
                 boundary_post_id,
+                retire_missing=retire_boundary,
             )
             if preserve_boundary and boundary_post_id is not None:
                 next_boundary_post_id = boundary_post_id
@@ -599,13 +611,21 @@ class SQLiteStateRepository:
         group_key: str,
         ordered_posts: Sequence[Post],
         current_boundary_post_id: str | None,
+        *,
+        retire_missing: bool = False,
     ) -> str | None:
-        """Advance a visible marker, but keep a missing marker as an open gap."""
+        """Advance a visible marker, but keep a missing marker as an open gap.
+
+        ``retire_missing`` closes that gap at the newest queued post instead:
+        the caller has shown that no scan can reach the missing marker.
+        """
 
         if not ordered_posts:
             return current_boundary_post_id
-        if current_boundary_post_id is not None and all(
-            post.post_id != current_boundary_post_id for post in ordered_posts
+        if (
+            not retire_missing
+            and current_boundary_post_id is not None
+            and all(post.post_id != current_boundary_post_id for post in ordered_posts)
         ):
             return current_boundary_post_id
         queued_ids = SQLiteStateRepository._visible_outbox_post_ids(

@@ -4559,6 +4559,7 @@ def _paged_source(
     unsupported_page=None,
     other_author=None,
     empty_scrolls=0,
+    timed=False,
 ):
     def serve(route):
         url = route.request.url
@@ -4566,9 +4567,21 @@ def _paged_source(
         key = url.rstrip("/").split("/")[-1]
         if target:
             visited.append(key)
-        html = mobile_fixture(
-            [next(p for p in stories if p[0] == key)] if target else list(stories)
-        )
+        shown = [next(p for p in stories if p[0] == key)] if target else list(stories)
+        html = mobile_fixture(shown)
+        if timed:
+            # Each story has its own publication minute, later for a newer
+            # story, in the feed and on its own page.
+            label = 'aria-label="Sunday, October 11, 2026 at 10:00 AM"'
+            parts = html.split(label)
+            assert len(parts) == len(shown) + 1
+            html = (
+                "".join(
+                    part + label.replace("10:00", f"10:{int(story[0]) - 290:02d}")
+                    for part, story in zip(parts[:-1], shown, strict=True)
+                )
+                + parts[-1]
+            )
         if target and key == other_author:
             html = html.replace("Author", "Another Writer")
         if unreadable is not None and not target:
@@ -4698,6 +4711,65 @@ def test_scrolling_past_known_posts_does_not_use_the_scroll_allowance(tmp_path):
         assert not third.bounded
         assert [p.post_id for p in third.posts] == [str(n) for n in range(308, 300, -1)]
         assert visited == [str(n) for n in range(308, 300, -1)]
+
+
+def test_marker_deeper_than_the_post_limit_is_retired_once_the_limit_is_read(
+    tmp_path, monkeypatch
+):
+    """A gap that no scan can close ends when a scan has read to its limit."""
+
+    from types import SimpleNamespace
+
+    import fbn.mobile as mobile
+    from fbn.monitor import MonitorService
+
+    monkeypatch.setattr(mobile, "MAX_DESTINATION_LOADS_PER_SCAN", 3)
+    stories = [(str(n), "Author", f"Body {n}") for n in range(301, 298, -1)]
+    visited = []
+    sent = []
+    group = parse_group_ref("contract-group")
+    # A scan that looks for a marker reads at most 2 * (1 + 1) = 4 posts.
+    policy = ScanPolicy(sample_count=2, max_scrolls=1, settle_seconds=0)
+    with (
+        _local_context(tmp_path) as context,
+        SQLiteStateRepository(tmp_path / "state.sqlite3") as state,
+    ):
+        source = _paged_source(
+            tmp_path, context, stories, visited, reveal=2, timed=True
+        )
+        service = MonitorService(source, state, SimpleNamespace(send=sent.append))
+
+        def check():
+            visited.clear()
+            return service.run_once(group, policy)
+
+        assert check().delivered == 0
+        assert state.notification_boundary(group) == "301"
+
+        # Six posts arrive: the marker is now deeper than a scan may read.
+        stories[:0] = [(str(n), "Author", f"Body {n}") for n in range(307, 301, -1)]
+        first = check()
+        assert first.delivered == 3 and visited == ["307", "306", "305"]
+        assert state.notification_boundary(group) == "301"
+
+        # This check reads its fourth post and then meets a fifth: the limit.
+        second = check()
+        assert second.delivered == 1 and visited == ["304"]
+        assert state.notification_boundary(group) == "307"
+
+        # The new marker is found at once, so the check is complete and quiet.
+        third = check()
+        assert third.delivered == 0 and visited == []
+        assert state.notification_boundary(group) == "307"
+
+        stories.insert(0, ("308", "Author", "Body 308"))
+        fourth = check()
+        assert fourth.delivered == 1 and visited == ["308"]
+        assert state.notification_boundary(group) == "308"
+        assert not state.pending(group)
+    # The two posts below the limit were never read, so never announced.
+    assert len(sent) == 3
+    assert not any("/303/" in item.body or "/302/" in item.body for item in sent)
 
 
 def test_unreadable_card_below_verified_posts_bounds_the_scan(tmp_path):

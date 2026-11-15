@@ -2147,4 +2147,11 @@ class MobilePostSource(BrowserSession):
                 scroll_count=scrolls,
                 bounded=bounded,
             )
-        return ScanResult(tuple(posts), PageState.FEED.value, scrolls, bounded)
+        # The post limit is the deepest any scan reads. A marker that is not
+        # within it can never be found again, so the open gap cannot close.
+        marker_out_of_reach = (
+            stop_reason == "post_limit" and bool(boundary_post_id) and not marker_found
+        )
+        return ScanResult(
+            tuple(posts), PageState.FEED.value, scrolls, bounded, marker_out_of_reach
+        )

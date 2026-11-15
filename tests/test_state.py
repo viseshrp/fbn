@@ -112,6 +112,73 @@ def test_bounded_scan_does_not_advance_an_existing_marker(tmp_path: Path) -> Non
         assert [item.post_id for item in complete.pending] == ["late"]
 
 
+def test_marker_out_of_reach_is_retired_at_the_newest_queued_post(
+    tmp_path: Path,
+) -> None:
+    with SQLiteStateRepository(tmp_path / "state.sqlite3", clock=lambda: T0) as state:
+        state.observe(GROUP, (post("marker"),))
+        # A scan that stopped early does not show the marker: the gap stays open.
+        gap = state.observe(
+            GROUP,
+            (post("b", position=0), post("a", position=1)),
+            preserve_boundary=True,
+        )
+        assert [item.post_id for item in gap.pending] == ["b", "a"]
+        assert state.notification_boundary(GROUP) == "marker"
+        state.mark_delivered([item.event_id for item in gap.pending])
+
+        # A scan that read as far as any scan may still does not show it.
+        retired = state.observe(
+            GROUP,
+            (post("c", position=0), post("b", position=1), post("a", position=2)),
+            retire_boundary=True,
+        )
+        assert [item.post_id for item in retired.pending] == ["c"]
+        assert state.notification_boundary(GROUP) == "c"
+        state.mark_delivered([item.event_id for item in retired.pending])
+
+        # The new marker bounds later scans like any other marker.
+        later = state.observe(
+            GROUP,
+            (post("d", position=0), post("c", position=1), post("b", position=2)),
+        )
+        assert [item.post_id for item in later.pending] == ["d"]
+        assert state.notification_boundary(GROUP) == "d"
+        state.mark_delivered([item.event_id for item in later.pending])
+        repeat = state.observe(GROUP, (post("d", position=0), post("c", position=1)))
+        assert repeat.pending == ()
+        assert state.notification_boundary(GROUP) == "d"
+
+
+def test_retiring_a_marker_keeps_it_when_nothing_or_the_marker_was_read(
+    tmp_path: Path,
+) -> None:
+    with SQLiteStateRepository(tmp_path / "state.sqlite3", clock=lambda: T0) as state:
+        state.observe(GROUP, (post("marker"),))
+        # No post was read, so there is nothing to start a new marker from.
+        empty = state.observe(GROUP, (), retire_boundary=True)
+        assert empty.pending == ()
+        assert state.notification_boundary(GROUP) == "marker"
+        # A marker that was read advances exactly as after a complete scan.
+        seen = state.observe(
+            GROUP,
+            (post("new", position=0), post("marker", position=1)),
+            retire_boundary=True,
+        )
+        assert [item.post_id for item in seen.pending] == ["new"]
+        assert state.notification_boundary(GROUP) == "new"
+
+
+def test_a_marker_cannot_be_both_preserved_and_retired(tmp_path: Path) -> None:
+    with SQLiteStateRepository(tmp_path / "state.sqlite3", clock=lambda: T0) as state:
+        with pytest.raises(ValueError, match="both preserved and retired"):
+            state.observe(
+                GROUP, (post("a"),), preserve_boundary=True, retire_boundary=True
+            )
+        with pytest.raises(ValueError, match="retire_boundary must be a boolean"):
+            state.observe(GROUP, (post("a"),), retire_boundary=1)  # type: ignore[arg-type]
+
+
 def test_run_lock_rejects_a_competing_process(tmp_path: Path) -> None:
     state_path = tmp_path / "state.sqlite3"
     script = """

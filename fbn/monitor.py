@@ -53,6 +53,7 @@ class StateRepository(Protocol):
         notify_initial: bool = False,
         observed_at: datetime | None = None,
         preserve_boundary: bool = False,
+        retire_boundary: bool = False,
     ) -> ObservationBatch:
         """Atomically record a scan and return pending delivery records."""
 
@@ -139,7 +140,18 @@ class MonitorService:
             bounded=scan.bounded,
         )
         observed_at = datetime.now(timezone.utc)
-        coverage_options = {"preserve_boundary": True} if scan.bounded else {}
+        coverage_options: dict[str, bool] = {}
+        if scan.marker_out_of_reach:
+            # Every post a scan may read was read and the marker was not there.
+            # Posts older than these were never read and are given up.
+            LOGGER.warning(
+                "Notification marker beyond the scan limit; starting a new one",
+                group_key=group.key,
+                post_count=len(scan.posts),
+            )
+            coverage_options["retire_boundary"] = True
+        elif scan.bounded:
+            coverage_options["preserve_boundary"] = True
         batch = self.state.observe(
             group,
             scan.posts,

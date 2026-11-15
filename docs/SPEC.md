@@ -236,6 +236,10 @@ the same run.
 - If the stored boundary is still absent, all unnotified visible posts are
   queued and the stored boundary is retained. Repeated scans therefore keep
   the gap open and queue posts that become visible later.
+- A scan that reads the whole catch-up limit without finding the stored
+  boundary has shown that no scan can reach it. The boundary is then replaced
+  by the newest queued post and a warning is logged. Posts older than the ones
+  that scan read were never read and are not notified.
 - A visible boundary advances to the newest visible queued post. If no boundary
   has ever been stored, a visible outbox item may be used as a fallback.
   Existing version 1 databases seed the boundary from the top-positioned item

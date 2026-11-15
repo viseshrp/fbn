@@ -25,6 +25,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no new post (a tall card or a non-post unit) no longer counts towards the
   stagnant limit or the scroll allowance; only a page that has stopped moving
   ends the scan as stagnant. The end of a scan logs scroll counters only.
+- Retire a notification marker that no scan can reach. A marker deeper than
+  the catch-up limit (or deleted) left every later check incomplete and made
+  it read to that limit each time. A check that reads the whole limit without
+  finding the marker now moves it to the newest notified post and logs a
+  warning; older posts that were never read are not notified.
 - Keep a post that was read in full in the feed when its own page shows a
   body the reader cannot classify. The alert carries the feed text, and the
   page must still be a post of the verified group by the same author at the

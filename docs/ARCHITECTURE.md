@@ -499,6 +499,18 @@ is queued but the boundary is retained. This open gap lets later scans queue
 posts that were previously beyond the scan limit. Existing pending events
 remain retryable across restarts.
 
+A scan that looks for a boundary reads at most
+`sample_count * (max_scrolls + 1)` posts. A boundary deeper than that, or one
+that was deleted, can never be found, and while it is stored every check reads
+to that limit and ends as bounded. A scan that stops on this post limit
+without the boundary therefore reports `marker_out_of_reach`: the monitor logs
+a warning and `observe(retire_boundary=True)` replaces the boundary with the
+newest queued post, in the same transaction that queues what the scan read.
+Posts older than the ones read are given up. Every other bounded stop
+(destination limit, scroll or stagnant limit, scan budget, unreadable card,
+unknown publication time) keeps the boundary, because a later scan can still
+read further.
+
 ```sql
 CREATE TABLE groups (
     group_key TEXT PRIMARY KEY,

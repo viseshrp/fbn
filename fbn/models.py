@@ -136,6 +136,9 @@ class ScanResult:
     page_state: str
     scrolls: int
     bounded: bool
+    # The scan read as many posts as one scan may read and the stored marker
+    # was not among them, so no later scan can reach that marker either.
+    marker_out_of_reach: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.posts, tuple) or not all(
@@ -146,6 +149,10 @@ class ScanResult:
         _require_non_negative(self.scrolls, "scrolls")
         if not isinstance(self.bounded, bool):
             raise ValueError("bounded must be a boolean")
+        if not isinstance(self.marker_out_of_reach, bool):
+            raise ValueError("marker_out_of_reach must be a boolean")
+        if self.marker_out_of_reach and not self.bounded:
+            raise ValueError("marker_out_of_reach requires a bounded scan")
 
 
 @dataclass(frozen=True, slots=True)

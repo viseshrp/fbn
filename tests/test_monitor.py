@@ -173,6 +173,28 @@ def test_only_complete_scans_may_advance_the_notification_boundary(bounded):
     state = FakeState(ObservationBatch(False, 1, 0, ()))
     MonitorService(CoverageSource(), state, FakeSink()).run_once(GROUP, ScanPolicy())
     assert state.observe_kwargs.get("preserve_boundary", False) is bounded
+    assert "retire_boundary" not in state.observe_kwargs
+
+
+def test_marker_beyond_the_scan_limit_is_retired_instead_of_preserved():
+    class LimitSource(FakeSource):
+        def fetch_recent(self, group, policy, *, boundary_post_id=None):
+            return ScanResult((POST,), "feed", 3, True, True)
+
+    state = FakeState(
+        ObservationBatch(False, 1, 0, ()), boundary_post_id="unreachable-post"
+    )
+    MonitorService(LimitSource(), state, FakeSink()).run_once(GROUP, ScanPolicy())
+    assert state.observe_kwargs.get("retire_boundary") is True
+    assert "preserve_boundary" not in state.observe_kwargs
+
+
+def test_scan_result_marker_out_of_reach_is_a_bounded_boolean():
+    assert ScanResult((POST,), "feed", 1, True).marker_out_of_reach is False
+    with pytest.raises(ValueError, match="marker_out_of_reach must be a boolean"):
+        ScanResult((POST,), "feed", 1, True, 1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires a bounded scan"):
+        ScanResult((POST,), "feed", 1, False, True)
 
 
 def test_run_lock_encloses_fetch_and_delivery() -> None:

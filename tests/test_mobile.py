@@ -953,3 +953,44 @@ def test_same_age_post_below_marker_is_included_conservatively():
     ]
     result = MobilePostSource._scan_result(posts, 1, False, "300")
     assert [post.post_id for post in result.posts] == ["301", "300"]
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "marker", "dated", "expected"),
+    [
+        # Only a scan that read the most posts a scan may read, and still did
+        # not find the stored marker, shows that the marker is out of reach.
+        ("post_limit", "300", True, True),
+        ("post_limit", "302", True, False),
+        ("post_limit", None, True, False),
+        ("post_limit", "300", False, False),
+        ("verification_limit", "300", True, False),
+        ("scroll_limit", "300", True, False),
+        ("stagnant_feed", "300", True, False),
+        ("scan_budget", "300", True, False),
+        ("unreadable_card", "300", True, False),
+        ("known_post_changed", "300", True, False),
+    ],
+)
+def test_only_the_post_limit_puts_a_missing_marker_out_of_reach(
+    stop_reason, marker, dated, expected
+):
+    now = datetime(2026, 10, 11, 16, tzinfo=timezone.utc)
+    posts = [
+        Post(
+            "test-group",
+            key,
+            f"https://www.facebook.com/groups/test-group/posts/{key}/",
+            "Body",
+            "Author",
+            now,
+            position,
+            published_at=now - timedelta(minutes=position) if dated else None,
+        )
+        for position, key in enumerate(("302", "301"))
+    ]
+    result = MobilePostSource._scan_result(
+        posts, 3, True, marker, stop_reason=stop_reason
+    )
+    assert result.bounded
+    assert result.marker_out_of_reach is expected
