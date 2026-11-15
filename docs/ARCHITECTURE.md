@@ -315,15 +315,28 @@ and only against a post this process has itself verified:
   one; otherwise the entry is dropped, the scan ends as bounded, and the next
   check verifies the card through its link again;
 - identical cards in one pass, or two verified posts that share author, body
-  and time, are never recognised and always use their copied links;
+  and time, are never recognised by content and always use their copied links;
 - canonical group and alias validation still runs on the remembered link.
 
-The in-memory cache holds at most 128 cards, drops a post not seen for 24
-hours, and stores only digests of the compared fields. A scan opens at most
-ten destinations and then ends as bounded, so a backlog advances in pages: each
-check recognises the cards already verified and opens the next ten. Passes that
-only recognise cards do not consume `--max-scrolls`, up to 40 further passes.
-Each scan logs only the counts of recognised cards and opened destinations.
+Content cannot identify every card. A card that is not recognised still has its
+link copied from its own menu. When an earlier check in the same process opened
+that same link and proved its destination, and the complete card is unchanged
+(same author, same body or media, same publication time; for an unread card,
+same author and time), the destination is not opened again. Otherwise the
+remembered link is dropped and the destination is opened and verified as
+usual. Without this, every check re-opened each card that content could not
+identify, and in a long backlog those re-openings used up the destinations a
+check may open before any older post was reached.
+
+Each in-memory cache holds at most 128 entries, drops one not seen for 24
+hours, and stores only digests of the compared fields and of the copied link.
+A scan opens at most ten destinations and then ends as bounded, so a backlog
+advances in pages: each check recognises the cards already verified and opens
+the next ten. Passes that only recognise cards do not consume `--max-scrolls`,
+up to 40 further passes.
+Each scan logs only counts: cards recognised by content, cards recognised by
+their copied link, destinations opened, and opened destinations that this
+process had already opened before.
 A pass that finds no new post counts as stagnant only when the preceding
 scroll did not move the page. A pass that moved over content without a new
 post opens nothing and, like a pass of recognised cards, does not consume
@@ -351,8 +364,9 @@ settle wait. Its link is still copied from its own menu and opened, and the
 destination must be a post of the verified group by the same author at the
 same publication time; the body is not compared because none was read. The
 post is saved and notified with a fixed notice in place of its text. Such a
-card is never recognised from an earlier check, so each check opens its link
-again. The reverse case is handled the same way: when a card was read in full
+card has no content to recognise, so each check copies its link again; the
+destination is opened again only when that link, the author or the publication
+time is not the one already verified. The reverse case is handled the same way: when a card was read in full
 in the feed but its own page shows an unclassified body, the post keeps the
 feed text and the page must still match the author and publication time. The first unread card of a process logs why (fixed issue names) and
 saves one private, content-free structure of the feed; the layout log

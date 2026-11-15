@@ -30,6 +30,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it read to that limit each time. A check that reads the whole limit without
   finding the marker now moves it to the newest notified post and logs a
   warning; older posts that were never read are not notified.
+- Recognise a card that content cannot identify by its freshly copied link.
+  Identical cards, and cards whose body is not read, were opened again on
+  every check. In a long backlog those re-openings used up the ten links a
+  check may open, so catch-up slowed and could stop short of the catch-up
+  limit. A link that an earlier check already verified is no longer opened
+  again while the complete card is unchanged. Each scan also logs how many
+  cards were recognised by link and how many opened links had been opened
+  before.
 - Keep a post that was read in full in the feed when its own page shows a
   body the reader cannot classify. The alert carries the feed text, and the
   page must still be a post of the verified group by the same author at the

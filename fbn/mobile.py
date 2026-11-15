@@ -68,8 +68,9 @@ MAX_SCAN_SECONDS = MOBILE_SCAN_BUDGET_SECONDS
 COPY_TIMEOUT_SECONDS = 30.0
 MAX_LINK_SECONDS = 30.0
 MAX_EXPANSION_SECONDS = 15.0
-# A destination verified in an earlier check of this process may be reused only
-# for the same freshly copied link and an exactly matching complete card.
+# A destination verified in an earlier check of this process is reused for a
+# card recognised by its content, or else for the same freshly copied link and
+# an exactly matching complete card. Each memory holds this many entries.
 CROSS_CHECK_DESTINATION_TTL_SECONDS = 24 * 60 * 60
 CROSS_CHECK_DESTINATION_LIMIT = 128
 # Destination pages opened by one check. Recognising earlier-verified cards lets
@@ -1001,6 +1002,19 @@ def _destination_fingerprint(payload: dict[str, Any]) -> tuple[Any, ...] | None:
     )
 
 
+def _link_fingerprint(payload: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Content-free proof that the complete card a link was copied from is unchanged.
+
+    The copied link identifies the post, so a card whose body was not read is
+    eligible too: its author and publication time are all a destination is
+    compared with. Only digests are retained.
+    """
+
+    if payload.get("bodyUnread"):
+        return (_digest(payload["author"]),)
+    return _destination_fingerprint(payload)
+
+
 def _card_key(payload: dict[str, Any]) -> tuple[Any, ...] | None:
     """Content-free identity of a feed card as first rendered, preview included."""
 
@@ -1516,6 +1530,30 @@ class MobilePostSource(BrowserSession):
         # Two verified posts sharing author, text and time are never guessed.
         return matches[0] if len(matches) == 1 else None
 
+    def _unrecognised_reason(
+        self, group: GroupRef, payload: dict[str, Any], repeated: bool
+    ) -> str | None:
+        """Why content did not recognise a card that looks like a verified one.
+
+        A fixed word for the log, or None when this process never verified a
+        card with this author and body.
+        """
+
+        key = _card_key(payload)
+        if key is None:
+            return None
+        cache = self.__dict__.get("_verified_destinations", {})
+        entries = cache.get((group.key, *key))
+        if not entries:
+            return None
+        if repeated:
+            return "repeated_in_pass"
+        matches = sum(
+            _same_publication(label, window, payload)
+            for _, label, window, _ in entries.values()
+        )
+        return "same_time_twice" if matches > 1 else "other_time"
+
     def _confirm_known_destination(
         self,
         group: GroupRef,
@@ -1559,6 +1597,67 @@ class MobilePostSource(BrowserSession):
         cache.move_to_end(key)
         while len(cache) > CROSS_CHECK_DESTINATION_LIMIT:
             cache.popitem(last=False)
+
+    def _known_link(
+        self, group: GroupRef, copied: str, payload: dict[str, Any]
+    ) -> str | None:
+        """The post an earlier check proved this freshly copied link opens.
+
+        Content cannot tell identical cards apart, and an unread card has no
+        content to recognise. The link copied from the card's own menu can:
+        it is reused only while the complete card is the one verified earlier.
+        """
+
+        cache = self.__dict__.setdefault("_verified_links", OrderedDict())
+        key = (group.key, _digest(copied))
+        entry = cache.get(key)
+        if entry is None:
+            return None
+        fingerprint, label, window, href, verified_at = entry
+        if time.monotonic() - verified_at > CROSS_CHECK_DESTINATION_TTL_SECONDS:
+            reason = "expired"
+        elif fingerprint != _link_fingerprint(payload):
+            reason = "card_changed"
+        elif not _same_publication(label, window, payload):
+            reason = "other_time"
+        else:
+            self._remember_link(group, copied, payload, href)
+            return href
+        # Expired, or the card changed since: open the link again.
+        LOGGER.debug("Copied link not recognised across checks", reason=reason)
+        del cache[key]
+        return None
+
+    def _remember_link(
+        self, group: GroupRef, copied: str, payload: dict[str, Any], href: str
+    ) -> None:
+        fingerprint = _link_fingerprint(payload)
+        if fingerprint is None:
+            return
+        cache = self.__dict__.setdefault("_verified_links", OrderedDict())
+        key = (group.key, _digest(copied))
+        cache[key] = (
+            fingerprint,
+            _digest(_publication_label(payload)),
+            _relative_publication_window(payload),
+            href,
+            time.monotonic(),
+        )
+        cache.move_to_end(key)
+        while len(cache) > CROSS_CHECK_DESTINATION_LIMIT:
+            cache.popitem(last=False)
+
+    def _opened_before(self, group: GroupRef, href: str) -> bool:
+        """Whether this process had already opened this verified destination."""
+
+        opened = self.__dict__.setdefault("_opened_destinations", OrderedDict())
+        key = (group.key, _digest(href))
+        known = key in opened
+        opened[key] = None
+        opened.move_to_end(key)
+        while len(opened) > CROSS_CHECK_DESTINATION_LIMIT:
+            opened.popitem(last=False)
+        return known
 
     def _launch_context(
         self,
@@ -1724,8 +1823,10 @@ class MobilePostSource(BrowserSession):
     ) -> ScanResult:
         accumulated: list[Post] = []
         progress = [0]
-        # [cards recognised from earlier checks, destination pages opened]
-        reuse = [0, 0]
+        # [cards recognised by content from earlier checks, destination pages
+        # opened, cards recognised by their copied link from earlier checks,
+        # opened destinations this process had already opened before]
+        reuse = [0, 0, 0, 0]
         token = _SCAN_DEADLINE.set(time.monotonic() + MAX_SCAN_SECONDS)
         try:
             return self._scan_mobile_views(
@@ -1758,6 +1859,8 @@ class MobilePostSource(BrowserSession):
                 "Mobile destination reuse",
                 cross_check_count=reuse[0],
                 destination_load_count=reuse[1],
+                copied_link_count=reuse[2],
+                reopened_count=reuse[3],
             )
 
     def _scan_mobile_views(
@@ -1864,11 +1967,16 @@ class MobilePostSource(BrowserSession):
                         self._note_unread_body(page, payload)
                     # Identical cards in one pass are distinct posts; never
                     # guess which of them an earlier check verified.
+                    repeated = card_counts[_card_key(payload)] != 1
                     known = (
-                        self._known_destination(group, payload)
-                        if card_counts[_card_key(payload)] == 1
-                        else None
+                        None if repeated else self._known_destination(group, payload)
                     )
+                    if known is None and (
+                        reason := self._unrecognised_reason(group, payload, repeated)
+                    ):
+                        LOGGER.debug(
+                            "Verified card not recognised by content", reason=reason
+                        )
                     if known is not None:
                         # An earlier check copied this card's link and proved
                         # its destination. Recognise the card by author, body
@@ -1914,6 +2022,15 @@ class MobilePostSource(BrowserSession):
                             # SAME link and matching the complete source again.
                             href = cached[1]
                             LOGGER.debug("Verified copied link reused within scan")
+                        elif linked := self._known_link(group, copied, payload):
+                            # An earlier check opened this same link and proved
+                            # its destination. The link was copied again just
+                            # now from this card's own menu and the complete
+                            # card is unchanged, so it is not opened again.
+                            href = linked
+                            verified_links[copied] = (payload.copy(), href)
+                            reuse[2] += 1
+                            LOGGER.debug("Copied link recognised across checks")
                         else:
                             if reuse[1] >= MAX_DESTINATION_LOADS_PER_SCAN:
                                 # Page a backlog: later checks recognise these
@@ -1949,6 +2066,9 @@ class MobilePostSource(BrowserSession):
                                 )
                             verified_links[copied] = (payload.copy(), href)
                             self._remember_destination(group, preview, payload, href)
+                            self._remember_link(group, copied, payload, href)
+                            if self._opened_before(group, href):
+                                reuse[3] += 1
                     signature = (
                         payload["cardToken"],
                         payload["actionToken"],

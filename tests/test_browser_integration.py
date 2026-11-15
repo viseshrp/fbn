@@ -4488,6 +4488,83 @@ def test_cross_check_destination_cache_is_bounded_and_expires(monkeypatch):
     assert not source.__dict__["_verified_destinations"]
 
 
+def test_copied_link_is_recognised_only_for_the_same_unchanged_card(monkeypatch):
+    from fbn import mobile
+
+    clock = [1_000.0]
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(mobile, "CROSS_CHECK_DESTINATION_LIMIT", 2)
+    source = MobilePostSource(BrowserSettings(profile_dir=Path("unused")))
+    group = parse_group_ref("contract-group")
+    hour = 3_600_000
+    start = 1_800_000_000_000
+
+    def card(label="2h", observed=start, **changes):
+        return {
+            "author": "A",
+            "text": "Body",
+            "mediaCount": 0,
+            "timestampLabel": label,
+            "timestampObservedAt": observed,
+            **changes,
+        }
+
+    source._remember_link(group, "link-1", card(), "href-1")
+    # The same card an hour later; its own link, and no other, is recognised.
+    assert source._known_link(group, "link-1", card("3h", start + hour)) == "href-1"
+    assert source._known_link(group, "link-2", card("3h", start + hour)) is None
+    assert source._known_link(parse_group_ref("other"), "link-1", card()) is None
+    # A changed card forgets the link, so it is opened and verified again.
+    for changed in (
+        card(author="B"),
+        card(text="Edited"),
+        card("2h", start + 3 * hour),
+        card("October 11 at 10:00 AM"),
+        card(partial=True),
+        card(bodyUnread=True, text=""),
+    ):
+        source._remember_link(group, "link-1", card(), "href-1")
+        assert source._known_link(group, "link-1", changed) is None
+        assert source._known_link(group, "link-1", card()) is None
+
+    # A text-only match is not enough for a card without text: media decides.
+    photo = card(text="", mediaCount=1, mediaKeys=["image:1"])
+    source._remember_link(group, "link-photo", photo, "href-photo")
+    assert source._known_link(group, "link-photo", photo) == "href-photo"
+    other = {**photo, "mediaKeys": ["image:2"]}
+    assert source._known_link(group, "link-photo", other) is None
+    # A complete card with neither text nor media keys is never remembered.
+    bare = card(text="")
+    source._remember_link(group, "link-bare", bare, "href-bare")
+    assert source._known_link(group, "link-bare", bare) is None
+
+    # An unread card is recognised by its link, author and publication time.
+    unread = card(bodyUnread=True, text="")
+    source._remember_link(group, "link-unread", unread, "href-unread")
+    assert source._known_link(group, "link-unread", unread) == "href-unread"
+    assert source._known_link(group, "link-unread", {**unread, "author": "B"}) is None
+
+    # Bounded, digest-only and expiring, like the content memory.
+    source.__dict__["_verified_links"].clear()
+    for index in range(3):
+        source._remember_link(group, f"link-{index}", card(), f"href-{index}")
+    assert source._known_link(group, "link-0", card()) is None
+    assert source._known_link(group, "link-2", card()) == "href-2"
+    cached = repr(source.__dict__["_verified_links"])
+    assert "Body" not in cached and "'A'" not in cached and "link-" not in cached
+    clock[0] += mobile.CROSS_CHECK_DESTINATION_TTL_SECONDS + 1
+    assert source._known_link(group, "link-1", card()) is None
+    assert source._known_link(group, "link-2", card()) is None
+    assert not source.__dict__["_verified_links"]
+
+    assert not source._opened_before(group, "href-1")
+    assert source._opened_before(group, "href-1")
+    assert not source._opened_before(parse_group_ref("other"), "href-1")
+    assert not source._opened_before(group, "href-2")
+    assert not source._opened_before(group, "href-1")
+    assert "href" not in repr(source.__dict__["_opened_destinations"])
+
+
 def test_known_card_needs_same_author_body_and_overlapping_publication_time():
     source = MobilePostSource(BrowserSettings(profile_dir=Path("unused")))
     group = parse_group_ref("contract-group")
@@ -4520,6 +4597,11 @@ def test_known_card_needs_same_author_body_and_overlapping_publication_time():
     )
     assert source._known_destination(group, card("2h", start + 3 * hour)) is None
     assert source._known_destination(group, card("just now", start + hour)) is None
+    # The log names why a look-alike of a verified card was not recognised.
+    reason = source._unrecognised_reason
+    assert reason(group, card("3h", start + hour, text="New"), False) is None
+    assert reason(group, card("2h", start + 3 * hour), False) == "other_time"
+    assert reason(group, later, True) == "repeated_in_pass"
     # Absolute and relative labels are never reconciled with each other.
     assert (
         source._known_destination(group, card("October 11 at 10:00 AM", start)) is None
@@ -4531,6 +4613,7 @@ def test_known_card_needs_same_author_body_and_overlapping_publication_time():
     # Two verified posts with the same author, body and time are never guessed.
     source._remember_destination(group, later, later, "href-2")
     assert source._known_destination(group, later) is None
+    assert reason(group, later, False) == "same_time_twice"
     old = card("5d", start)
     source._remember_destination(group, old, old, "href-old")
     assert source._known_destination(group, card("5d", start + day)) is None
@@ -4891,9 +4974,9 @@ def test_unsupported_card_is_alerted_by_link_only(tmp_path, monkeypatch, positio
                     if post.post_id == unread
                     else f"Body {post.post_id}"
                 )
-    # An unread card is never recognised from an earlier check: its link is
-    # copied and opened again, while every readable card is opened only once.
-    assert visited == [s[0] for s in stories] + [unread]
+    # An unread card has no content to recognise. The second check copies its
+    # link again, finds the link it already verified, and opens nothing.
+    assert visited == [s[0] for s in stories]
     assert [m for m, _ in logged].count(
         "Mobile card body not read; alerting by link only"
     ) == 2
@@ -4996,7 +5079,17 @@ def test_recognised_posts_wait_for_a_feed_that_mounts_cards_late(tmp_path, monke
     assert visited == [s[0] for s in stories]
 
 
-def test_identical_cards_in_one_pass_are_never_recognised_by_content(tmp_path):
+def test_identical_cards_in_one_pass_are_recognised_only_by_their_copied_links(
+    tmp_path, monkeypatch
+):
+    import fbn.mobile as mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile.LOGGER,
+        "info",
+        lambda message, **fields: logged.append((message, fields)),
+    )
     stories = [("302", "Author", "Same body"), ("301", "Author", "Same body")]
     visited = []
     group = parse_group_ref("contract-group")
@@ -5006,7 +5099,77 @@ def test_identical_cards_in_one_pass_are_never_recognised_by_content(tmp_path):
         for _ in range(2):
             result = source.fetch_recent(group, policy, boundary_post_id="301")
             assert [p.post_id for p in result.posts] == ["302", "301"]
-        assert visited == ["302", "301", "302", "301"]
+            assert [p.url.rstrip("/").split("/")[-1] for p in result.posts] == [
+                "302",
+                "301",
+            ]
+        # Content cannot tell the two cards apart, so neither is recognised by
+        # it. Each card's own link is copied again and opens nothing.
+        assert visited == ["302", "301"]
+        assert [f for m, f in logged if m == "Mobile destination reuse"] == [
+            {
+                "cross_check_count": 0,
+                "destination_load_count": 2,
+                "copied_link_count": 0,
+                "reopened_count": 0,
+            },
+            {
+                "cross_check_count": 0,
+                "destination_load_count": 0,
+                "copied_link_count": 2,
+                "reopened_count": 0,
+            },
+        ]
+        # An edited card is opened again, and that is counted as a reopening.
+        stories[0] = ("302", "Author", "Edited body")
+        result = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert [p.post_id for p in result.posts] == ["302", "301"]
+        assert visited == ["302", "301", "302"]
+        assert logged[-1][1]["reopened_count"] == 1
+        cached = repr(source.__dict__["_verified_links"]) + repr(
+            source.__dict__["_opened_destinations"]
+        )
+        assert "body" not in cached and "Author" not in cached
+        assert "share" not in cached
+
+
+def test_backlog_with_identical_cards_is_still_read_in_pages(tmp_path, monkeypatch):
+    """Cards that content cannot identify must not use up every later check."""
+
+    import fbn.mobile as mobile
+
+    monkeypatch.setattr(mobile, "MAX_DESTINATION_LOADS_PER_SCAN", 3)
+    stories = [
+        ("307", "Author", "Same body"),
+        ("306", "Author", "Same body"),
+        ("305", "Author", "Body 305"),
+        ("304", "Author", "Same body"),
+        ("303", "Author", "Same body"),
+        ("302", "Author", "Body 302"),
+        ("301", "Author", "Marker body"),
+    ]
+    order = [s[0] for s in stories]
+    visited = []
+    group = parse_group_ref("contract-group")
+    policy = ScanPolicy(max_scrolls=2, settle_seconds=0)
+    with _local_context(tmp_path) as context:
+        source = _paged_source(tmp_path, context, stories, visited)
+        first = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert first.bounded
+        assert [p.post_id for p in first.posts] == order[:3]
+        # Re-opening the identical cards would leave one new post per check
+        # here and none at all once four of them are known.
+        second = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert second.bounded
+        assert [p.post_id for p in second.posts] == order[:6]
+        third = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not third.bounded
+        assert [p.post_id for p in third.posts] == order
+        # Every destination was opened exactly once across the three checks.
+        assert visited == order
+        fourth = source.fetch_recent(group, policy, boundary_post_id="301")
+        assert not fourth.bounded
+        assert visited == order
 
 
 @pytest.mark.parametrize("edited", [False, True])

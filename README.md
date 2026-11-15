@@ -578,7 +578,8 @@ the old marker in place so later scans can finish catching up.
   bounded by `--max-scrolls`, the catch-up sample limit, and a shared 180-second
   scan budget. A check opens at most ten post links. A long backlog is read in
   pages: later checks recognise the posts they already verified by author,
-  text, and time, and continue with the next ten.
+  text, and time, or by their freshly copied link when cards cannot be told
+  apart by content, and continue with the next ten.
   A deeper card whose date cannot be read ends the scan above it: the verified
   posts above are still notified and the marker stays in place.
   A marker deeper than the catch-up sample limit cannot be reached by any
