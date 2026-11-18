@@ -177,6 +177,7 @@ def post_view_issues(value: object) -> tuple[str, ...]:
         "split_preview",
         "interface_panel",
         "expander",
+        "collapser",
         "media",
         "action_ownership",
         "unknown_controls",

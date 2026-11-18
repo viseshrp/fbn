@@ -2075,6 +2075,48 @@ def test_mobile_expansion_to_an_unclassified_body_is_returned_unread(
         assert page.evaluate("window.previewClicks") == 1
 
 
+@pytest.mark.parametrize("action_region", [False, True])
+def test_mobile_expansion_leaves_a_see_less_button_out_of_the_body(
+    tmp_path, action_region
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic prefix.",
+                "Synthetic prefix. Complete body.",
+                action_region=action_region,
+                behavior="see_less",
+                delay_ms=150,
+            )
+        )
+        with mobile_records(page) as records:
+            menu, preview = records[0]
+            expanded = expand_post_preview(page, menu, preview, timeout_seconds=5)
+        assert expanded["text"] == "Synthetic prefix. Complete body."
+        assert not expanded["partial"] and "bodyUnread" not in expanded
+        # The button is recognised, never clicked.
+        assert page.evaluate("window.previewClicks") == 1
+        with mobile_records(page) as records:
+            assert records[0][1]["text"] == "Synthetic prefix. Complete body."
+
+
+@pytest.mark.parametrize("behavior", ["see_less_other", "see_less_twice"])
+def test_mobile_expansion_keeps_other_trailing_buttons_unclassified(tmp_path, behavior):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic prefix.",
+                "Synthetic prefix. Complete body.",
+                behavior=behavior,
+            )
+        )
+        with mobile_records(page) as records:
+            expanded = expand_post_preview(page, *records[0], timeout_seconds=5)
+        assert expanded["bodyUnread"] is True and expanded["text"] == ""
+
+
 def test_mobile_fetch_alerts_by_link_when_expansion_cannot_be_read(
     tmp_path, monkeypatch
 ):

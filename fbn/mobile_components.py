@@ -16,7 +16,8 @@ BODY_COMPONENTS_SCRIPT = r"""
       owner => claims.get(owner)?.role === role));
     const own = node => !within(node, 'discussion') && !within(node, 'interface_panel');
     const messageOwn = node => own(node) && !within(node, 'attachment')
-      && !within(node, 'expander') && !within(node, 'unknown');
+      && !within(node, 'expander') && !within(node, 'collapser')
+      && !within(node, 'unknown');
     const claim = (node, role, recognizer) => {
       const previous = claims.get(node);
       if (previous && previous.role !== role) {
@@ -372,6 +373,25 @@ BODY_COMPONENTS_SCRIPT = r"""
         expanders.push(node.el); claim(node, 'expander', name);
       }
     };
+    const recognizeCollapsers = name => {
+      // An expanded message ends with one "See less" button. It is interface,
+      // not content: it is left out of the text and never clicked. Anything
+      // else (another label, a second one, one beside "See more") stays an
+      // unknown control.
+      const named = value => /^see less$/i.test(clean(value));
+      const candidates = nodes.filter(node => node.el.nodeType === Node.ELEMENT_NODE
+        && node.el.matches('button,[role="button"]') && messageOwn(node)
+        && named(text(node))
+        && (!node.el.hasAttribute('aria-label')
+          || named(node.el.getAttribute('aria-label')))
+        && !descendants(node).some(child => child.flags.button || child.flags.link
+          || child.flags.media || child.flags.menu)
+        && !ancestors(node, owner => owner.flags.link)
+        && ancestors(node.parent, owner => owner.flags.text));
+      if (candidates.length === 1 && !expanders.length) {
+        claim(candidates[0], 'collapser', name);
+      }
+    };
     const recognizeMedia = name => {
       const media = nodes.filter(node => node.flags.media && own(node)
         && !ancestors(node, owner => owner.flags.text || (owner.flags.button
@@ -406,7 +426,7 @@ BODY_COMPONENTS_SCRIPT = r"""
       for (const node of nodes.filter(node => (node.flags.button || node.flags.control
         || node.flags.menu || (node.flags.link && !ancestors(node.parent,
           owner => owner.flags.text))) && own(node))) {
-        if (within(node, 'attachment')) continue;
+        if (within(node, 'attachment') || within(node, 'collapser')) continue;
         if (expanders.some(el => node.el.contains(el) || el.contains(node.el))) {
           bodyControlCount++; continue;
         }
@@ -446,6 +466,7 @@ BODY_COMPONENTS_SCRIPT = r"""
     run('split_preview', recognizeSplitPreviews);
     run('interface_panel', recognizeInterfacePanels);
     run('expander', recognizeExpanders);
+    run('collapser', recognizeCollapsers);
     run('media', recognizeMedia);
     run('action_ownership', recognizeActionOwnership);
     run('unknown_controls', recognizeUnknownControls);
@@ -479,7 +500,7 @@ BODY_COMPONENTS_SCRIPT = r"""
     }
     // Diagnostics for an unsupported control carry fixed interface words and
     // counts only. Every other word becomes a placeholder; nothing is clicked.
-    const controlWords = new Set(['more', 'photo', 'photos', 'image', 'images',
+    const controlWords = new Set(['more', 'less', 'photo', 'photos', 'image', 'images',
       'picture', 'pictures', 'video', 'videos', 'see', 'view', 'open', 'show',
       'all', 'play', 'album', 'gallery', 'item', 'items', 'link', 'map',
       'file', 'files', 'poll', 'event', 'reel', 'reels', 'other', 'others',
@@ -523,7 +544,7 @@ BODY_COMPONENTS_SCRIPT = r"""
     }
     const regions = [], blocks = [];
     for (const [node, evidence] of claims) {
-      if (evidence.role === 'expander') continue;
+      if (evidence.role === 'expander' || evidence.role === 'collapser') continue;
       roles.set(node.el, evidence.role);
       regions.push({role: evidence.role, node: node.el});
       blocks.push({role: evidence.role, textChars: text(node).length,

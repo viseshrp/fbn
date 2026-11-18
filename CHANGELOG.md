@@ -9,6 +9,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Read an expanded message that ends with a "See less" button. One such
+  button is recognised as interface: it is left out of the text and never
+  clicked, so a long post keeps its full text instead of a link-only alert.
+  Any other trailing control still makes the body unclassified.
 - Alert by link only when "See more" reveals a body the reader cannot
   classify. The expanded text can gain a control the reader does not know;
   the card was then read as complete with no text, failed the body

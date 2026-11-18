@@ -39,6 +39,7 @@ def post_view_fixture(text: str = "Synthetic body") -> dict[str, object]:
                 "split_preview",
                 "interface_panel",
                 "expander",
+                "collapser",
                 "media",
                 "action_ownership",
                 "unknown_controls",
@@ -200,6 +201,14 @@ def mobile_preview_fixture(
         "extra.setAttribute('aria-label','Synthetic control');"
         "extra.setAttribute('data-action-id','synthetic-control');"
         "node.append(extra);}"
+        # The real expanded message ends with a "See less" button.
+        "if(behavior.startsWith('see_less')){"
+        "const label=behavior==='see_less_other'?'See fewer':'See less';"
+        "for(let n=behavior==='see_less_twice'?2:1;n>0;n--){"
+        "const less=document.createElement('button');"
+        "less.setAttribute('aria-label',label);less.textContent=label;"
+        "less.setAttribute('data-action-id','collapse-301-'+n);"
+        "node.append(less);}}"
         "if(behavior==='author'){"
         "const header=document.querySelector('[data-story]').children[1];"
         "header.querySelector('[role=link]').textContent='Other Author';"
