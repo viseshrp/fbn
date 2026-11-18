@@ -9,6 +9,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Accept an expanded message whose text equals its preview. The long-post
+  layout can hold the whole text before "See more" is tapped; the tap only
+  turns the button into "See less". Expansion waited for a longer body and
+  timed out on every attempt. A body the page marks as expanded with "See
+  less" is now complete when it equals the preview; it is never accepted
+  shorter, and an unchanged body without that mark is still refused.
 - Read an expanded message that ends with a "See less" button. One such
   button is recognised as interface: it is left out of the text and never
   clicked, so a long post keeps its full text instead of a link-only alert.

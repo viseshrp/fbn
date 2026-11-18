@@ -11,7 +11,7 @@ BODY_COMPONENTS_SCRIPT = r"""
     const {nodes, contains, ancestors, descendants, text, read} = tree;
     const claims = new Map(), outcomes = [], issues = new Set();
     const expanders = [], mediaKeys = new Set();
-    let mediaCount = 0, bodyControlCount = 0;
+    let mediaCount = 0, bodyControlCount = 0, collapsed = false;
     const within = (node, role) => Boolean(ancestors(node,
       owner => claims.get(owner)?.role === role));
     const own = node => !within(node, 'discussion') && !within(node, 'interface_panel');
@@ -389,7 +389,7 @@ BODY_COMPONENTS_SCRIPT = r"""
         && !ancestors(node, owner => owner.flags.link)
         && ancestors(node.parent, owner => owner.flags.text));
       if (candidates.length === 1 && !expanders.length) {
-        claim(candidates[0], 'collapser', name);
+        claim(candidates[0], 'collapser', name); collapsed = true;
       }
     };
     const recognizeMedia = name => {
@@ -552,6 +552,7 @@ BODY_COMPONENTS_SCRIPT = r"""
     }
     return {text: clean(texts.join(' ')), texts, expanders, previewBoundary, mediaCount,
       mediaKeys: Array.from(mediaKeys).sort(), partial: expanders.length > 0,
+      collapsed,
       bodyControlCount, blocks, regions, unsupported: issues.size > 0,
       recognizers: outcomes, issues: Array.from(issues).sort(),
       unknownShapes: unknownShapes.slice(0, 6),

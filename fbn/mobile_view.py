@@ -33,6 +33,7 @@ class PostView(TypedDict, total=False):
     bodyState: Literal["partial", "complete"]
     parserVersion: int
     bodyUnread: bool
+    bodyExpanded: bool
     unreadIssues: list[str]
     recognizers: list[dict[str, str]]
     normalization: dict[str, int]
@@ -107,6 +108,11 @@ def post_view_issues(value: object) -> tuple[str, ...]:
     unread = "bodyUnread" in value or "unreadIssues" in value
     if unread and not _unread_body_valid(value):
         issues.append("post_view_unread_body")
+    if "bodyExpanded" in value and (
+        value["bodyExpanded"] is not True or unread or value.get("partial") is not False
+    ):
+        # Only a readable, complete body can be marked expanded by the page.
+        issues.append("post_view_expanded_body")
     if ("previewPrefix" in value or "previewSuffix" in value) and (
         value.get("partial") is not True or not _preview_boundary_valid(value)
     ):

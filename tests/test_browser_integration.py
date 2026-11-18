@@ -2101,6 +2101,45 @@ def test_mobile_expansion_leaves_a_see_less_button_out_of_the_body(
             assert records[0][1]["text"] == "Synthetic prefix. Complete body."
 
 
+@pytest.mark.parametrize("action_region", [False, True])
+def test_mobile_expansion_accepts_a_see_less_body_equal_to_its_preview(
+    tmp_path, action_region
+):
+    """The preview can already hold the whole text; only the button changes."""
+
+    whole = "Synthetic whole body already in the preview."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                whole,
+                whole,
+                button=True,
+                action_region=action_region,
+                behavior="see_less",
+                delay_ms=150,
+            )
+        )
+        with mobile_records(page) as records:
+            menu, preview = records[0]
+            assert preview["partial"] and preview["text"] == whole
+            expanded = expand_post_preview(page, menu, preview, timeout_seconds=5)
+        assert expanded["text"] == whole and expanded["bodyExpanded"] is True
+        assert not expanded["partial"] and "bodyUnread" not in expanded
+        assert page.evaluate("window.previewClicks") == 1
+
+
+def test_mobile_expansion_rejects_an_unchanged_body_not_marked_expanded(tmp_path):
+    """Without "See less" an unchanged body is no evidence of a complete one."""
+
+    whole = "Synthetic whole body already in the preview."
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(mobile_preview_fixture(whole, whole, button=True))
+        with mobile_records(page) as records, pytest.raises(RenderTimeoutError):
+            expand_post_preview(page, *records[0], timeout_seconds=2)
+
+
 @pytest.mark.parametrize("behavior", ["see_less_other", "see_less_twice"])
 def test_mobile_expansion_keeps_other_trailing_buttons_unclassified(tmp_path, behavior):
     with _local_context(tmp_path) as context:

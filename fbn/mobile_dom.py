@@ -191,6 +191,8 @@ MOBILE_SCAN_SCRIPT = (
         mediaCount, mediaKeys: bodyUnread ? [] : body.mediaKeys, partial,
         position: records.length,
         ...(bodyUnread ? {bodyUnread: true, unreadIssues: body.issues} : {}),
+        // The page itself marks this message as expanded ("See less").
+        ...(body.collapsed === true && !bodyUnread ? {bodyExpanded: true} : {}),
         blocks: body.blocks, bodyState: partial ? 'partial' : 'complete',
         bodyControlCount, bodyTextPartCount: texts.length,
         bodyTextLengths: texts.slice(0, 32).map(text => text.length),

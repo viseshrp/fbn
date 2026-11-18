@@ -146,6 +146,27 @@ def test_mobile_view_rejects_an_unread_body_carrying_content(field, value):
     assert "post_view_unread_body" in issues and "Synthetic" not in repr(issues)
 
 
+def test_mobile_view_accepts_a_complete_body_marked_expanded():
+    assert post_view_issues({**valid_view(), "bodyExpanded": True}) == ()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"bodyExpanded": False},
+        {"bodyExpanded": "yes"},
+        {"bodyExpanded": True, "partial": True, "bodyState": "partial"},
+    ],
+)
+def test_mobile_view_rejects_a_malformed_expanded_mark(change):
+    assert "post_view_expanded_body" in post_view_issues({**valid_view(), **change})
+
+
+def test_mobile_view_rejects_an_unread_body_marked_expanded():
+    view = {**_unread_view(), "bodyExpanded": True}
+    assert "post_view_expanded_body" in post_view_issues(view)
+
+
 @pytest.mark.parametrize("malformed", [None, [], {}, 1, True])
 @pytest.mark.parametrize("field", ["name", "status", "role"])
 def test_mobile_view_nested_evidence_errors_never_raise_or_echo_content(

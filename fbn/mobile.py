@@ -817,8 +817,10 @@ def expand_post_preview(
         phase = "expanded_primary_preview_render"
         # The card can be shown complete but empty for a moment while the
         # full body is swapped in. Wait for a body longer than the preview,
-        # or for a body the reader cannot classify (the expanded text can
-        # gain a control it does not know); only if neither arrives is
+        # for a body the page itself marks as expanded (it ends with "See
+        # less"; the preview can already hold the whole text, so it need not
+        # grow), or for a body the reader cannot classify (the expanded text
+        # can gain a control it does not know); only if none arrives is
         # whatever complete card is shown judged.
         rendered = (
             "arg => {if (!arg.menu.isConnected) return {missing: true};"
@@ -828,7 +830,8 @@ def expand_post_preview(
             "const text = record.payload.text;"
             "return (arg.accept === 'changed' ? text !== arg.text"
             " : text.length > arg.text.length || (arg.accept === 'unread'"
-            " && record.payload.bodyUnread === true)) ? record.payload : false;}"
+            " && (record.payload.bodyUnread === true"
+            " || record.payload.bodyExpanded === true))) ? record.payload : false;}"
         )
 
         def shown(accept: str, seconds: float) -> Any:
@@ -852,9 +855,13 @@ def expand_post_preview(
                 if completed.json_value() is False:
                     raise
             first = completed.json_value()
-            if isinstance(first, dict) and first.get("bodyUnread"):
-                # A body still being assembled can look unclassified for a
-                # moment. Give the full text a short time to arrive first.
+            if isinstance(first, dict) and (
+                first.get("bodyUnread")
+                or len(first.get("text", "")) <= len(payload["text"])
+            ):
+                # A body still being assembled can look unclassified, or be
+                # marked expanded before its text is swapped in. Give a longer
+                # text a short time to arrive first.
                 with suppress(PlaywrightTimeoutError):
                     settled = shown(
                         "grown",
@@ -896,8 +903,14 @@ def expand_post_preview(
             "expanded_primary_body_preserves_preview": preview_matches_expanded(
                 payload, expanded.get("text", "")
             ),
+            # A body the page marks as expanded may equal its preview: the
+            # whole text was already there. It is never accepted shorter.
             "expanded_primary_body_grew": (
                 len(expanded.get("text", "")) > len(payload["text"])
+                or (
+                    expanded.get("bodyExpanded") is True
+                    and expanded.get("text") == payload["text"]
+                )
             ),
         }
         unread = bool(expanded.get("bodyUnread"))
@@ -923,6 +936,7 @@ def expand_post_preview(
         LOGGER.debug(
             "Mobile post preview expanded",
             expanded_body_unread=unread,
+            expanded_body_marked=expanded.get("bodyExpanded") is True,
             source_body_chars=len(payload["text"]),
             expanded_body_chars=len(expanded["text"]),
             menu_action_refreshed=(
