@@ -186,9 +186,12 @@ def mobile_preview_fixture(
     return html + (
         "<script>function expandPreview(node) {"
         "window.previewClicks=(window.previewClicks||0)+1;"
-        "setTimeout(() => {"
         f"const behavior={json.dumps(behavior)};"
+        # The real feed can show the card complete but empty for a moment.
+        "if(behavior==='blank_first')node.style.display='none';"
+        "setTimeout(() => {"
         "if(behavior==='never')return;"
+        "node.style.display='';"
         f"node.textContent={json.dumps(complete)};"
         "node.removeAttribute('onclick');"
         "if(behavior==='author'){"

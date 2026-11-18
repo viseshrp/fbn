@@ -2026,6 +2026,29 @@ def test_mobile_expansion_waits_for_complete_body_without_fixed_sleep(
         assert page.evaluate("window.previewClicks") == 1
 
 
+@pytest.mark.parametrize("action_region", [False, True])
+def test_mobile_expansion_waits_past_a_momentarily_empty_complete_body(
+    tmp_path, action_region
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic prefix.",
+                "Synthetic prefix. Complete body.",
+                action_region=action_region,
+                behavior="blank_first",
+                delay_ms=400,
+            )
+        )
+        with mobile_records(page) as records:
+            menu, preview = records[0]
+            expanded = expand_post_preview(page, menu, preview, timeout_seconds=5)
+        assert expanded["text"] == "Synthetic prefix. Complete body."
+        assert not expanded["partial"]
+        assert page.evaluate("window.previewClicks") == 1
+
+
 @pytest.mark.parametrize(
     "behavior,complete",
     [

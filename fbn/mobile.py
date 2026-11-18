@@ -815,18 +815,34 @@ def expand_post_preview(
                 timeout=_remaining_seconds(deadline, "expand_primary_preview") * 1_000
             )
         phase = "expanded_primary_preview_render"
+        # The card can be shown complete but empty for a moment while the
+        # full body is swapped in. Wait for a body longer than the preview;
+        # only if none arrives is whatever complete card is shown judged.
+        rendered = (
+            "arg => {if (!arg.menu.isConnected) return {missing: true};"
+            f"const record = ({script})(true).records"
+            ".find(record => record.menu === arg.menu);"
+            "if (!record || record.payload.partial) return false;"
+            "const text = record.payload.text;"
+            "return (arg.grown ? text.length > arg.text.length : text !== arg.text)"
+            " ? record.payload : false;}"
+        )
         with _action_phase(phase):
-            completed = page.wait_for_function(
-                "arg => {if (!arg.menu.isConnected) return {missing: true};"
-                f"const record = ({script})(true).records"
-                ".find(record => record.menu === arg.menu);"
-                "if (!record) return false;"
-                "return !record.payload.partial && record.payload.text !== arg.text"
-                " ? record.payload : false;}",
-                arg={"menu": menu, "text": payload["text"]},
-                timeout=_remaining_seconds(deadline, "expanded_primary_preview_render")
-                * 1_000,
-            )
+            try:
+                completed = page.wait_for_function(
+                    rendered,
+                    arg={"menu": menu, "text": payload["text"], "grown": True},
+                    timeout=_remaining_seconds(
+                        deadline, "expanded_primary_preview_render"
+                    )
+                    * 1_000,
+                )
+            except PlaywrightTimeoutError:
+                completed = page.evaluate_handle(
+                    rendered, {"menu": menu, "text": payload["text"], "grown": False}
+                )
+                if completed.json_value() is False:
+                    raise
         expanded = completed.json_value()
         if isinstance(expanded, dict) and expanded.get("missing"):
             _inspect_failed_render(

@@ -9,6 +9,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Wait for an expanded post body to arrive. After "See more" the feed can
+  show the card complete but empty for a moment; that state was accepted at
+  once, failed the body comparison and stopped the monitor with a layout
+  error. The reader now waits for a body longer than the preview and judges
+  another complete card only when none arrives in time.
 - Stop `make docker-smoke` leaving two empty anonymous Docker volumes behind
   on every run. The logging-probe container is now removed together with its
   volume, the Compose exit-code fixture mounts a tmpfs over the image's data
