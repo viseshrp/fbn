@@ -816,33 +816,57 @@ def expand_post_preview(
             )
         phase = "expanded_primary_preview_render"
         # The card can be shown complete but empty for a moment while the
-        # full body is swapped in. Wait for a body longer than the preview;
-        # only if none arrives is whatever complete card is shown judged.
+        # full body is swapped in. Wait for a body longer than the preview,
+        # or for a body the reader cannot classify (the expanded text can
+        # gain a control it does not know); only if neither arrives is
+        # whatever complete card is shown judged.
         rendered = (
             "arg => {if (!arg.menu.isConnected) return {missing: true};"
             f"const record = ({script})(true).records"
             ".find(record => record.menu === arg.menu);"
             "if (!record || record.payload.partial) return false;"
             "const text = record.payload.text;"
-            "return (arg.grown ? text.length > arg.text.length : text !== arg.text)"
-            " ? record.payload : false;}"
+            "return (arg.accept === 'changed' ? text !== arg.text"
+            " : text.length > arg.text.length || (arg.accept === 'unread'"
+            " && record.payload.bodyUnread === true)) ? record.payload : false;}"
         )
+
+        def shown(accept: str, seconds: float) -> Any:
+            return page.wait_for_function(
+                rendered,
+                arg={"menu": menu, "text": payload["text"], "accept": accept},
+                timeout=seconds * 1_000,
+            )
+
         with _action_phase(phase):
             try:
-                completed = page.wait_for_function(
-                    rendered,
-                    arg={"menu": menu, "text": payload["text"], "grown": True},
-                    timeout=_remaining_seconds(
-                        deadline, "expanded_primary_preview_render"
-                    )
-                    * 1_000,
+                completed = shown(
+                    "unread",
+                    _remaining_seconds(deadline, "expanded_primary_preview_render"),
                 )
             except PlaywrightTimeoutError:
                 completed = page.evaluate_handle(
-                    rendered, {"menu": menu, "text": payload["text"], "grown": False}
+                    rendered,
+                    {"menu": menu, "text": payload["text"], "accept": "changed"},
                 )
                 if completed.json_value() is False:
                     raise
+            first = completed.json_value()
+            if isinstance(first, dict) and first.get("bodyUnread"):
+                # A body still being assembled can look unclassified for a
+                # moment. Give the full text a short time to arrive first.
+                with suppress(PlaywrightTimeoutError):
+                    settled = shown(
+                        "grown",
+                        min(
+                            UNREAD_BODY_SETTLE_SECONDS,
+                            _remaining_seconds(
+                                deadline, "expanded_primary_preview_render"
+                            ),
+                        ),
+                    )
+                    completed.dispose()
+                    completed = settled
         expanded = completed.json_value()
         if isinstance(expanded, dict) and expanded.get("missing"):
             _inspect_failed_render(
@@ -876,6 +900,13 @@ def expand_post_preview(
                 len(expanded.get("text", "")) > len(payload["text"])
             ),
         }
+        unread = bool(expanded.get("bodyUnread"))
+        if unread:
+            # Nothing of an unclassified body is read, so there is no text to
+            # compare. The card must still be the same one: same menu, page,
+            # author and publication time. It is alerted by link only.
+            for name in [name for name in comparisons if "_body_" in name]:
+                del comparisons[name]
         missing = [name for name, matches in comparisons.items() if not matches]
         if missing:
             LOGGER.warning(
@@ -891,6 +922,7 @@ def expand_post_preview(
             raise _layout_failure(*missing, phase="expanded_primary_preview_render")
         LOGGER.debug(
             "Mobile post preview expanded",
+            expanded_body_unread=unread,
             source_body_chars=len(payload["text"]),
             expanded_body_chars=len(expanded["text"]),
             menu_action_refreshed=(
@@ -2045,6 +2077,10 @@ class MobilePostSource(BrowserSession):
                         )
                         if payload.get("partial"):
                             payload = expand(menu, payload)
+                            if payload.get("bodyUnread"):
+                                # Expansion showed a body the reader cannot
+                                # classify: alert this post by link only.
+                                self._note_unread_body(page, payload)
                         cached = verified_links.get(copied)
                         if cached is not None and all(
                             _primary_post_comparisons(payload, cached[0]).values()

@@ -9,6 +9,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Alert by link only when "See more" reveals a body the reader cannot
+  classify. The expanded text can gain a control the reader does not know;
+  the card was then read as complete with no text, failed the body
+  comparison and stopped the monitor. The card must still be the same post
+  (menu, page, author and publication time); only its text is given up.
 - Wait for an expanded post body to arrive. After "See more" the feed can
   show the card complete but empty for a moment; that state was accepted at
   once, failed the body comparison and stopped the monitor with a layout

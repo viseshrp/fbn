@@ -194,6 +194,12 @@ def mobile_preview_fixture(
         "node.style.display='';"
         f"node.textContent={json.dumps(complete)};"
         "node.removeAttribute('onclick');"
+        # The expanded text can gain a control the reader does not know.
+        "if(behavior==='unknown_control'){"
+        "const extra=document.createElement('button');"
+        "extra.setAttribute('aria-label','Synthetic control');"
+        "extra.setAttribute('data-action-id','synthetic-control');"
+        "node.append(extra);}"
         "if(behavior==='author'){"
         "const header=document.querySelector('[data-story]').children[1];"
         "header.querySelector('[role=link]').textContent='Other Author';"

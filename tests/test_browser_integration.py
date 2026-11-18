@@ -2049,6 +2049,96 @@ def test_mobile_expansion_waits_past_a_momentarily_empty_complete_body(
         assert page.evaluate("window.previewClicks") == 1
 
 
+@pytest.mark.parametrize("action_region", [False, True])
+def test_mobile_expansion_to_an_unclassified_body_is_returned_unread(
+    tmp_path, action_region
+):
+    with _local_context(tmp_path) as context:
+        page = context.new_page()
+        page.set_content(
+            mobile_preview_fixture(
+                "Synthetic prefix.",
+                "Synthetic prefix. Complete body.",
+                action_region=action_region,
+                behavior="unknown_control",
+                delay_ms=150,
+            )
+        )
+        with mobile_records(page) as records:
+            menu, preview = records[0]
+            expanded = expand_post_preview(page, menu, preview, timeout_seconds=5)
+        # Nothing of the body is kept; the card is still the same post.
+        assert expanded["bodyUnread"] is True
+        assert expanded["unreadIssues"] == ["unknown_body_control"]
+        assert expanded["text"] == "" and not expanded["partial"]
+        assert expanded["author"] == preview["author"]
+        assert page.evaluate("window.previewClicks") == 1
+
+
+def test_mobile_fetch_alerts_by_link_when_expansion_cannot_be_read(
+    tmp_path, monkeypatch
+):
+    """An expanded body the reader cannot classify costs its text, not the scan."""
+
+    import fbn.mobile as mobile
+
+    logged = []
+    monkeypatch.setattr(
+        mobile.LOGGER,
+        "warning",
+        lambda message, **fields: logged.append((message, fields)),
+    )
+    monkeypatch.setattr(mobile, "_UNSUPPORTED_CARD_EVIDENCE", [])
+    monkeypatch.setattr(mobile, "UNREAD_BODY_SETTLE_SECONDS", 0.2)
+    monkeypatch.setattr(
+        mobile, "capture_failure_screenshots", lambda profile, error, pages: None
+    )
+    full = "Synthetic preview. Full continuation that was hidden in the group feed."
+    with _local_context(tmp_path) as context:
+        requests = []
+
+        def routes(route):
+            is_post = "/share/" in route.request.url
+            requests.append(is_post)
+            html = (
+                mobile_fixture([("301", "Synthetic Author", full)])
+                + "<script>history.replaceState(null,'',"
+                "'/groups/contract-group/posts/301/')</script>"
+                if is_post
+                else mobile_preview_fixture(
+                    "Synthetic preview.", full, behavior="unknown_control"
+                )
+            )
+            route.fulfill(status=200, content_type="text/html", body=html)
+
+        context.route("**/*", routes)
+        source = MobilePostSource(BrowserSettings(profile_dir=tmp_path / "unused"))
+
+        @contextmanager
+        def existing_context(**kwargs):
+            yield context
+
+        source._context = existing_context
+        result = source.fetch_recent(
+            parse_group_ref("contract-group"),
+            ScanPolicy(
+                sample_count=1,
+                max_scrolls=1,
+                navigation_timeout_seconds=5,
+                settle_seconds=0,
+            ),
+            boundary_post_id="301",
+        )
+    assert [post.post_id for post in result.posts] == ["301"]
+    assert result.posts[0].text == mobile.UNREAD_BODY_NOTICE
+    assert result.posts[0].author == "Synthetic Author"
+    assert requests == [False, True]
+    assert [message for message, _ in logged].count(
+        "Mobile card body not read; alerting by link only"
+    ) == 1
+    assert "Synthetic preview" not in str(logged)
+
+
 @pytest.mark.parametrize(
     "behavior,complete",
     [
