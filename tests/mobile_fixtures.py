@@ -676,6 +676,7 @@ def mobile_shared_public_post_fixture(
     frame_label: str = "",
     avatar_mounted: bool = True,
     inner_body_control: bool = False,
+    avatar_label: str = "Synthetic Embedded profile picture",
 ) -> str:
     """A group post sharing a public post from outside the group.
 
@@ -699,7 +700,7 @@ def mobile_shared_public_post_fixture(
         "avatar.setAttribute('data-mcomponent','MContainer');"
         "avatar.setAttribute('role','button');"
         "avatar.setAttribute('data-action-id','inner-avatar');"
-        "avatar.setAttribute('aria-label','Synthetic Embedded profile picture');"
+        f"avatar.setAttribute('aria-label',{json.dumps(avatar_label)});"
         "const area=document.createElement('div');"
         "area.setAttribute('data-mcomponent','ImageArea');"
         "const image=document.createElement('img');image.width=image.height=40;"

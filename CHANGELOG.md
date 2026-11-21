@@ -13,7 +13,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   outer header can offer a "Follow" button, and the shared post's header has
   a framed avatar and a date ending in "Public"; these are now header
   metadata, so the post keeps its text instead of a link-only alert. The
-  shared post's avatar is accepted before its picture has mounted. Whatever
+  shared post's avatar is accepted before its picture has mounted, and when
+  it is labelled as its owner's story. Whatever
   of such a card is still not understood leaves it link-only, as before,
   rather than refusing the layout, and the log names the failing rule in
   word classes only.

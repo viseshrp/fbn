@@ -145,11 +145,16 @@ HEADER_COMPONENT_SCRIPT = r"""
     const groupLinks = Array.from(root.querySelectorAll('[role="link"],a'))
       .filter(node => visible(node) && groups.includes(clean(node.innerText)));
     const identities = [result.owner, ...groups];
+    // While its owner has a story the picture is labelled as that story, with
+    // one state word in front ("... story from <owner>").
+    const storyPicture = (label, name) => label.endsWith(' story from ' + name)
+      && /^[\p{L}\p{M}]+$/u.test(label.slice(0, -(' story from ' + name).length));
     const pictures = Array.from(root.querySelectorAll(
       'button,[role="button"],[role="link"],a')).filter(node => visible(node)
       && node !== menu && !clean(node.innerText).replace(/\p{Co}/gu, '')
       && identities.some(name => [name, name + "'s picture", name + '\u2019s picture',
-        name + ' profile picture'].includes(clean(node.getAttribute('aria-label'))))
+        name + ' profile picture'].includes(clean(node.getAttribute('aria-label')))
+        || storyPicture(clean(node.getAttribute('aria-label')), name))
       // The picture can still be unmounted: its labelled button then holds
       // only the empty image role.
       && node.querySelector('img,[role="img"],[data-mcomponent="ImageArea"],'

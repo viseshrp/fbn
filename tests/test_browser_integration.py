@@ -6118,13 +6118,21 @@ def test_embedded_post_recognition_never_discards_unknown_ownership(tmp_path, fa
 
 
 @pytest.mark.parametrize("avatar_mounted", [True, False])
-def test_post_sharing_a_public_post_is_read_as_one_primary(tmp_path, avatar_mounted):
+@pytest.mark.parametrize(
+    "avatar_label",
+    ["Synthetic Embedded profile picture", "Unseen story from Synthetic Embedded"],
+)
+def test_post_sharing_a_public_post_is_read_as_one_primary(
+    tmp_path, avatar_mounted, avatar_label
+):
     """Follow button, framed inner avatar and a public date label are metadata."""
 
     with _local_context(tmp_path) as context:
         page = context.new_page()
         page.set_content(
-            mobile_shared_public_post_fixture(avatar_mounted=avatar_mounted)
+            mobile_shared_public_post_fixture(
+                avatar_mounted=avatar_mounted, avatar_label=avatar_label
+            )
         )
         counts = page.evaluate(MOBILE_SCAN_SCRIPT, False)
         assert counts["embeddedCardCount"] == 1 and counts["unreadBodyCount"] == 0
@@ -6144,6 +6152,14 @@ def test_post_sharing_a_public_post_is_read_as_one_primary(tmp_path, avatar_moun
         ({"audience": "Synthetic"}, "embedded / inner_header / unique_primary_"),
         ({"frame_label": "Synthetic label"}, "embedded / inner_header / media"),
         ({"inner_body_control": True}, "embedded / supported_embedded_body"),
+        (
+            {"avatar_label": "Two words story from Synthetic Embedded"},
+            "embedded / inner_header / button",
+        ),
+        (
+            {"avatar_label": "Unseen story from Synthetic Other"},
+            "embedded / inner_header / button",
+        ),
     ],
 )
 def test_unknown_shared_post_metadata_stays_unread_with_a_masked_reason(
