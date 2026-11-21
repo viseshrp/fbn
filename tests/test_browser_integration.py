@@ -2983,7 +2983,9 @@ def test_sort_loading_transition_uses_shared_transient_classification(tmp_path, 
         with pytest.raises(
             TransientNavigationError, match="blank loading shell"
         ) as failure:
-            select_new_posts(page, timeout_seconds=0.2)
+            # Opening the sort menu is a real click: on a busy runner 0.2 s
+            # can expire inside it, before the shell is ever judged.
+            select_new_posts(page, timeout_seconds=0.2 if phase == "open_sort" else 2.0)
         assert failure.value._fbn_failure_phase == phase
 
 
