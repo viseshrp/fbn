@@ -6117,12 +6117,15 @@ def test_embedded_post_recognition_never_discards_unknown_ownership(tmp_path, fa
         assert page.evaluate("activePost === null")
 
 
-def test_post_sharing_a_public_post_is_read_as_one_primary(tmp_path):
+@pytest.mark.parametrize("avatar_mounted", [True, False])
+def test_post_sharing_a_public_post_is_read_as_one_primary(tmp_path, avatar_mounted):
     """Follow button, framed inner avatar and a public date label are metadata."""
 
     with _local_context(tmp_path) as context:
         page = context.new_page()
-        page.set_content(mobile_shared_public_post_fixture())
+        page.set_content(
+            mobile_shared_public_post_fixture(avatar_mounted=avatar_mounted)
+        )
         counts = page.evaluate(MOBILE_SCAN_SCRIPT, False)
         assert counts["embeddedCardCount"] == 1 and counts["unreadBodyCount"] == 0
         with mobile_records(page) as records:
@@ -6140,6 +6143,7 @@ def test_post_sharing_a_public_post_is_read_as_one_primary(tmp_path):
         ({"follow": "Synthetic action"}, "embedded / outer_header / button:w w"),
         ({"audience": "Synthetic"}, "embedded / inner_header / unique_primary_"),
         ({"frame_label": "Synthetic label"}, "embedded / inner_header / media"),
+        ({"inner_body_control": True}, "embedded / supported_embedded_body"),
     ],
 )
 def test_unknown_shared_post_metadata_stays_unread_with_a_masked_reason(
@@ -6150,12 +6154,13 @@ def test_unknown_shared_post_metadata_stays_unread_with_a_masked_reason(
         page.set_content(mobile_shared_public_post_fixture(**change))
         counts = page.evaluate(MOBILE_SCAN_SCRIPT, False)
         assert counts["embeddedCardCount"] == 0
+        # Never a refused layout: the card keeps its link-only alert.
+        assert counts["missing"] == [] and counts["unreadBodyCount"] == 1
         notes = counts["bodyUnknownShapes"]
-        if counts["unreadBodyCount"]:
-            assert any(note.startswith(reason) for note in notes)
-        else:
-            assert counts["missing"]
+        assert any(note.startswith(reason) for note in notes)
         assert "Synthetic" not in repr(notes)
+        with mobile_records(page) as records:
+            assert [payload.get("bodyUnread") for _, payload in records] == [True]
 
 
 @pytest.mark.parametrize("permalink", [False, True])

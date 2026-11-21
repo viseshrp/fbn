@@ -670,7 +670,12 @@ def app_prompt_fixture(*, known: bool = True, delay_ms: int = 0) -> str:
 
 
 def mobile_shared_public_post_fixture(
-    *, follow: str = "Follow", audience: str = "Public", frame_label: str = ""
+    *,
+    follow: str = "Follow",
+    audience: str = "Public",
+    frame_label: str = "",
+    avatar_mounted: bool = True,
+    inner_body_control: bool = False,
 ) -> str:
     """A group post sharing a public post from outside the group.
 
@@ -699,13 +704,21 @@ def mobile_shared_public_post_fixture(
         "area.setAttribute('data-mcomponent','ImageArea');"
         "const image=document.createElement('img');image.width=image.height=40;"
         "image.src='data:image/svg+xml,%3Csvg xmlns=\"http://www.w3.org/2000/svg\"'"
-        '+\' width="1" height="1"/%3E\';area.append(image);avatar.append(area);'
+        '+\' width="1" height="1"/%3E\';area.append(image);'
+        # The picture mounts late: until then the button holds an empty role.
+        "const role=document.createElement('div');"
+        "role.setAttribute('data-mcomponent','MContainer');"
+        "role.setAttribute('role','img');role.style='width:40px;height:40px';"
+        f"if({json.dumps(avatar_mounted)})role.append(area);avatar.append(role);"
         "const frame=document.createElement('div');"
         "frame.setAttribute('data-mcomponent','ImageArea');"
         "frame.style='width:40px;height:40px';"
         f"if({json.dumps(frame_label)})"
         f"frame.setAttribute('aria-label',{json.dumps(frame_label)});"
         "inner.prepend(avatar,frame);"
+        f"if({json.dumps(inner_body_control)}){{"
+        "const extra=document.createElement('button');"
+        "extra.textContent='Synthetic control';card.children[4].append(extra);}"
         "inner.querySelector('[aria-label*=\"October 11\"]')"
         f".setAttribute('aria-label',{json.dumps('2h, ' + audience)});"
         "})()</script>"

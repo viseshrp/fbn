@@ -150,7 +150,9 @@ HEADER_COMPONENT_SCRIPT = r"""
       && node !== menu && !clean(node.innerText).replace(/\p{Co}/gu, '')
       && identities.some(name => [name, name + "'s picture", name + '\u2019s picture',
         name + ' profile picture'].includes(clean(node.getAttribute('aria-label'))))
-      && node.querySelector('img,[data-mcomponent="ImageArea"],'
+      // The picture can still be unmounted: its labelled button then holds
+      // only the empty image role.
+      && node.querySelector('img,[role="img"],[data-mcomponent="ImageArea"],'
         + '[data-mcomponent="ServerImageArea"]'));
     const buttons = Array.from(root.querySelectorAll('button,[role="button"]'))
       .filter(visible);
@@ -321,6 +323,16 @@ HEADER_COMPONENT_SCRIPT = r"""
     const footer = recognizeFooter(sections, start);
     if (footer.status !== 'recognized') return null;
     const embedded = [];
+    // A header dated with a non-group audience belongs to a post shared from
+    // outside the group. Whatever of such a card is not understood leaves the
+    // whole card as it was before that audience was known (one primary post
+    // whose body is unread), never a refused layout.
+    let shared = false;
+    const refuse = missing => {
+      if (!shared) return ambiguous(missing);
+      if (embeddedNotes.length < 4) embeddedNotes.push('embedded / ' + missing);
+      return null;
+    };
     for (let index = start; index < footer.index; index++) {
       const section = sections[index];
       if (section.matches(excludedSelector)) continue;
@@ -352,9 +364,14 @@ HEADER_COMPONENT_SCRIPT = r"""
               && !links.some(link => link.contains(node))
               && (node.matches(textSelector)
                 || node.matches('[data-mcomponent="MContainer"]'))
+              // Only a group-audience date makes an unresolved section a
+              // refused header. One with another audience stays what it was
+              // before that audience was known: part of an unread body.
               && (result?.status === 'recognized' && result.timestamp.node === node
+                && timestampPattern.test(result.timestamp.label
+                  .replace(groupAudience, ''))
                 || timestampPattern.test(clean(node.getAttribute('aria-label'))
-                  .replace(sharedAudience, ''))));
+                  .replace(groupAudience, ''))));
           const media = Array.from(section.querySelectorAll(
             'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
           )).filter(node => !node.closest(excludedSelector));
@@ -383,27 +400,30 @@ HEADER_COMPONENT_SCRIPT = r"""
           continue;
         }
       }
+      if (result.status === 'recognized' && !timestampPattern.test(
+        result.timestamp.label.replace(groupAudience, ''))) shared = true;
       if (!headerMetadataOnly(section, option, result, groups)) {
-        return ambiguous('embedded_header_metadata');
+        if (shared) note('inner_header', section, result.owner, option);
+        return refuse('embedded_header_metadata');
       }
       embedded.push({index, menu:option});
     }
     if (!embedded.length || embedded.length > 8) return null;
-    if (unsupportedPrefix) return ambiguous('embedded_card_prefix');
+    if (unsupportedPrefix) return refuse('embedded_card_prefix');
     if (menus.some(option => option !== menu
       && !embedded.some(unit => unit.menu === option))) {
-      return ambiguous('unique_embedded_header_menu');
+      return refuse('unique_embedded_header_menu');
     }
     const ownBody = parseBody(sections.slice(start, embedded[0].index));
     if (ownBody.unsupported || (!ownBody.text && !ownBody.mediaCount)) {
-      return ambiguous('primary_body_before_embedded');
+      return refuse('primary_body_before_embedded');
     }
     for (let index = 0; index < embedded.length; index++) {
       const from = embedded[index].index + 1;
       const end = embedded[index + 1]?.index ?? footer.index;
       const body = parseBody(sections.slice(from, end));
       if (body.unsupported || (!body.text && !body.mediaCount)) {
-        return ambiguous('supported_embedded_body');
+        return refuse('supported_embedded_body');
       }
     }
     for (const section of sections.slice(embedded[0].index, footer.index)) {
