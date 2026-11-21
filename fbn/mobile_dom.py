@@ -159,6 +159,7 @@ MOBILE_SCAN_SCRIPT = (
       if (bodyUnread) {
         unreadBodyCount++;
         bodyUnknownShapes.push(...(body.unknownShapes || []));
+        if (!embedded) bodyUnknownShapes.push(...embeddedNotes);
       }
       const {text, texts, expanders, mediaCount, partial, bodyControlCount}
         = bodyUnread ? {text: '', texts: [], expanders: [], mediaCount: 0,

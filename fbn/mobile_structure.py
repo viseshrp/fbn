@@ -32,7 +32,12 @@ HEADER_COMPONENT_SCRIPT = r"""
   ).filter(node => visible(node) && node !== menu && !node.contains(menu))
     .slice(0, 6).map(node => labelShape(node.getAttribute('aria-label'), owner)
       + ' / ' + labelShape(node.innerText, owner));
-  const recognizeHeader = (header, menu, inferredOwner = null) => {
+  // A group post's date label can end with the group's audience. A post shared
+  // into the group from outside it can end with its own audience instead.
+  const groupAudience = /, (?:Private|Public) group$/;
+  const sharedAudience = /, (?:(?:Private|Public) group|Public)$/;
+  const recognizeHeader = (header, menu, inferredOwner = null,
+    suffix = groupAudience) => {
     const owner = inferredOwner === null
       ? clean(menu.getAttribute('aria-label').slice(17)) : inferredOwner;
     const authors = Array.from(header.querySelectorAll('[role="link"],a'))
@@ -44,7 +49,7 @@ HEADER_COMPONENT_SCRIPT = r"""
     // this exact wrapper also renders it, whole or cut short by an ellipsis,
     // as its final text. An unrendered suffix still leaves the date unread.
     const dateBeforeRenderedDetail = (node, label) => {
-      const audience = (label.match(/, (?:Private|Public) group$/) || [''])[0];
+      const audience = (label.match(suffix) || [''])[0];
       const parts = label.slice(0, label.length - audience.length).split(/\s*,\s*/);
       if (timestampPattern.test(parts.join(', '))) return label;
       const rendered = clean(node.innerText.replace(/\p{Co}/gu, ' '));
@@ -75,7 +80,7 @@ HEADER_COMPONENT_SCRIPT = r"""
       // this exact wrapper. Do not maintain a growing list of badge names or
       // strip an unverified author's name merely because it precedes a date.
       for (let pass = 0; pass < 3; pass++) {
-        const date = label.replace(/, (?:Private|Public) group$/, '');
+        const date = label.replace(suffix, '');
         if (timestampPattern.test(date)) break;
         const prefix = Array.from(node.querySelectorAll(textSelector))
           .filter(child => visible(child) && !child.closest('[role="link"],a')
@@ -95,7 +100,7 @@ HEADER_COMPONENT_SCRIPT = r"""
       node => visible(node) && clean(node.getAttribute('aria-label'))
         && !authors[0].contains(node)
     ).map(node => ({node, label: timestampLabel(node)})).filter(item =>
-      timestampPattern.test(item.label.replace(/, (?:Private|Public) group$/, ''))
+      timestampPattern.test(item.label.replace(suffix, ''))
     );
     // Metadata wrappers may contain the verified author and contributor badge
     // as well as the date. Only a recognized date label can qualify, and no
@@ -106,7 +111,7 @@ HEADER_COMPONENT_SCRIPT = r"""
       if (!visible(node) || node.contains(menu) || node.querySelector(menuSelector)
         || authors[0].contains(node)) continue;
       const label = timestampLabel(node);
-      const date = label.replace(/, (?:Private|Public) group$/, '');
+      const date = label.replace(suffix, '');
       if (timestampPattern.test(date)) timestamps.push({node, label});
     }
     const distinctTimestamps = timestamps.filter(item => !timestamps.some(
@@ -124,8 +129,17 @@ HEADER_COMPONENT_SCRIPT = r"""
 
   // This proves a known incomplete assembly, not which menu is the main one.
   // Nothing from such a card is accepted; only a fresh acquisition may recover.
+  // Why the last header was not metadata-only: a fixed rule name and, for
+  // text, word classes only. It is a diagnostic; nothing is decided by it.
+  let headerMetadataIssue = '';
   const headerMetadataOnly = (root, menu, result, groups = []) => {
-    if (result.status !== 'recognized') return false;
+    const fail = (rule, value = null) => {
+      headerMetadataIssue = rule
+        + (value === null ? '' : ':' + labelShape(value).slice(0, 80));
+      return false;
+    };
+    headerMetadataIssue = '';
+    if (result.status !== 'recognized') return fail(result.missing || 'header');
     const author = Array.from(root.querySelectorAll('[role="link"],a'))
       .find(node => visible(node) && clean(node.innerText) === result.owner);
     const groupLinks = Array.from(root.querySelectorAll('[role="link"],a'))
@@ -166,12 +180,36 @@ HEADER_COMPONENT_SCRIPT = r"""
             .includes(child.getAttribute('data-mcomponent'))));
     });
     const avatars = [...pictures, ...untypedPictures];
-    if (buttons.some(node => node !== menu && !avatars.includes(node))
-      || root.querySelector('input,select,textarea,[contenteditable="true"],'
-        + '[role="textbox"],[role="radio"],[role="checkbox"],[role="switch"]')) {
-      return false;
+    const plain = node => !Array.from(node.attributes).some(attr =>
+      /^on/i.test(attr.name));
+    // A header can offer to follow its author. That one text button is
+    // interface: it is never clicked and owns nothing but its own word.
+    const follows = buttons.filter(node => node !== menu && plain(node)
+      && clean(node.innerText) === 'Follow'
+      && (!node.hasAttribute('aria-label')
+        || clean(node.getAttribute('aria-label')) === 'Follow')
+      && !node.querySelector('button,a,input,select,textarea,[role],img,video,'
+        + '[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'));
+    // An avatar can sit beside an empty image area that only draws a frame:
+    // no child, label, role or action of its own.
+    const decorations = Array.from(root.querySelectorAll(
+      '[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
+    )).filter(node => visible(node) && !node.firstElementChild
+      && !clean(node.textContent) && plain(node)
+      && !['aria-label','role','data-action-id','tabindex','href']
+        .some(name => node.hasAttribute(name))
+      && avatars.some(avatar => avatar.parentElement === node.parentElement));
+    const stray = buttons.find(node => node !== menu && !avatars.includes(node)
+      && !follows.includes(node));
+    if (stray || follows.length > 1) {
+      return fail('button', (stray || follows[1]).innerText);
     }
-    const owned = [author, result.timestamp.node, menu, ...avatars, ...groupLinks];
+    if (root.querySelector('input,select,textarea,[contenteditable="true"],'
+        + '[role="textbox"],[role="radio"],[role="checkbox"],[role="switch"]')) {
+      return fail('form_control');
+    }
+    const owned = [author, result.timestamp.node, menu, ...avatars, ...groupLinks,
+      ...follows, ...decorations];
     const covered = node => owned.some(owner => owner && owner.contains(node));
     if (Array.from(root.querySelectorAll('*')).filter(node =>
       node.hasAttribute('data-action-id') || node.hasAttribute('tabindex')
@@ -182,19 +220,23 @@ HEADER_COMPONENT_SCRIPT = r"""
       && !(author.contains(node) && clean(node.innerText) === result.owner)
       && !(result.timestamp.node.contains(node)
         && timestampPattern.test(clean(node.innerText)))
-      && !owned.some(owner => owner && node.contains(owner)))) return false;
+      && !owned.some(owner => owner && node.contains(owner)))) return fail('action');
     if (Array.from(root.querySelectorAll('a,[role="link"]')).some(node =>
-      visible(node) && !covered(node))) return false;
+      visible(node) && !covered(node))) return fail('link');
     if (Array.from(root.querySelectorAll('img,video,[data-mcomponent="ImageArea"],'
       + '[data-mcomponent="ServerImageArea"]')).some(node => visible(node)
-        && ![...avatars, ...groupLinks].some(avatar => avatar.contains(node)))) {
-      return false;
+        && ![...avatars, ...groupLinks, ...decorations]
+          .some(avatar => avatar.contains(node)))) {
+      return fail('media');
     }
     let visited = 0;
     const metadata = (node, depth = 0) => {
-      if (++visited > 12000 || depth > 192) return false;
+      if (++visited > 12000 || depth > 192) return fail('budget');
       if (node.nodeType === Node.TEXT_NODE) {
-        return !clean(node.textContent.replace(/\p{Co}/gu, ''));
+        // A lone dot separates the date from the follow button.
+        const value = clean(node.textContent.replace(/\p{Co}/gu, ''));
+        return !value || (follows.length === 1 && /^[·•]$/.test(value))
+          || fail('text', value);
       }
       if (!(node instanceof Element)) return true;
       if (!visible(node) && getComputedStyle(node).display !== 'contents') return true;
@@ -203,10 +245,12 @@ HEADER_COMPONENT_SCRIPT = r"""
       if (component && !['MContainer','TextArea','ServerTextArea'].includes(component)
         || node.hasAttribute('role') || node.matches(excludedSelector)
         || Array.from(node.attributes).some(attr => /^on/i.test(attr.name))) {
-        return false;
+        return fail('element');
       }
       if ((node.hasAttribute('data-action-id') || node.hasAttribute('tabindex'))
-        && !owned.some(owner => owner && node.contains(owner))) return false;
+        && !owned.some(owner => owner && node.contains(owner))) {
+        return fail('inner_action');
+      }
       return Array.from(node.childNodes).every(child => metadata(child, depth + 1));
     };
     return metadata(root);
@@ -240,6 +284,15 @@ HEADER_COMPONENT_SCRIPT = r"""
     return true;
   };
 
+  // Why the last card was not read as a post embedding another: fixed rule
+  // names and word classes only, reported when its body is left unread.
+  let embeddedNotes = [];
+  const note = (where, root, owner, menu = null) => {
+    if (embeddedNotes.length < 4) embeddedNotes.push(['embedded', where,
+      headerMetadataIssue, ...headerLabelShapes(root, menu, owner).slice(0, 3)]
+      .join(' / '));
+  };
+
   // One outer card owns its header and action row. A bounded chain of complete
   // attributed post headers/bodies before that row is embedded content, not a
   // continuation of the author's message or additional primary feed entries.
@@ -247,6 +300,7 @@ HEADER_COMPONENT_SCRIPT = r"""
     const ambiguous = (missing = 'supported_embedded_post_ownership') => ({
       status:'ambiguous', missing,
     });
+    embeddedNotes = [];
     if (!menus.length || menus.length > 8) return null;
     const sections = sectionsFor(card), menu = menus[0];
     const header = branch(card, menu), start = sections.indexOf(header) + 1;
@@ -257,8 +311,9 @@ HEADER_COMPONENT_SCRIPT = r"""
       .filter(visible).map(node => clean(node.innerText))
       .filter(name => name && name !== main.owner);
     const groups = Array.from(new Set(names));
-    if (groups.length > 1 || !headerMetadataOnly(header, menu, main, groups)) {
-      return null;
+    if (groups.length > 1) return null;
+    if (!headerMetadataOnly(header, menu, main, groups)) {
+      note('outer_header', header, main.owner, menu); return null;
     }
     const prefix = parseBody(sections.slice(0, start - 1));
     const unsupportedPrefix = prefix.unsupported || prefix.text
@@ -273,7 +328,7 @@ HEADER_COMPONENT_SCRIPT = r"""
         .filter(node => !node.closest(excludedSelector));
       if (options.length > 1) return ambiguous('unique_embedded_header_menu');
       let result, option = options[0] || null;
-      if (option) result = recognizeHeader(section, option);
+      if (option) result = recognizeHeader(section, option, null, sharedAudience);
       else {
         // Both views can omit this menu. Infer only one visible linked author
         // in a closed author/date header. When either header supplies a group,
@@ -283,9 +338,10 @@ HEADER_COMPONENT_SCRIPT = r"""
         const names = links.map(node => clean(node.innerText)).filter(Boolean);
         const owners = names.filter(name => !groups.includes(name));
         if (owners.length === 1) {
-          result = recognizeHeader(section, null, owners[0]);
+          result = recognizeHeader(section, null, owners[0], sharedAudience);
         }
         if (!result || !headerMetadataOnly(section, null, result, groups)) {
+          if (result) note('inner_header', section, owners[0]);
           // A metadata-shaped unresolved header must not fall through into
           // authored text. Ordinary message and supported attachment sections
           // remain the body recognizer's responsibility. An empty link or an
@@ -298,7 +354,7 @@ HEADER_COMPONENT_SCRIPT = r"""
                 || node.matches('[data-mcomponent="MContainer"]'))
               && (result?.status === 'recognized' && result.timestamp.node === node
                 || timestampPattern.test(clean(node.getAttribute('aria-label'))
-                  .replace(/, (?:Private|Public) group$/, ''))));
+                  .replace(sharedAudience, ''))));
           const media = Array.from(section.querySelectorAll(
             'img,[data-mcomponent="ImageArea"],[data-mcomponent="ServerImageArea"]'
           )).filter(node => !node.closest(excludedSelector));

@@ -667,3 +667,46 @@ def app_prompt_fixture(*, known: bool = True, delay_ms: int = 0) -> str:
         "document.body.append(modal);"
         f"}}, {delay_ms});</script>"
     )
+
+
+def mobile_shared_public_post_fixture(
+    *, follow: str = "Follow", audience: str = "Public", frame_label: str = ""
+) -> str:
+    """A group post sharing a public post from outside the group.
+
+    The outer header offers to follow its author; the menu-less inner header
+    has an avatar beside an empty frame image and a date ending in the shared
+    post's own audience.
+    """
+    return mobile_embedded_post_fixture(embedded_menu="absent") + (
+        "<script>(() => {"
+        "const card=document.querySelector('[data-story=\"302\"]');"
+        "const outer=card.children[1],inner=card.children[3];"
+        "const dot=document.createElement('div');"
+        "dot.setAttribute('data-mcomponent','ServerTextArea');dot.textContent='·';"
+        "const button=document.createElement('div');"
+        "button.setAttribute('data-mcomponent','ServerTextArea');"
+        "button.setAttribute('role','button');"
+        "button.setAttribute('data-action-id','follow-302');"
+        f"button.textContent={json.dumps(follow)};"
+        "outer.append(dot,button);"
+        "const avatar=document.createElement('div');"
+        "avatar.setAttribute('data-mcomponent','MContainer');"
+        "avatar.setAttribute('role','button');"
+        "avatar.setAttribute('data-action-id','inner-avatar');"
+        "avatar.setAttribute('aria-label','Synthetic Embedded profile picture');"
+        "const area=document.createElement('div');"
+        "area.setAttribute('data-mcomponent','ImageArea');"
+        "const image=document.createElement('img');image.width=image.height=40;"
+        "image.src='data:image/svg+xml,%3Csvg xmlns=\"http://www.w3.org/2000/svg\"'"
+        '+\' width="1" height="1"/%3E\';area.append(image);avatar.append(area);'
+        "const frame=document.createElement('div');"
+        "frame.setAttribute('data-mcomponent','ImageArea');"
+        "frame.style='width:40px;height:40px';"
+        f"if({json.dumps(frame_label)})"
+        f"frame.setAttribute('aria-label',{json.dumps(frame_label)});"
+        "inner.prepend(avatar,frame);"
+        "inner.querySelector('[aria-label*=\"October 11\"]')"
+        f".setAttribute('aria-label',{json.dumps('2h, ' + audience)});"
+        "})()</script>"
+    )
